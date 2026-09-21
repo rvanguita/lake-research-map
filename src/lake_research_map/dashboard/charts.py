@@ -21,6 +21,8 @@ import plotly.graph_objects as go
 from lake_research_map.dashboard.theme import (
     CATEGORICAL_PALETTE,
     OTHER_COLOR,
+    PUBLICATION_CATEGORY_COLORS,
+    PUBLICATION_CATEGORY_LABELS,
     SOURCE_COLORS,
     SOURCE_LABELS,
     TOTAL_COLOR,
@@ -138,6 +140,44 @@ def source_lines(
         )
     )
     fig.update_layout(title=title)
+    _axis_titles(fig, x_title, y_title)
+    polish_figure_layout(fig)
+    return fig
+
+
+def publication_category_bars(
+    df: pd.DataFrame,
+    x: str = "year",
+    *,
+    title: str | None = None,
+    x_title: str | None = None,
+    y_title: str | None = None,
+    category_labels: dict[str, str] | None = None,
+) -> go.Figure:
+    """Stacked publication-type bars with a reconciled Total trend line."""
+    labels = category_labels or PUBLICATION_CATEGORY_LABELS
+    fig = go.Figure()
+    for category in PUBLICATION_CATEGORY_LABELS:
+        label = labels.get(category, category)
+        fig.add_bar(
+            x=df[x],
+            y=df[category],
+            name=label,
+            marker_color=PUBLICATION_CATEGORY_COLORS[category],
+            hovertemplate=f"Year %{{x}}<br>{label}: %{{y:,}} articles<extra></extra>",
+        )
+    fig.add_trace(
+        go.Scatter(
+            x=df[x],
+            y=df["total"],
+            name=TOTAL_LABEL,
+            mode="lines+markers",
+            line=dict(color=TOTAL_COLOR, width=2.5),
+            marker=dict(size=6),
+            hovertemplate="Year %{x}<br>Total: %{y:,} articles<extra></extra>",
+        )
+    )
+    fig.update_layout(barmode="stack", title=title, hovermode="x unified")
     _axis_titles(fig, x_title, y_title)
     polish_figure_layout(fig)
     return fig

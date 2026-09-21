@@ -13,6 +13,7 @@ import plotly.graph_objects as go
 
 from lake_research_map.dashboard.charts import (
     lorenz_chart,
+    publication_category_bars,
     source_bars,
     source_lines,
     source_topn_hbar,
@@ -47,6 +48,33 @@ def test_source_lines_names_both_axes() -> None:
         _by_source(), "year", x_title="Ano de publicação", y_title="Artigos acumulados"
     )
     assert _axis_titles(fig) == ("Ano de publicação", "Artigos acumulados")
+
+
+def test_publication_category_bars_has_four_categories_and_total_line() -> None:
+    frame = pd.DataFrame(
+        [
+            {
+                "year": 2020,
+                "journal": 2,
+                "conference": 1,
+                "review": 0,
+                "other": 1,
+                "total": 4,
+            }
+        ]
+    )
+
+    fig = publication_category_bars(frame, x_title="Publication year", y_title="Articles")
+
+    assert [trace.name for trace in fig.data] == [
+        "Journal",
+        "Conference",
+        "Review",
+        "Other",
+        "Total",
+    ]
+    assert fig.data[-1].type == "scatter"
+    assert _axis_titles(fig) == ("Publication year", "Articles")
 
 
 def test_topn_hbar_names_value_and_category_axes() -> None:

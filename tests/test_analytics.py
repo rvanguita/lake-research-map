@@ -4,6 +4,8 @@ from lake_research_map.dashboard.analytics import (
     OTHERS_LABEL,
     cumulative_by_category,
     cumulative_by_venue,
+    publication_category_counts_by_year,
+    publication_category_totals,
 )
 
 
@@ -50,3 +52,40 @@ def test_cumulative_by_venue_is_a_thin_wrapper():
     result = cumulative_by_venue(df, top_n=10)
     assert "venue" in result.columns
     assert list(result.set_index("year")["cumulative"]) == [1, 2]
+
+
+def test_publication_category_totals_reconcile_unknown_values_as_other():
+    frame = pd.DataFrame(
+        {"publication_category": ["journal", "conference", "review", "other", None, "legacy"]}
+    )
+
+    totals = publication_category_totals(frame)
+
+    assert totals.to_dict() == {"journal": 1, "conference": 1, "review": 1, "other": 3}
+    assert int(totals.sum()) == len(frame)
+
+
+def test_publication_category_counts_by_year_include_zero_categories_and_total():
+    frame = pd.DataFrame(
+        {
+            "year": [2020, 2020, 2021],
+            "publication_category": ["journal", "conference", "review"],
+        }
+    )
+
+    result = publication_category_counts_by_year(frame).set_index("year")
+
+    assert result.loc[2020].to_dict() == {
+        "journal": 1,
+        "conference": 1,
+        "review": 0,
+        "other": 0,
+        "total": 2,
+    }
+    assert result.loc[2021].to_dict() == {
+        "journal": 0,
+        "conference": 0,
+        "review": 1,
+        "other": 0,
+        "total": 1,
+    }
