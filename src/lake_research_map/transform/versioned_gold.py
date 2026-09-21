@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from collections import Counter
 
 import numpy as np
@@ -25,7 +26,11 @@ from lake_research_map.db.gold_models import (
 )
 from lake_research_map.db.silver_models import Article as SilverArticle
 from lake_research_map.transform.duplicate_resolution import active_merge_plan
-from lake_research_map.transform.embeddings import EMBED_BATCH_SIZE, EMBED_MODEL_NAME
+from lake_research_map.transform.embeddings import (
+    EMBED_BATCH_SIZE,
+    EMBED_MODEL_NAME,
+    EMBED_THREADS,
+)
 from lake_research_map.transform.gold_articles import _desired_chunks, _merge_silver_group
 from lake_research_map.transform.semantics import (
     ANCHOR_TEXT,
@@ -77,11 +82,20 @@ def build_dataset_gold(
     state = _state(gold_session)
     active_version = state.active_version_id
     stored: dict[tuple[str, str, int], DatasetChunk | Chunk] = {}
+    # Preserve a partially built candidate too.  If the process is stopped
+    # during embedding and the user retries the full workflow, the Gold
+    # rebuild can still carry forward vectors already committed for identical
+    # text instead of making the expensive model start from zero.
+    candidate_chunks = gold_session.scalars(
+        select(DatasetChunk).where(DatasetChunk.dataset_version_id == dataset_version_id)
+    ).all()
+    stored.update({(row.doi, row.chunk_type, row.seq): row for row in candidate_chunks})
     if active_version:
         active_chunks = gold_session.scalars(
             select(DatasetChunk).where(DatasetChunk.dataset_version_id == active_version)
         ).all()
-        stored = {(row.doi, row.chunk_type, row.seq): row for row in active_chunks}
+        for row in active_chunks:
+            stored.setdefault((row.doi, row.chunk_type, row.seq), row)
     elif gold_session.scalar(select(func.count()).select_from(Chunk)):
         live_chunks = gold_session.scalars(select(Chunk)).all()
         stored = {(row.doi, row.chunk_type, row.seq): row for row in live_chunks}
@@ -172,23 +186,46 @@ def build_dataset_gold(
 
 
 def build_dataset_embeddings(gold_session: Session, dataset_version_id: str) -> dict[str, int]:
+    """Embed a candidate incrementally so an interrupted run can resume.
+
+    Only one batch of ORM objects and vectors is kept in memory.  Each batch
+    is committed before the next one starts; a rerun therefore skips work
+    that already reached Gold even if the original process was terminated.
+    """
     _assert_mutable_candidate(gold_session, dataset_version_id)
-    rows = gold_session.scalars(
-        select(DatasetChunk)
+    total_chunks = (
+        gold_session.scalar(
+            select(func.count())
+            .select_from(DatasetChunk)
+            .where(DatasetChunk.dataset_version_id == dataset_version_id)
+        )
+        or 0
+    )
+    pending_ids = gold_session.scalars(
+        select(DatasetChunk.id)
         .where(DatasetChunk.dataset_version_id == dataset_version_id)
+        .where(
+            (DatasetChunk.embedding_bin.is_(None))
+            | (DatasetChunk.embed_model.is_(None))
+            | (DatasetChunk.embed_model != EMBED_MODEL_NAME)
+        )
         .order_by(DatasetChunk.id)
     ).all()
-    pending = [
-        row for row in rows if row.embedding_bin is None or row.embed_model != EMBED_MODEL_NAME
-    ]
-    if not pending:
-        return {"embedded": 0, "already_embedded": len(rows), "total_chunks": len(rows)}
+    if not pending_ids:
+        return {"embedded": 0, "already_embedded": total_chunks, "total_chunks": total_chunks}
 
     from fastembed import TextEmbedding
 
-    model = TextEmbedding(model_name=EMBED_MODEL_NAME)
-    for start in range(0, len(pending), EMBED_BATCH_SIZE):
-        batch = pending[start : start + EMBED_BATCH_SIZE]
+    model = TextEmbedding(model_name=EMBED_MODEL_NAME, threads=EMBED_THREADS)
+    embedded = 0
+    logger = logging.getLogger(__name__)
+    for start in range(0, len(pending_ids), EMBED_BATCH_SIZE):
+        batch_ids = pending_ids[start : start + EMBED_BATCH_SIZE]
+        rows = gold_session.scalars(
+            select(DatasetChunk).where(DatasetChunk.id.in_(batch_ids))
+        ).all()
+        by_id = {row.id: row for row in rows}
+        batch = [by_id[row_id] for row_id in batch_ids if row_id in by_id]
         vectors = model.embed([row.text for row in batch])
         for row, vector in zip(batch, vectors, strict=True):
             array = np.asarray(vector, dtype=np.float32)
@@ -196,10 +233,14 @@ def build_dataset_embeddings(gold_session: Session, dataset_version_id: str) -> 
             row.embedding_bin = array.tobytes()
             row.embed_model = EMBED_MODEL_NAME
         gold_session.flush()
+        gold_session.commit()
+        gold_session.expunge_all()
+        embedded += len(batch)
+        logger.info("embedding progress: %d/%d chunks", embedded, len(pending_ids))
     return {
-        "embedded": len(pending),
-        "already_embedded": len(rows) - len(pending),
-        "total_chunks": len(rows),
+        "embedded": embedded,
+        "already_embedded": total_chunks - len(pending_ids),
+        "total_chunks": total_chunks,
     }
 
 
