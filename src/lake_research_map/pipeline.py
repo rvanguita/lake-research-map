@@ -17,12 +17,14 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import logging
+import os
 import sys
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 from lake_research_map.db.bootstrap import bootstrap
 from lake_research_map.db.engines import get_session
@@ -59,6 +61,84 @@ from lake_research_map.transform.versioned_gold import (
 STAGES = ("raw", "bronze", "silver", "gold", "embed", "semantic", "all")
 
 logger = logging.getLogger(__name__)
+
+PIPELINE_LOCK_NAME = "lake_research_map_pipeline"
+PIPELINE_LOG_ENV = "LAKE_RESEARCH_MAP_LOG"
+
+
+class PipelineBusyError(RuntimeError):
+    """Raised when another process already owns the medallion pipeline lock."""
+
+
+def _configure_logging() -> None:
+    """Configure terminal and persistent logging for the CLI entry point."""
+    root = logging.getLogger()
+    if any(getattr(handler, "_lake_research_map", False) for handler in root.handlers):
+        return
+
+    log_path = os.environ.get(PIPELINE_LOG_ENV, str(scan_log_path()))
+    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stderr)]
+    try:
+        log_file = os.path.abspath(log_path)
+        os.makedirs(os.path.dirname(log_file), exist_ok=True)
+        handlers.append(logging.FileHandler(log_file, encoding="utf-8"))
+    except OSError:
+        # A read-only data directory must not prevent the pipeline from running.
+        pass
+    for handler in handlers:
+        handler._lake_research_map = True
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        handlers=handlers,
+    )
+
+
+def scan_log_path():
+    """Return the default log path without importing configuration at module load."""
+    from lake_research_map.config import DATA_DIR
+
+    return DATA_DIR / ".lake_research_map" / "pipeline.log"
+
+
+@contextlib.contextmanager
+def _pipeline_lock(execution_id: str):
+    """Serialize mutating pipeline processes with a MySQL advisory lock.
+
+    The lock is held by a dedicated Gold connection for the complete CLI
+    invocation. SQLite fixtures intentionally bypass it because each test has
+    an isolated in-memory database and the MySQL GET_LOCK function is absent.
+    """
+    lock_session = get_session("gold")
+    acquired = False
+    try:
+        dialect = lock_session.get_bind().dialect.name
+        if dialect == "mysql":
+            acquired = bool(
+                lock_session.execute(
+                    text("SELECT GET_LOCK(:lock_name, 0)"),
+                    {"lock_name": PIPELINE_LOCK_NAME},
+                ).scalar()
+            )
+            if not acquired:
+                raise PipelineBusyError(
+                    "another pipeline execution is already running; "
+                    f"execution {execution_id} was not started. "
+                    "Wait for it to finish and retry."
+                )
+        yield
+    finally:
+        if acquired:
+            try:
+                lock_session.execute(
+                    text("SELECT RELEASE_LOCK(:lock_name)"),
+                    {"lock_name": PIPELINE_LOCK_NAME},
+                )
+                lock_session.rollback()
+            except Exception:
+                logger.warning("could not release pipeline advisory lock", exc_info=True)
+        lock_session.close()
+
 
 _STAGE_SEQUENCE = {stage: index for index, stage in enumerate(STAGES[:-1], start=1)}
 
@@ -666,29 +746,30 @@ def run(
     workflow: str | None = None,
     source_policy: str = "append",
 ) -> None:
-    bootstrap()
     execution_id = execution_id or str(uuid.uuid4())
     workflow = workflow or stage
-    if stage == "all":
-        run_all(execution_id=execution_id, trigger=trigger, source_policy=source_policy)
-        return
-    runners = {
-        "raw": run_raw,
-        "bronze": run_bronze,
-        "silver": run_silver,
-        "gold": run_gold,
-        "embed": run_embed,
-        "semantic": run_semantic,
-    }
-    if stage == "raw":
-        run_raw(
-            execution_id=execution_id,
-            workflow=workflow,
-            trigger=trigger,
-            source_policy=source_policy,
-        )
-    else:
-        runners[stage](execution_id=execution_id, workflow=workflow, trigger=trigger)
+    with _pipeline_lock(execution_id):
+        bootstrap()
+        if stage == "all":
+            run_all(execution_id=execution_id, trigger=trigger, source_policy=source_policy)
+            return
+        runners = {
+            "raw": run_raw,
+            "bronze": run_bronze,
+            "silver": run_silver,
+            "gold": run_gold,
+            "embed": run_embed,
+            "semantic": run_semantic,
+        }
+        if stage == "raw":
+            run_raw(
+                execution_id=execution_id,
+                workflow=workflow,
+                trigger=trigger,
+                source_policy=source_policy,
+            )
+        else:
+            runners[stage](execution_id=execution_id, workflow=workflow, trigger=trigger)
 
 
 def _add_pair_arguments(parser: argparse.ArgumentParser) -> None:
@@ -853,6 +934,8 @@ def _run_version_command(args: argparse.Namespace) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
+    invoked_as_cli = argv is None
+    _configure_logging()
     parser = argparse.ArgumentParser(description="lake-research-map medallion pipeline")
     parser.add_argument("--stage", choices=STAGES, default="all", help="pipeline stage to run")
     parser.add_argument(
@@ -870,32 +953,43 @@ def main(argv: list[str] | None = None) -> None:
     _configure_duplicate_commands(subparsers)
     _configure_version_commands(subparsers)
     args = parser.parse_args(argv if argv is not None else sys.argv[1:])
-    if args.command == "duplicates":
-        from lake_research_map.transform.duplicate_resolution import DuplicateResolutionError
+    try:
+        if args.command == "duplicates":
+            from lake_research_map.transform.duplicate_resolution import DuplicateResolutionError
 
-        try:
-            _run_duplicate_command(args)
-        except DuplicateResolutionError as exc:
-            parser.error(str(exc))
-    elif args.command == "versions":
-        try:
-            _run_version_command(args)
-        except ValueError as exc:
-            parser.error(str(exc))
-    else:
-        if args.execution_id is None and args.trigger == "cli" and args.workflow is None:
-            if args.source_policy == "append":
-                run(args.stage)
-            else:
-                run(args.stage, source_policy=args.source_policy)
+            try:
+                _run_duplicate_command(args)
+            except DuplicateResolutionError as exc:
+                parser.error(str(exc))
+        elif args.command == "versions":
+            try:
+                _run_version_command(args)
+            except ValueError as exc:
+                parser.error(str(exc))
         else:
-            run(
-                args.stage,
-                execution_id=args.execution_id,
-                trigger=args.trigger,
-                workflow=args.workflow,
-                source_policy=args.source_policy,
-            )
+            if args.execution_id is None and args.trigger == "cli" and args.workflow is None:
+                if args.source_policy == "append":
+                    run(args.stage)
+                else:
+                    run(args.stage, source_policy=args.source_policy)
+            else:
+                run(
+                    args.stage,
+                    execution_id=args.execution_id,
+                    trigger=args.trigger,
+                    workflow=args.workflow,
+                    source_policy=args.source_policy,
+                )
+    except PipelineBusyError as exc:
+        logger.error("pipeline not started: %s", exc)
+        if invoked_as_cli:
+            raise SystemExit(2) from exc
+        raise
+    except Exception as exc:
+        logger.exception("pipeline failed: %s", exc)
+        if invoked_as_cli:
+            raise SystemExit(1) from exc
+        raise
 
 
 if __name__ == "__main__":
