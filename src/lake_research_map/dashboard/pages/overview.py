@@ -22,6 +22,7 @@ from lake_research_map.dashboard.theme import (
     PUBLICATION_CATEGORY_LABELS,
     SOURCE_COLORS,
 )
+from lake_research_map.transform.publication_categories import PUBLICATION_CATEGORIES
 
 
 def render() -> None:
@@ -128,13 +129,12 @@ def _publication_category_distribution(articles_df: pd.DataFrame) -> None:
     if "publication_category" not in articles_df.columns:
         st.info("Publication category is unavailable in this layer.")
         return
-    counts = (
-        articles_df["publication_category"]
-        .value_counts()
-        .reindex(PUBLICATION_CATEGORY_LABELS, fill_value=0)
-        .rename_axis("publication_category")
-        .reset_index(name="articles")
-    )
+    counts, invalid_count = _publication_category_counts(articles_df)
+    if invalid_count:
+        st.warning(
+            f"{invalid_count:,} article(s) have an invalid or missing publication category. "
+            "Run the full pipeline to reclassify and publish the current dataset."
+        )
     counts["category_label"] = counts["publication_category"].map(PUBLICATION_CATEGORY_LABELS)
     fig = px.bar(
         counts,
@@ -155,6 +155,21 @@ def _publication_category_distribution(articles_df: pd.DataFrame) -> None:
         fig,
         caption="Review is evaluated first, followed by conference, journal, and other publication types.",
     )
+
+
+def _publication_category_counts(
+    articles_df: pd.DataFrame,
+) -> tuple[pd.DataFrame, int]:
+    """Return canonical category counts and the number of invalid values."""
+    categories = articles_df["publication_category"].astype("string")
+    invalid_count = int((~categories.isin(PUBLICATION_CATEGORIES)).sum())
+    counts = (
+        categories.value_counts()
+        .reindex(PUBLICATION_CATEGORIES, fill_value=0)
+        .rename_axis("publication_category")
+        .reset_index(name="articles")
+    )
+    return counts, invalid_count
 
 
 def _numbers_summary(
