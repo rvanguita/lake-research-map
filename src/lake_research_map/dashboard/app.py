@@ -33,28 +33,28 @@ from lake_research_map.dashboard.pages import (
 # Keep this registry small and stable: the URL slugs are public bookmarks while
 # the grouped navigation communicates the analytical workflow.
 PAGE_GROUPS = {
-    "Visão": [
-        (overview.render, "Visão geral", ":material/dashboard:", "overview"),
+    "Overview": [
+        (overview.render, "Overview", ":material/dashboard:", "overview"),
     ],
-    "Análises": [
+    "Analytics": [
         (
             production.render,
-            "Produção e periódicos",
+            "Production and venues",
             ":material/calendar_month:",
             "output-over-time",
         ),
-        (topics.render, "Tópicos e estrutura científica", ":material/account_tree:", "topics"),
-        (highlights.render, "Impacto e citações", ":material/insights:", "highlights"),
-        (researchers.render, "Pesquisadores e colaboração", ":material/groups:", "researchers"),
-        (synthesis.render, "Evidências de engenharia", ":material/science:", "synthesis"),
-        (forecasting.render, "Tendências e frentes", ":material/trending_up:", "forecast"),
+        (topics.render, "Topics and scientific structure", ":material/account_tree:", "topics"),
+        (highlights.render, "Impact and citations", ":material/insights:", "highlights"),
+        (researchers.render, "Researchers and collaboration", ":material/groups:", "researchers"),
+        (synthesis.render, "Engineering evidence", ":material/science:", "synthesis"),
+        (forecasting.render, "Trends and fronts", ":material/trending_up:", "forecast"),
     ],
-    "Revisão": [
-        (semantics.render, "Triagem e descoberta", ":material/manage_search:", "semantics"),
-        (quality.render, "Qualidade e RAG", ":material/fact_check:", "quality"),
+    "Review": [
+        (semantics.render, "Screening and discovery", ":material/manage_search:", "semantics"),
+        (quality.render, "Quality and RAG", ":material/fact_check:", "quality"),
     ],
-    "Operação": [
-        (pipeline_layers.render, "Pipeline e proveniência", ":material/schema:", "pipeline-layers"),
+    "Operations": [
+        (pipeline_layers.render, "Pipeline and provenance", ":material/schema:", "pipeline-layers"),
     ],
 }
 

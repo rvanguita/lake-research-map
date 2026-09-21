@@ -170,7 +170,7 @@ def topn_hbar(
             color="color",
             orientation="h",
             color_discrete_map=color_map,
-            labels={"value": x_title or "", "label": y_title or "", "color": "Base"},
+            labels={"value": x_title or "", "label": y_title or "", "color": "Source"},
         )
     else:
         fig = px.bar(
@@ -233,7 +233,7 @@ def source_topn_hbar(
     return fig
 
 
-def lorenz_chart(series: dict[str, pd.DataFrame], *, entity_label: str = "autores") -> go.Figure:
+def lorenz_chart(series: dict[str, pd.DataFrame], *, entity_label: str = "authors") -> go.Figure:
     """Lorenz curve: cumulative share of output vs. cumulative share of `entity_label`.
 
     `series` maps a source key ("ieee"/"elsevier"/"total") to a DataFrame with
@@ -245,7 +245,7 @@ def lorenz_chart(series: dict[str, pd.DataFrame], *, entity_label: str = "autore
     of real trace, not a reference line -- consistent with the "Total is a
     real series" rule, generalized to this chart's own benchmark.
 
-    `entity_label` only changes the x-axis wording (default "autores", the
+    `entity_label` only changes the x-axis wording (default "authors", the
     original use case in `researchers.py`) -- `lorenz_curve`'s own column
     names stay `share_of_authors`/`share_of_output` regardless of what's
     actually being ranked (e.g. venues instead of authors).
@@ -274,8 +274,8 @@ def lorenz_chart(series: dict[str, pd.DataFrame], *, entity_label: str = "autore
         )
     )
     fig.update_layout(
-        xaxis_title=f"Parcela acumulada de {entity_label}",
-        yaxis_title="Parcela acumulada de artigos",
+        xaxis_title=f"Cumulative share of {entity_label}",
+        yaxis_title="Cumulative share of articles",
         xaxis=dict(tickformat=".0%", range=[0, 1]),
         yaxis=dict(tickformat=".0%", range=[0, 1]),
     )

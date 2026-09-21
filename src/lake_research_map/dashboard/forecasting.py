@@ -158,7 +158,7 @@ def fit_and_forecast(
             forecast_upper=empty,
             r2_train=float("nan"),
             insufficient_data=True,
-            notes=["Anos de treino insuficientes (mínimo 4) para ajustar um modelo."],
+            notes=["Years of insufficient training (minimum 4) to adjust a model."],
         )
 
     train_years = train.index.to_numpy()
@@ -230,11 +230,11 @@ def fit_and_forecast(
         train_only_predict = _fit_model(chosen_model, train_years, train_values)
         holdout_predicted = float(train_only_predict([holdout_year])[0])
         notes.append(
-            f"{holdout_year} é parcial: aparece apenas como monitoramento e não participa "
-            "da seleção nem do ajuste final."
+            f"{holdout_year} is partial: it is shown only for monitoring and is not used "
+            "of selection or final adjustment."
         )
     if (train_values.max() if len(train_values) else 0) < 20:
-        notes.append("Série de baixo volume — a banda de confiança é proporcionalmente mais larga.")
+        notes.append("Low volume series — the confidence band is proportionally wider.")
 
     return ForecastResult(
         history=history,

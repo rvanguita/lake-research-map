@@ -1,4 +1,4 @@
-"""📊 Visão Geral — o corpus em resumo: volume, fontes, período temporal e crescimento."""
+"""Corpus overview: volume, sources, time span, and publication categories."""
 
 from __future__ import annotations
 
@@ -17,16 +17,20 @@ from lake_research_map.dashboard.components import (
     page_header,
     render_chart,
 )
-from lake_research_map.dashboard.theme import SOURCE_COLORS
+from lake_research_map.dashboard.theme import (
+    PUBLICATION_CATEGORY_COLORS,
+    PUBLICATION_CATEGORY_LABELS,
+    SOURCE_COLORS,
+)
 
 
 def render() -> None:
     page_header(
-        "📊",
-        "Visão geral",
-        'Pipeline de revisão sistemática de literatura sobre "planejamento de redes de distribuição de energia" — '
-        "IEEE Xplore e ScienceDirect/Elsevier consolidados através das "
-        "camadas raw → bronze → silver → gold.",
+        ":material/dashboard:",
+        "Overview",
+        'Systematic literature review pipeline for "electric power distribution network planning" — '
+        "IEEE Xplore and ScienceDirect/Elsevier consolidated through the "
+        "Raw → Bronze → Silver → Gold layers.",
     )
 
     layer, _ = loaders.filtered_articles()
@@ -37,19 +41,22 @@ def render() -> None:
     active_year_range = st.session_state.get("global_year_range")
     active_sources = st.session_state.get("global_sources", [])
     active_venues = st.session_state.get("global_venues", [])
+    active_categories = st.session_state.get("global_publication_categories", [])
     filter_summary = []
     if active_year_range:
-        filter_summary.append(f"ano {active_year_range[0]}–{active_year_range[1]}")
+        filter_summary.append(f"years {active_year_range[0]}–{active_year_range[1]}")
     if active_sources:
-        filter_summary.append(f"{len(active_sources)} fontes")
+        filter_summary.append(f"{len(active_sources)} sources")
     if active_venues:
-        filter_summary.append(f"{len(active_venues)} periódicos")
-    summary_text = ". ".join(filter_summary) if filter_summary else "sem filtros ativos"
+        filter_summary.append(f"{len(active_venues)} venues")
+    if active_categories:
+        filter_summary.append(f"{len(active_categories)} publication categories")
+    summary_text = ", ".join(filter_summary) if filter_summary else "no active filters"
     hero_banner(
-        "Resumo executivo",
-        f"O corpus mostra <b>{len(articles_df):,}</b> artigos em <b>{len(years_df):,}</b> anos, com "
-        f"<b>{len(articles_df['source'].unique()) if 'source' in articles_df.columns else 0}</b> fontes "
-        f"e filtros ativos em <b>{summary_text}</b> · camada ativa: <b>{layer}</b>.",
+        "Executive summary",
+        f"The corpus contains <b>{len(articles_df):,}</b> articles across <b>{len(years_df):,}</b> years, "
+        f"from <b>{len(articles_df['source'].unique()) if 'source' in articles_df.columns else 0}</b> sources. "
+        f"Filter scope: <b>{summary_text}</b> · active layer: <b>{layer}</b>.",
     )
 
     st.divider()
@@ -57,27 +64,27 @@ def render() -> None:
 
     if not years_df.empty:
         st.divider()
-        st.subheader("Recência do Corpus")
+        st.subheader("Corpus recency")
         last_year = int(years_df["year"].max())
         recent_share = (years_df["year"] >= last_year - RECENT_WINDOW_YEARS + 1).mean()
         metric_row(
             [
                 (
-                    "🗓️ Período temporal coberto",
+                    "Time span",
                     f"{int(years_df['year'].min())}–{last_year}",
                     None,
                 ),
                 (
-                    f"🆕 Publicados nos últimos {RECENT_WINDOW_YEARS} anos",
+                    f"Published in the last {RECENT_WINDOW_YEARS} years",
                     f"{recent_share:.1%}",
                     None,
                 ),
-                ("📚 Artigos com ano identificado", f"{len(years_df):,}", None),
+                ("Articles with a known year", f"{len(years_df):,}", None),
             ]
         )
         st.caption(
-            f"Janela de {RECENT_WINDOW_YEARS} anos (mesma usada na página Pesquisadores) — indica se a "
-            "revisão se apoia em literatura recente ou se concentra em trabalhos pioneiros clássicos."
+            f"The {RECENT_WINDOW_YEARS}-year window is also used on the Researchers page and shows "
+            "whether the review is grounded in recent literature or concentrated on foundational work."
         )
 
     st.divider()
@@ -85,13 +92,17 @@ def render() -> None:
 
 
 def _charts_grid(articles_df: pd.DataFrame) -> None:
-    _source_distribution_pie(articles_df)
+    source_col, category_col = st.columns(2)
+    with source_col:
+        _source_distribution_pie(articles_df)
+    with category_col:
+        _publication_category_distribution(articles_df)
 
 
 def _source_distribution_pie(articles_df: pd.DataFrame) -> None:
-    st.subheader("Distribuição por Base / Fonte")
+    st.subheader("Distribution by source")
     if "source" not in articles_df.columns:
-        st.info("Coluna 'source' não disponível nesta camada.")
+        st.info("Column 'source' is unavailable in this layer.")
         return
 
     by_source = articles_df["source"].value_counts().rename_axis("source").reset_index(name="count")
@@ -104,19 +115,52 @@ def _source_distribution_pie(articles_df: pd.DataFrame) -> None:
     )
     fig.update_traces(
         texttemplate="<b>%{label}</b><br><b>%{value:,} (%{percent})</b>",
-        hovertemplate="<b>%{label}</b>: %{value:,} artigos (%{percent})<extra></extra>",
+        hovertemplate="<b>%{label}</b>: %{value:,} articles (%{percent})<extra></extra>",
     )
     render_chart(
         fig,
-        caption="As duas bases não possuem sobreposição: nenhum DOI se repete entre elas, de modo "
-        "que cada artigo pertence exclusivamente a uma editora.",
+        caption="Counts use the normalized primary source after DOI-level consolidation.",
+    )
+
+
+def _publication_category_distribution(articles_df: pd.DataFrame) -> None:
+    st.subheader("Distribution by publication category")
+    if "publication_category" not in articles_df.columns:
+        st.info("Publication category is unavailable in this layer.")
+        return
+    counts = (
+        articles_df["publication_category"]
+        .value_counts()
+        .reindex(PUBLICATION_CATEGORY_LABELS, fill_value=0)
+        .rename_axis("publication_category")
+        .reset_index(name="articles")
+    )
+    counts["category_label"] = counts["publication_category"].map(PUBLICATION_CATEGORY_LABELS)
+    fig = px.bar(
+        counts,
+        x="articles",
+        y="category_label",
+        color="publication_category",
+        color_discrete_map=PUBLICATION_CATEGORY_COLORS,
+        orientation="h",
+        labels={"articles": "Articles", "category_label": "Publication category"},
+    )
+    fig.update_traces(
+        texttemplate="%{x:,}",
+        textposition="outside",
+        hovertemplate="<b>%{y}</b>: %{x:,} articles<extra></extra>",
+    )
+    fig.update_layout(showlegend=False)
+    render_chart(
+        fig,
+        caption="Review is evaluated first, followed by conference, journal, and other publication types.",
     )
 
 
 def _numbers_summary(
     articles_df: pd.DataFrame, years_df: pd.DataFrame, chunks_df: pd.DataFrame
 ) -> None:
-    st.subheader("📋 Resumo em números")
+    st.subheader("Summary metrics")
 
     n_total = len(articles_df)
     mean_refs = (
@@ -145,44 +189,44 @@ def _numbers_summary(
         else 0
     )
 
-    st.markdown("**Cobertura**")
+    st.markdown("**Coverage**")
     metric_row(
         [
-            ("📄 Artigos no Corpus", f"{n_total:,}", None),
-            ("🔗 Com DOI", f"{n_doi:,}", f"{n_doi / n_total:.0%}"),
-            ("📝 Com Resumo", f"{n_abstract:,}", f"{n_abstract / n_total:.0%}"),
-            ("📎 Com PDF Vinculado", f"{n_pdf:,}", f"{n_pdf / n_total:.0%}"),
+            ("Corpus articles", f"{n_total:,}", None),
+            ("With DOI", f"{n_doi:,}", f"{n_doi / n_total:.0%}"),
+            ("With abstract", f"{n_abstract:,}", f"{n_abstract / n_total:.0%}"),
+            ("With linked PDF", f"{n_pdf:,}", f"{n_pdf / n_total:.0%}"),
         ]
     )
 
-    st.markdown("**Qualidade bibliométrica**")
+    st.markdown("**Bibliometric quality**")
     metric_row(
         [
             (
-                "📚 Refs. por artigo",
-                f"{mean_refs:,.1f}" if mean_refs is not None else "N/D",
+                "References per article",
+                f"{mean_refs:,.1f}" if mean_refs is not None else "N/A",
                 None,
             ),
             (
-                "⭐ Citações médias",
-                f"{mean_citations:,.1f}" if mean_citations is not None else "N/D",
+                "Mean citations",
+                f"{mean_citations:,.1f}" if mean_citations is not None else "N/A",
                 None,
             ),
-            ("🧩 Chunks RAG", f"{len(chunks_df):,}", None),
-            ("🧠 Cobertura de texto", f"{n_pdf / n_total:.0%}" if n_total else "N/D", None),
+            ("RAG chunks", f"{len(chunks_df):,}", None),
+            ("Full-text coverage", f"{n_pdf / n_total:.0%}" if n_total else "N/A", None),
         ]
     )
 
-    st.markdown("**Vocabulário**")
+    st.markdown("**Vocabulary**")
     n_venues = articles_df["venue"].nunique() if "venue" in articles_df else 0
     n_authors = _unique_list_values(articles_df, "authors")
     n_keywords = _unique_list_values(articles_df, "keywords")
     metric_row(
         [
-            ("🗓️ Anos cobertos", f"{len(years_df):,}", None),
-            ("📰 Periódicos / eventos", f"{n_venues:,}", None),
-            ("👥 Autores identificados", f"{n_authors:,}", None),
-            ("🏷️ Keywords únicas", f"{n_keywords:,}", None),
+            ("Years covered", f"{len(years_df):,}", None),
+            ("Venues / events", f"{n_venues:,}", None),
+            ("Identified authors", f"{n_authors:,}", None),
+            ("Unique keywords", f"{n_keywords:,}", None),
         ]
     )
 

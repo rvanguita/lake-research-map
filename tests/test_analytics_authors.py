@@ -113,9 +113,9 @@ def test_author_productivity_trend_classifies_growth_and_decline():
     trend = author_productivity_trend(matrix, top_n=10)
     by_author = trend.set_index("author")
 
-    assert by_author.loc["Growing", "trend"] == "crescendo"
-    assert by_author.loc["Declining", "trend"] == "caindo"
-    assert by_author.loc["OnePoint", "trend"] == "dados insuficientes"
+    assert by_author.loc["Growing", "trend"] == "growing"
+    assert by_author.loc["Declining", "trend"] == "falling"
+    assert by_author.loc["OnePoint", "trend"] == "insufficient data"
     # Sorted descending by total.
     assert list(trend["total"]) == sorted(trend["total"], reverse=True)
 

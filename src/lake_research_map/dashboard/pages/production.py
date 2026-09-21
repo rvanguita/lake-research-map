@@ -1,4 +1,4 @@
-"""📅 Produção ao Longo do Tempo — volume, acumulado por periódico e colaboração."""
+"""Publication output over time, cumulative volume, and venue strata."""
 
 from __future__ import annotations
 
@@ -18,6 +18,8 @@ from lake_research_map.dashboard.charts import source_bars, source_lines, stacke
 from lake_research_map.dashboard.components import page_header, render_chart, require_columns
 from lake_research_map.dashboard.qualis import ESTRATO_ORDER, NOT_CLASSIFIED, QUALIS_AREA
 from lake_research_map.dashboard.theme import (
+    PUBLICATION_CATEGORY_COLORS,
+    PUBLICATION_CATEGORY_LABELS,
     venue_color_map,
 )
 
@@ -27,21 +29,21 @@ TOP_VENUES_CUMULATIVE = 10
 
 def render() -> None:
     page_header(
-        "📅",
-        "Produção e periódicos",
-        "Volume anual, crescimento acumulado e evolução temporal da produção científica qualificada.",
+        ":material/calendar_month:",
+        "Production and venues",
+        "Annual volume, cumulative growth, and the temporal evolution of classified research output.",
     )
 
     articles_df = loaders.require_articles()
 
-    if not require_columns(articles_df, ["year"], "Coluna 'year' não disponível nesta camada."):
+    if not require_columns(articles_df, ["year"], "Column 'year' is unavailable in this layer."):
         return
     if not articles_df["year"].notna().any():
-        st.info("Coluna 'year' vazia nesta camada.")
+        st.info("Column 'year' is empty in this layer.")
         return
 
     tab_volume, tab_acumulado, tab_qualis = st.tabs(
-        ["📅 Volume Anual", "📈 Crescimento Acumulado", "🎓 Estratos CAPES/Qualis"]
+        ["Annual volume", "Cumulative growth", "CAPES/Qualis strata"]
     )
 
     with tab_volume:
@@ -55,7 +57,7 @@ def render() -> None:
 
 
 def _volume_by_year(articles_df: pd.DataFrame) -> None:
-    st.subheader("Volume de publicações por ano")
+    st.subheader("Publication volume by year")
     years_df = articles_df.copy()
     years_df["year"] = valid_years(years_df)
     years_df = years_df.dropna(subset=["year"]).astype({"year": int})
@@ -64,18 +66,50 @@ def _volume_by_year(articles_df: pd.DataFrame) -> None:
     fig = source_bars(by_year, "year", total_line=True)
     fig.update_layout(
         hovermode="x unified",
-        xaxis_title="Ano de publicação",
-        yaxis_title="Quantidade de artigos",
+        xaxis_title="Publication year",
+        yaxis_title="Articles",
     )
     render_chart(
         fig,
-        caption="A altura empilhada mostra a contribuição de cada base (IEEE e Elsevier); a linha Total "
-        "soma as duas.",
+        caption="Stacked bars show the contribution of each source; the Total line sums both.",
+    )
+    _volume_by_year_category(years_df)
+
+
+def _volume_by_year_category(years_df: pd.DataFrame) -> None:
+    st.subheader("Publication volume by category")
+    if "publication_category" not in years_df.columns:
+        st.info("Publication category is unavailable in this layer.")
+        return
+    grouped = (
+        years_df.groupby(["year", "publication_category"], observed=True)
+        .size()
+        .reset_index(name="articles")
+    )
+    grouped["category_label"] = grouped["publication_category"].map(PUBLICATION_CATEGORY_LABELS)
+    fig = px.bar(
+        grouped,
+        x="year",
+        y="articles",
+        color="publication_category",
+        barmode="stack",
+        color_discrete_map=PUBLICATION_CATEGORY_COLORS,
+        category_orders={"publication_category": list(PUBLICATION_CATEGORY_LABELS)},
+        labels={"year": "Publication year", "articles": "Articles"},
+    )
+    fig.for_each_trace(
+        lambda trace: trace.update(name=PUBLICATION_CATEGORY_LABELS.get(trace.name, trace.name))
+    )
+    fig.update_traces(hovertemplate="Year %{x}<br>%{data.name}: %{y:,} articles<extra></extra>")
+    fig.update_layout(hovermode="x unified", legend_title_text="Publication category")
+    render_chart(
+        fig,
+        caption="Every DOI-unique Gold article contributes to exactly one publication category.",
     )
 
 
 def _volume_by_year_qualis(articles_df: pd.DataFrame) -> None:
-    st.subheader("🎓 Volume de publicações por ano — classificação CAPES/Qualis (até B2)")
+    st.subheader("Publication volume by year — CAPES/Qualis classification through B2")
     if not require_columns(articles_df, ["venue"]) or not articles_df["venue"].notna().any():
         return
 
@@ -98,8 +132,8 @@ def _volume_by_year_qualis(articles_df: pd.DataFrame) -> None:
 
     if years_df.empty:
         st.info(
-            f"Nenhum artigo em periódico classificado até B2 (CAPES/Qualis, área {QUALIS_AREA}) "
-            "nesta camada/filtro."
+            f"No article in a venue classified through B2 (CAPES/Qualis area {QUALIS_AREA}) "
+            "is available in this layer or filter."
         )
         return
 
@@ -116,55 +150,53 @@ def _volume_by_year_qualis(articles_df: pd.DataFrame) -> None:
         color_discrete_map=venue_color_map(estrato_order, others_label=NOT_CLASSIFIED),
         barmode="stack",
         labels={
-            "year": "Ano de publicação",
-            "count": "Quantidade de artigos",
-            "estrato": "Classificação",
+            "year": "Publication year",
+            "count": "Articles",
+            "estrato": "Classification",
         },
     )
-    fig.update_traces(hovertemplate="Ano %{x}<br>%{data.name}: %{y:,} artigos<extra></extra>")
+    fig.update_traces(hovertemplate="Year %{x}<br>%{data.name}: %{y:,} articles<extra></extra>")
     fig.update_layout(
         hovermode="x unified",
-        xaxis_title="Ano de publicação",
-        yaxis_title="Quantidade de artigos",
-        legend_title_text="Classificação",
+        xaxis_title="Publication year",
+        yaxis_title="Articles",
+        legend_title_text="Classification",
     )
     render_chart(
         fig,
-        caption=f"Inclui apenas periódicos classificados de A1 até B2 no CAPES/Qualis (área {QUALIS_AREA}, "
-        "quadriênio 2017-2020); periódicos B3 ou piores, e os não classificados, ficam fora deste "
-        "gráfico.",
+        caption=f"Includes only venues classified A1 through B2 in CAPES/Qualis (area {QUALIS_AREA}, "
+        "2017–2020 cycle); B3 or lower and unclassified venues are excluded.",
     )
 
 
 def _cumulative_production(articles_df: pd.DataFrame) -> None:
-    st.subheader("📈 Crescimento acumulado")
+    st.subheader("Cumulative growth")
     st.caption(
-        "Publicações acumuladas ano a ano — total e por base — seguidas da composição acumulada por "
-        "periódico."
+        "Year-by-year cumulative publications, overall and by source, followed by cumulative venue composition."
     )
-    sub_total, sub_venue = st.tabs(["🌐 Total", "📰 Por Periódico"])
+    sub_total, sub_venue = st.tabs(["Total", "By venue"])
 
     with sub_total:
         cum = cumulative_by_source(articles_df)
         if cum.empty:
-            st.info("Sem anos válidos para o acumulado.")
+            st.info("No valid years are available for cumulative output.")
         else:
             fig = source_lines(
                 cum,
                 "year",
-                title="Publicações acumuladas por ano",
-                y_title="Artigos acumulados",
+                title="Cumulative publications by year",
+                y_title="Cumulative articles",
             )
-            fig.update_layout(xaxis_title="Ano de publicação")
+            fig.update_layout(xaxis_title="Publication year")
             render_chart(
                 fig,
-                caption=f"Ao final do período, o corpus acumula {int(cum['total'].iloc[-1]):,} artigos "
+                caption=f"At the end of the period, the corpus contains {int(cum['total'].iloc[-1]):,} articles "
                 f"({int(cum['ieee'].iloc[-1]):,} IEEE, {int(cum['elsevier'].iloc[-1]):,} Elsevier).",
             )
 
     with sub_venue:
         scope_label = st.segmented_control(
-            "Escopo",
+            "Scope",
             options=["Total", "IEEE", "Elsevier"],
             default="Total",
             key="prod_cumulative_scope",
@@ -176,7 +208,7 @@ def _cumulative_production(articles_df: pd.DataFrame) -> None:
         scope = {"Total": "total", "IEEE": "ieee", "Elsevier": "elsevier"}[scope_label]
         venue_cum = cumulative_by_venue(articles_df, top_n=TOP_VENUES_CUMULATIVE, scope=scope)
         if venue_cum.empty:
-            st.info("Sem dados de periódico suficientes para o acumulado por revista.")
+            st.info("Insufficient venue data for cumulative composition.")
         else:
             venue_order = (
                 venue_cum.groupby("venue")["cumulative"]
@@ -194,18 +226,18 @@ def _cumulative_production(articles_df: pd.DataFrame) -> None:
                 color="venue",
                 color_map=venue_color_map(venue_order, others_label=OTHERS_LABEL),
                 category_orders={"venue": venue_order},
-                title=f"Composição acumulada por periódico ({scope_label})",
+                title=f"Cumulative composition by venue ({scope_label})",
             )
             fig.update_traces(
-                hovertemplate="Ano %{x}<br>%{data.name}: %{y:,.0f} artigos acumulados<extra></extra>"
+                hovertemplate="Year %{x}<br>%{data.name}: %{y:,.0f} cumulative articles<extra></extra>"
             )
             fig.update_layout(
-                xaxis_title="Ano de publicação",
-                yaxis_title="Artigos acumulados",
-                legend_title_text="Periódico",
+                xaxis_title="Publication year",
+                yaxis_title="Cumulative articles",
+                legend_title_text="Venue",
             )
             render_chart(
                 fig,
-                caption=f"Top {TOP_VENUES_CUMULATIVE} periódicos no escopo selecionado; o restante é agrupado "
-                f"em '{OTHERS_LABEL}'.",
+                caption=f"Top {TOP_VENUES_CUMULATIVE} venues in the selected scope; all remaining venues "
+                f"are grouped as '{OTHERS_LABEL}'.",
             )

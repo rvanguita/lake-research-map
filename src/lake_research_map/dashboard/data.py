@@ -51,6 +51,7 @@ GOLD_ANALYTICAL_COLUMNS = frozenset(
         "reference_count",
         "has_pdf",
         "is_non_article",
+        "publication_category",
     }
 )
 
@@ -106,18 +107,18 @@ def load_search_configs() -> pd.DataFrame:
 def assess_gold_articles(df: pd.DataFrame) -> tuple[str, ...]:
     """Return reasons why a Gold frame is not safe as the analytical population."""
     if df.empty:
-        return ("A camada Gold está vazia ou indisponível.",)
+        return ("The Gold layer is empty or unavailable.",)
 
     reasons: list[str] = []
     missing_columns = sorted(GOLD_ANALYTICAL_COLUMNS.difference(df.columns))
     if missing_columns:
-        reasons.append("Gold não possui campos obrigatórios: " + ", ".join(missing_columns))
+        reasons.append("Gold is missing required fields: " + ", ".join(missing_columns))
     if "doi" in df.columns:
         dois = df["doi"].fillna("").astype(str).str.strip().str.lower()
         if dois.eq("").any():
-            reasons.append("Gold contém DOI vazio.")
+            reasons.append("Gold contains blank DOI values.")
         if dois[dois.ne("")].duplicated().any():
-            reasons.append("Gold contém DOI duplicado.")
+            reasons.append("Gold contains duplicate DOI values.")
     return tuple(reasons)
 
 

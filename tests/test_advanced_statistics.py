@@ -59,7 +59,7 @@ def test_mann_kendall_trend_strictly_increasing():
 def test_mann_kendall_trend_flat():
     series = np.array([5, 5, 5, 5, 5, 5])
     res = mann_kendall_trend(series)
-    assert res["trend"] == "estável"
+    assert res["trend"] == "stable"
     assert res["s"] == 0
     assert res["p_value"] == 1.0
 
@@ -140,7 +140,7 @@ def test_zipf_law_analysis():
     assert res["r_squared"] > 0.4
     assert res["vocab_size"] >= 10
     assert not res["top_words_df"].empty
-    assert "Posto (r)" in res["top_words_df"].columns
+    assert "Rank (r)" in res["top_words_df"].columns
 
 
 def test_zipf_law_analysis_empty():

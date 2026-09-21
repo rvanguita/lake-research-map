@@ -87,4 +87,4 @@ def test_dynamic_topic_ctfidf():
     assert res["valid"] is True
     assert len(res["epochs"]) >= 1
     assert not res["summary_df"].empty
-    assert "Termos Característicos (c-TF-IDF)" in res["summary_df"].columns
+    assert "Characteristic Terms (c-TF-IDF)" in res["summary_df"].columns

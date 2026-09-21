@@ -3,7 +3,7 @@
 Every page under `dashboard/pages/` is meant to be read-only (loader ->
 analytics -> chart -> render), with pipeline execution going through Airflow
 via `pipeline_control.py`/`airflow_client.py` instead. The one exception is
-generating embeddings from the Qualidade e RAG page, which runs synchronously
+generating embeddings from the Data Quality & RAG page, which runs synchronously
 so it can drive a live progress bar. That db/transform access is kept here,
 out of the page module, so `dashboard/pages/*.py` stays a read-only layer.
 """

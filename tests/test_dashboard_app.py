@@ -48,7 +48,7 @@ _render_contract_status(results)
     assert not app.exception
     assert app.download_button
     assert app.file_uploader
-    assert any("decisões independentes" in info.value for info in app.info)
+    assert any("independent decisions" in info.value for info in app.info)
     assert len(app.metric) == 3
     assert app.error
     assert app.dataframe

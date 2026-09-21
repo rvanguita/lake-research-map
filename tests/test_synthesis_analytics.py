@@ -81,9 +81,9 @@ def test_optimization_methods_taxonomy():
 
     # Verify that GA, MILP, PSO are recognized
     methods_found = set(summary["method"])
-    assert "Algoritmos Genéticos (GA)" in methods_found
-    assert "Prog. Linear Inteira Mista (MILP)" in methods_found
-    assert "Otimização por Enxame (PSO)" in methods_found
+    assert "Genetic Algorithms (GA)" in methods_found
+    assert "Mixed-Integer Linear Programming (MILP)" in methods_found
+    assert "Particle Swarm Optimization (PSO)" in methods_found
 
 
 def test_benchmark_feeders_analysis():
@@ -102,8 +102,8 @@ def test_benchmark_feeders_analysis():
     assert any("69-Bus" in f for f in feeders["feeder"])
 
     assert not cross.empty
-    assert "Geração Solar (PV)" in cross.columns
-    assert "Armazenamento / Baterias" in cross.columns
+    assert "Solar Generation (PV)" in cross.columns
+    assert "Storage / Batteries" in cross.columns
 
 
 def test_author_impact_advanced_indices():
@@ -163,12 +163,12 @@ def test_objective_functions_taxonomy():
     assert not summary.empty
     assert "objective" in summary.columns
     assert "articles" in summary.columns
-    assert "Custos Econômicos" in set(summary["objective"])
+    assert "Economic Costs" in set(summary["objective"])
 
     co_matrix = res["co_matrix"]
     assert not co_matrix.empty
-    assert "Custos Econômicos" in co_matrix.index
-    assert co_matrix.loc["Custos Econômicos", "Custos Econômicos"] > 0
+    assert "Economic Costs" in co_matrix.index
+    assert co_matrix.loc["Economic Costs", "Economic Costs"] > 0
     assert res["multi_obj_ratio"] >= 0.0
 
 
@@ -183,12 +183,12 @@ def test_uncertainty_paradigms_analysis():
     paradigms = res["paradigms_df"]
     assert not paradigms.empty
     assert "paradigm" in paradigms.columns
-    assert any("Estocástico" in p for p in paradigms["paradigm"])
-    assert any("Robusta" in p for p in paradigms["paradigm"])
+    assert any("Stochastic" in p for p in paradigms["paradigm"])
+    assert any("Robust" in p for p in paradigms["paradigm"])
 
     cross = res["cross_resources"]
     assert not cross.empty
-    assert "Geração Solar (PV)" in cross.columns
+    assert "Solar Generation (PV)" in cross.columns
 
 
 def test_planning_time_horizons_analysis():
@@ -199,8 +199,8 @@ def test_planning_time_horizons_analysis():
     horizons = res["horizons_df"]
     assert not horizons.empty
     assert "horizon" in horizons.columns
-    assert any("Multi-Estágio" in h for h in horizons["horizon"])
-    assert any("Operação" in h for h in horizons["horizon"])
+    assert any("Multistage" in h for h in horizons["horizon"])
+    assert any("Operation" in h for h in horizons["horizon"])
 
 
 def test_computational_solvers_analysis():

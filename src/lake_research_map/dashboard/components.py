@@ -17,7 +17,11 @@ from lake_research_map.dashboard.pipeline_control import (
     poll_run,
     trigger_stage,
 )
-from lake_research_map.dashboard.theme import SOURCE_LABELS, polish_figure_layout
+from lake_research_map.dashboard.theme import (
+    PUBLICATION_CATEGORY_LABELS,
+    SOURCE_LABELS,
+    polish_figure_layout,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +65,9 @@ def _trigger(stage: str) -> None:
         }
 
 
-def _prepare_filter_state(articles_df: pd.DataFrame) -> tuple[list[int], list[str], list[str]]:
+def _prepare_filter_state(
+    articles_df: pd.DataFrame,
+) -> tuple[list[int], list[str], list[str], list[str]]:
     """Keep persisted widget values valid when a new medallion layer appears."""
     years = (
         pd.to_numeric(articles_df.get("year", pd.Series(dtype="float64")), errors="coerce")
@@ -79,6 +85,11 @@ def _prepare_filter_state(articles_df: pd.DataFrame) -> tuple[list[int], list[st
         if "venue" in articles_df
         else []
     )
+    categories = [
+        category
+        for category in PUBLICATION_CATEGORY_LABELS
+        if category in set(articles_df.get("publication_category", pd.Series(dtype=str)).dropna())
+    ]
 
     if year_options:
         bounds = (year_options[0], year_options[-1])
@@ -102,7 +113,12 @@ def _prepare_filter_state(articles_df: pd.DataFrame) -> tuple[list[int], list[st
     st.session_state.global_venues = [
         value for value in st.session_state.get("global_venues", []) if value in venues
     ]
-    return year_options, sources, venues
+    st.session_state.global_publication_categories = [
+        value
+        for value in st.session_state.get("global_publication_categories", [])
+        if value in categories
+    ]
+    return year_options, sources, venues, categories
 
 
 def _render_relevance_filter() -> None:
@@ -127,12 +143,11 @@ def _render_relevance_filter() -> None:
     has_margin = "offtopic_score" in signals.columns
 
     st.checkbox(
-        "Excluir artigos fora do escopo",
+        "Exclude out-of-scope articles",
         key="exclude_offtopic",
         help=(
-            "Usa os sinais semânticos (`--stage semantic`) para descartar artigos distantes do "
-            "tema da revisão — na prática, o grupo de logística/cadeia de suprimentos que a busca "
-            "por *distribution system planning* trouxe junto."
+            "Uses semantic signals (`--stage semantic`) to exclude articles far from the review "
+            "topic, primarily the logistics and supply-chain cluster returned by the query."
         ),
     )
     if not st.session_state.get("exclude_offtopic"):
@@ -142,93 +157,110 @@ def _render_relevance_filter() -> None:
     if has_margin:
         margin = signals["relevance_score"] - signals["offtopic_score"]
         threshold = st.slider(
-            "Margem mínima",
+            "Minimum margin",
             min_value=0.0,
             max_value=max(0.05, round(float(margin.quantile(0.75)), 2)),
             value=0.0,
             step=0.01,
             key="offtopic_margin",
             help=(
-                "0 descarta o que está mais perto do tema de logística do que do tema da "
-                "revisão. Acima disso, a triagem fica mais rígida."
+                "Zero excludes results closer to logistics than to the review topic. Higher "
+                "values make screening stricter."
             ),
         )
         st.session_state.global_min_margin = threshold
         st.caption(
-            f"Corte: margem ≥ {threshold:.2f} — {int((margin < threshold).sum()):,} artigos fora"
+            f"Cutoff: margin ≥ {threshold:.2f} — {int((margin < threshold).sum()):,} excluded articles"
         )
         return
 
     percentile = st.slider(
-        "Descartar abaixo do percentil",
+        "Exclude below percentile",
         min_value=1,
         max_value=30,
         value=10,
         key="offtopic_percentile",
-        help="10 remove os 10% menos relevantes do corpus.",
+        help="10 removes the least relevant 10% of the corpus.",
     )
     threshold = float(signals["relevance_score"].quantile(percentile / 100))
     st.session_state.global_min_margin = threshold
-    st.caption(f"Corte: score ≥ {threshold:.3f} (execute `--stage semantic` para usar a margem)")
+    st.caption(f"Cutoff: score ≥ {threshold:.3f} (run `--stage semantic` to use the margin)")
 
 
 def render_global_filters(articles_df: pd.DataFrame) -> None:
     """Render filters shared by every page and persist them in session state."""
-    years, sources, venues = _prepare_filter_state(articles_df)
-    st.subheader("🎯 Filtros globais")
+    years, sources, venues, categories = _prepare_filter_state(articles_df)
+    st.subheader("Global filters", icon=":material/filter_alt:")
     if years:
         if years[0] < years[-1]:
             slider_kwargs = {}
             if "global_year_range" not in st.session_state:
                 slider_kwargs["value"] = (years[0], years[-1])
             st.slider(
-                "Ano de publicação",
+                "Publication year",
                 min_value=years[0],
                 max_value=years[-1],
                 key="global_year_range",
-                help="Aplica-se a todos os indicadores, gráficos, tabelas e exportações.",
+                help="Applies to all metrics, charts, tables, and exports.",
                 **slider_kwargs,
             )
         else:
             st.session_state.global_year_range = (years[0], years[0])
-            st.caption(f"Ano de publicação: {years[0]}")
+            st.caption(f"Publication year: {years[0]}")
     else:
-        st.caption("Ano de publicação não disponível nesta camada.")
+        st.caption("Publication year is unavailable in the active layer.")
 
     if sources:
         st.multiselect(
-            "Fonte",
+            "Source",
             options=sources,
             key="global_sources",
             format_func=lambda value: SOURCE_LABELS.get(value, value.title()),
         )
     else:
-        st.caption("Fonte não disponível na camada ativa.")
+        st.caption("Source is unavailable in the active layer.")
     if venues:
         st.multiselect(
-            "Periódico / evento",
+            "Venue / event",
             options=venues,
             key="global_venues",
-            placeholder="Todos os periódicos",
+            placeholder="All venues",
         )
     else:
-        st.caption("Periódico / evento não disponível na camada ativa.")
+        st.caption("Venue or event is unavailable in the active layer.")
+
+    if categories:
+        st.multiselect(
+            "Publication category",
+            options=categories,
+            key="global_publication_categories",
+            format_func=lambda value: PUBLICATION_CATEGORY_LABELS[value],
+            placeholder="All categories",
+        )
+    else:
+        st.caption("Publication category is unavailable in the active layer.")
 
     _render_relevance_filter()
 
-    if st.button("Limpar filtros", key="clear_global_filters", width="stretch"):
+    if st.button(
+        "Clear filters",
+        key="clear_global_filters",
+        icon=":material/filter_alt_off:",
+        width="stretch",
+    ):
         st.session_state.global_year_range = (years[0], years[-1]) if years else None
         st.session_state.global_sources = []
         st.session_state.global_venues = []
+        st.session_state.global_publication_categories = []
         st.session_state.pop("global_min_margin", None)
         st.session_state.exclude_offtopic = False
         st.rerun()
 
     _, filtered = loaders.filtered_articles()
     if filtered.empty:
-        st.warning("Os filtros atuais não retornam artigos.")
+        st.warning("The current filters return no articles.")
     elif len(filtered) != len(articles_df):
-        st.caption(f"Exibindo **{len(filtered):,}** de **{len(articles_df):,} artigos")
+        st.caption(f"Showing **{len(filtered):,}** of **{len(articles_df):,} articles")
 
 
 def render_sidebar() -> None:
@@ -237,39 +269,43 @@ def render_sidebar() -> None:
 
     with st.sidebar:
         if not articles_df.empty:
-            with st.expander("Filtros globais", expanded=True, icon=":material/filter_alt:"):
+            with st.expander("Global filters", expanded=True, icon=":material/filter_alt:"):
                 render_global_filters(articles_df)
         if layer != "none" and not articles_df.empty:
             _, filtered_df = loaders.filtered_articles()
-            st.caption(f"{len(filtered_df):,}/{len(articles_df):,} artigos · camada **{layer}**")
+            st.caption(f"{len(filtered_df):,}/{len(articles_df):,} articles · **{layer}** layer")
 
 
 def render_pipeline_controls() -> None:
     """Render Airflow controls in the operational page instead of every page."""
     st.session_state.setdefault("pipeline_runs", {})
     _refresh_runs()
-    st.subheader("Executar pipeline via Airflow")
+    st.subheader("Run pipeline through Airflow")
 
     with st.container(border=True):
         columns = st.columns(3)
         for index, stage in enumerate(("raw", "bronze", "silver", "gold", "embed", "semantic")):
             with columns[index % len(columns)]:
                 if st.button(
-                    f"Executar {STAGE_LABELS[stage]}",
+                    f"Run {STAGE_LABELS[stage]}",
                     key=f"run_{stage}",
                     icon=":material/play_arrow:",
                     width="stretch",
                 ):
-                    with st.spinner(f"Disparando {STAGE_LABELS[stage]} no Airflow..."):
+                    with st.spinner(f"Triggering {STAGE_LABELS[stage]} in Airflow..."):
                         _trigger(stage)
 
-        if st.button("⏩ Executar tudo (raw→bronze→silver→gold→embed→semantic)", key="run_all"):
-            with st.spinner("Disparando o pipeline completo no Airflow..."):
+        if st.button(
+            "Run all (raw→bronze→silver→gold→embed→semantic)",
+            key="run_all",
+            icon=":material/fast_forward:",
+        ):
+            with st.spinner("Triggering the complete pipeline in Airflow..."):
                 _trigger("all")
 
         if st.session_state.pipeline_runs:
             with st.container(border=True):
-                st.markdown("**Execuções disparadas**")
+                st.markdown("**Triggered runs**")
                 for stage, run_ref in st.session_state.pipeline_runs.items():
                     label = STAGE_LABELS.get(stage, stage)
                     state = run_ref.get("state")
@@ -279,18 +315,16 @@ def render_pipeline_controls() -> None:
                         tasks = run_ref.get("task_instances") or []
                         if tasks:
                             n_ok = sum(1 for t in tasks if t.get("state") == "success")
-                            extra = f" ({n_ok}/{len(tasks)} tarefas concluídas)"
-                        st.success(f"{label}: concluído{extra}")
+                            extra = f" ({n_ok}/{len(tasks)} completed tasks)"
+                        st.success(f"{label}: completed{extra}")
                     elif state == "failed":
-                        st.error(
-                            f"{label}: falhou (execução `{run_id}`, verifique os logs no Airflow)"
-                        )
+                        st.error(f"{label}: failed (run `{run_id}`; check the Airflow logs)")
                     elif state == "error":
-                        st.error(f"{label}: {run_ref.get('error', 'erro desconhecido')}")
+                        st.error(f"{label}: {run_ref.get('error', 'unknown error')}")
                     else:
-                        st.info(f"{label}: {state} (execução `{run_id}`)")
+                        st.info(f"{label}: {state} (run `{run_id}`)")
 
-    if st.button("Atualizar dados", icon=":material/refresh:"):
+    if st.button("Refresh data", icon=":material/refresh:"):
         st.cache_data.clear()
         st.rerun()
 
@@ -359,8 +393,7 @@ def require_columns(df: pd.DataFrame, cols: list[str], message: str | None = Non
     if not missing:
         return True
     st.info(
-        message
-        or f"Coluna(s) {', '.join(f'`{c}`' for c in missing)} não disponível(is) nesta camada."
+        message or f"Column(s) {', '.join(f'`{c}`' for c in missing)} unavailable in this layer."
     )
     return False
 
@@ -410,7 +443,7 @@ def _warn_unnamed_axes(fig) -> None:
         if axis.title and axis.title.text:
             continue
         if any(trace.type == "heatmap" for trace in fig.data):
-            fallback = "Dimensão X" if name == "xaxis" else "Dimensão Y"
+            fallback = "Dimension X" if name == "xaxis" else "Dimension Y"
             fig.update_layout({f"{name}_title": fallback})
             continue
         chart_title = (fig.layout.title.text if fig.layout.title else None) or ",".join(
@@ -434,7 +467,7 @@ def render_chart(
     `theme=None` (not Streamlit's `"streamlit"` default) because the figure is
     already fully styled by `polish_figure_layout`: Streamlit's theme would
     override that template's background with its own, which follows the
-    browser/system setting rather than this dashboard's sidebar "Tema" toggle
+    browser/system setting rather than a dashboard theme toggle
     -- so charts rendered near-black against the navy page background.
     """
     polish_figure_layout(fig, height=height, margin=margin)
@@ -447,13 +480,14 @@ def render_chart(
 # Shared table formatting for the "pick a reference" tables -- DOI becomes a
 # clickable doi.org link.
 _ARTICLE_TABLE_CONFIG = {
-    "title": st.column_config.TextColumn("Título", width="large"),
-    "year": st.column_config.NumberColumn("Ano", format="%d"),
-    "venue": st.column_config.TextColumn("Periódico / Evento"),
-    "source": st.column_config.TextColumn("Base"),
-    "citation_count": st.column_config.NumberColumn("Citações", format="%d"),
-    "reference_count": st.column_config.NumberColumn("Referências", format="%d"),
-    "author_count": st.column_config.NumberColumn("Autores", format="%d"),
+    "title": st.column_config.TextColumn("Title", width="large"),
+    "year": st.column_config.NumberColumn("Year", format="%d"),
+    "venue": st.column_config.TextColumn("Venue / event"),
+    "source": st.column_config.TextColumn("Source"),
+    "publication_category": st.column_config.TextColumn("Publication category"),
+    "citation_count": st.column_config.NumberColumn("Citations", format="%d"),
+    "reference_count": st.column_config.NumberColumn("References", format="%d"),
+    "author_count": st.column_config.NumberColumn("Authors", format="%d"),
     "doi_link": st.column_config.LinkColumn("DOI", display_text=r"10\..*"),
 }
 
@@ -473,9 +507,10 @@ def article_table(df: pd.DataFrame, columns: list[str], download_key: str = "") 
     )
     if download_key:
         st.download_button(
-            "⬇️ Baixar como CSV",
+            "Download CSV",
             data=table[present].to_csv(index=False).encode("utf-8"),
             file_name=f"{download_key}.csv",
             mime="text/csv",
             key=f"dl_{download_key}",
+            icon=":material/download:",
         )
