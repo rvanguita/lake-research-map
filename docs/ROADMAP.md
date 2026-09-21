@@ -26,11 +26,11 @@ Dependencies use work-package IDs. Horizons are sequencing bands rather than cal
 
 ## 2. Delivered baseline
 
-The following capabilities are implemented and covered by the current 232-test suite:
+The following capabilities are implemented and covered by the current 229-test suite (241 before `WP-20` removed the tests of unreachable analytics, plus regression tests for the defects this cycle fixed):
 
 - Raw/Bronze/Silver/Gold ingestion and transformations with DOI normalization and rejection audit.
 - Local PDF inventory/matching, full-text extraction, chunk reconciliation, and local BGE embeddings.
-- Binary float32 vectors with JSON compatibility, dense/BM25/RRF retrieval, and optional Faiss indexing.
+- Binary float32 vectors as the single canonical representation, dense/BM25/RRF retrieval, and optional Faiss indexing. The JSON mirror is no longer written.
 - Contrastive screening signals, KMeans themes, PCA/t-SNE/optional UMAP, novelty/isolation, and duplicate candidates.
 - Persistent, reversible cross-DOI `merge`/`keep` decisions applied in Gold.
 - Pipeline-run history and seven Airflow DAGs matching the six stages plus the complete flow.
@@ -39,6 +39,8 @@ The following capabilities are implemented and covered by the current 232-test s
 - Canonical publication-category classification (`journal`, `conference`, `review`, `other`) propagated through Bronze, Silver, Gold, global filters, and the three-section Production and venues view.
 - Source-denominated metadata completeness, PDF-selection-bias effect sizes, and in-memory human-label screening calibration with holdout evaluation.
 - Bibliometric, network, engineering-taxonomy, burst, forecasting, and anomaly functions described in `METHODOLOGY.md`.
+- Analytical self-disclosure on the four pages that carry inferential claims: AIC family comparison and a bootstrap goodness-of-fit for the citation tail; VIF, condition number, influence and zero-inflation diagnostics beside the count model; bootstrap ARI and projection trustworthiness beside the semantic map; a degree-preserving null model beside the collaboration network; and persistence skill plus held-out interval coverage beside every forecast.
+- One canonical owner per analytical question: no public analytical function is unreachable from a page, and no page claims a method the code does not implement.
 
 This baseline does not imply that every analytical method is confirmatory. The limitations and required validation are explicit in `PRD.md`.
 
@@ -46,7 +48,7 @@ This baseline does not imply that every analytical method is confirmatory. The l
 
 ### `WP-01` — Dataset versions and correlated pipeline runs
 
-- **Status:** Implemented on 2026-09-21; live MySQL and reference-corpus validation pending.
+- **Status:** Complete on 2026-09-21; SQLite contracts, MySQL 8.4 bootstrap, and active-corpus audit passed.
 - **Objective:** Make every result resolve to an immutable input/output version and one parent execution.
 - **Justification:** The former stage records did not identify a shared `all` run, code revision, configuration, or active dataset snapshot.
 - **Dependencies:** None.
@@ -56,7 +58,7 @@ This baseline does not imply that every analytical method is confirmatory. The l
 
 ### `WP-02` — Source reconciliation and deletion propagation
 
-- **Status:** Implemented on 2026-09-21; live MySQL and reference-corpus validation pending.
+- **Status:** Complete on 2026-09-21; SQLite contracts, MySQL 8.4 bootstrap, and active-corpus audit passed.
 - **Objective:** Detect input additions, modifications, and removals and propagate them deterministically.
 - **Justification:** Removed files and their records previously survived in Raw and Bronze.
 - **Dependencies:** `WP-01`.
@@ -66,7 +68,7 @@ This baseline does not imply that every analytical method is confirmatory. The l
 
 ### `WP-03` — Executable data contracts and publication gates
 
-- **Status:** Implemented on 2026-09-21; live MySQL and reference-corpus validation pending.
+- **Status:** Complete on 2026-09-21; persisted gates report zero blocking failures for the active version.
 - **Objective:** Turn layer invariants into persisted, blocking quality checks.
 - **Justification:** Warnings and dashboard diagnostics previously did not prevent incomplete derived data from becoming visible.
 - **Dependencies:** `WP-01`, `WP-02`.
@@ -76,7 +78,7 @@ This baseline does not imply that every analytical method is confirmatory. The l
 
 ### `WP-04` — Gold as the canonical analytical population
 
-- **Status:** Phase-one selector and visible degraded mode delivered; version-bound readiness remains open.
+- **Status:** Complete on 2026-09-21; analytical readers bind articles, chunks, semantics, duplicate candidates, search, and projections to the active immutable version.
 - **Objective:** Ensure approved duplicate curation is reflected throughout the dashboard.
 - **Justification:** Gold-first selection now protects approved merges, but readiness is not yet tied to an immutable published dataset version or persisted quality-gate result.
 - **Dependencies:** `WP-03`.
@@ -84,6 +86,8 @@ This baseline does not imply that every analytical method is confirmatory. The l
 - **Completion:** Dashboard article counts and DOI sets equal the active Gold version; merge/undo changes appear after the documented rebuild sequence; degraded mode is visibly labeled.
 
 ### `WP-05` — Identity, PDF matching, and rejection validation
+
+- **Status:** `blocked-awaiting-evidence`; the persistent review workflow is available, but no reviewed identity/PDF/rejection sample has been supplied.
 
 - **Objective:** Quantify false merges, missed duplicates, PDF mislinks, and the bias introduced by no-DOI rejection.
 - **Justification:** DOI and fuzzy-title rules are high-impact methodological decisions currently tested mainly for mechanics.
@@ -93,13 +97,18 @@ This baseline does not imply that every analytical method is confirmatory. The l
 
 ### `WP-06` — Embedding and Semantic compatibility contract
 
+- **Status:** Complete on 2026-09-21; the contract is enforced, the corpus was re-embedded to satisfy it, and the JSON fallback is retired.
+
 - **Objective:** Prevent missing, stale, mixed-model, or dimensionally invalid vectors from feeding semantic outputs.
 - **Justification:** Embed selects JSON-null rows while binary is canonical, and Semantic publishes partial coverage after a warning.
 - **Dependencies:** `WP-01`, `WP-03`.
 - **Deliverable:** Text hash, model revision, dimension/dtype checks, binary-first pending logic, JSON fallback migration, semantic-run metadata, and atomic complete-coverage gate.
 - **Completion:** JSON-only, wrong-length, changed-text, mixed-model, and partial-coverage fixtures all fail or repair deterministically; Semantic never replaces a valid complete run with an incomplete one.
+- **Evidence:** The previously active version carried none of the seven metadata fields on any of its 7,552 chunks, so it could not have passed the contract that `quality.py::embed_contract` now enforces. There is no in-place backfill and there should not be -- `_assert_mutable_candidate` refuses to write a published version -- so the repair was recompute: the candidate's pending selector caught every chunk on `embed_revision IS NULL`, and a full run re-embedded the corpus. The JSON mirror is no longer written (`versioned_gold.py`) or read (`search.py`, `data.py`). The legacy `build_embeddings` path and the dashboard action that called it were removed outright: they wrote the live `lit_chunks` table that publication rebuilds, so their vectors were discarded on the next publish and never met the contract. Embedding now has exactly one writer.
 
 ### `WP-07` — Enrichment observations and temporal semantics
+
+- **Status:** Append-only observation, as-of selection, response provenance, and OpenAlex evidence schema implemented; credentialed corpus refresh remains open.
 
 - **Objective:** Make citation/reference data reproducible and refreshable.
 - **Justification:** The current cache stores only latest counts and cannot support an as-of analysis.
@@ -109,7 +118,7 @@ This baseline does not imply that every analytical method is confirmatory. The l
 
 ### `WP-08` — Concurrency, recovery, and operational security
 
-- **Status:** Advisory locking, persistent CLI logs, signal-aware failure recording, and resumable batch embeddings delivered; retry/timeout policy, stale-run heartbeat recovery, database roles, and deployment guidance remain open.
+- **Status:** Advisory locking, persistent logs, signal handling, resumable embeddings, heartbeat recovery, Airflow retry/timeouts, local-only ports, resource bounds, and per-table role provisioning delivered; role creation awaits local passwords.
 - **Objective:** Make mutation predictable under failure and prevent unsafe overlapping runs.
 - **Justification:** Writer serialization and resumable embeddings now protect the common local failure path, but automatic retry/timeout policy, abandoned-run recovery, and shared-network hardening are not complete.
 - **Dependencies:** `WP-01`.
@@ -120,7 +129,7 @@ This baseline does not imply that every analytical method is confirmatory. The l
 
 ### `WP-09` — Persistent dual-review screening workflow
 
-- **Status:** Deterministic export/import, validation, consensus/adjudication precedence, and agreement reporting delivered in memory; persistence remains open.
+- **Status:** Persistent protocols, dual assignments, append-only label revisions, CSV export/import, and adjudication delivered; independent reviewer labels remain open.
 - **Objective:** Calibrate screening against reproducible human judgments.
 - **Justification:** The dashboard now measures agreement from uploaded decisions, but labels, assignments, and adjudication are not durable or dataset-versioned.
 - **Dependencies:** `WP-01`, `WP-04`, `WP-06`.
@@ -129,7 +138,7 @@ This baseline does not imply that every analytical method is confirmatory. The l
 
 ### `WP-10` — Screening threshold validation
 
-- **Status:** Candidate selection, 70/30 holdout evaluation, support gates, workload metric, and stratified bootstrap intervals delivered for uploaded labels; durable approval and later-batch validation remain open.
+- **Status:** Calibration and durable hash-bound approval schema/CLI delivered; approval and later-batch validation await independent labels.
 - **Objective:** Select a workload-aware threshold with uncertainty and out-of-sample evidence.
 - **Justification:** Zero contrastive margin is meaningful geometrically but has no guaranteed recall.
 - **Dependencies:** `WP-09`.
@@ -137,6 +146,8 @@ This baseline does not imply that every analytical method is confirmatory. The l
 - **Completion:** The selected threshold meets the approved sensitivity target on validation data or automatic exclusion remains disabled with the failure documented.
 
 ### `WP-11` — Author identity audit and overrides
+
+- **Status:** `blocked-awaiting-evidence`; reviewer persistence is available, while resolved author overrides and an audited error rate require human decisions.
 
 - **Objective:** Bound errors from heuristic author canonicalization.
 - **Justification:** Homonyms can merge and spelling variants can split, invalidating rankings and network structure.
@@ -146,6 +157,8 @@ This baseline does not imply that every analytical method is confirmatory. The l
 
 ### `WP-12` — Engineering-taxonomy validation
 
+- **Status:** `blocked-awaiting-evidence`; taxonomy labels can be persisted, but class-level evaluation requires the reviewed sample.
+
 - **Objective:** Treat regex extraction as a measured multi-label classifier.
 - **Justification:** Frequency charts currently lack precision/recall evidence and an explicit unknown class.
 - **Dependencies:** `WP-04`.
@@ -153,6 +166,8 @@ This baseline does not imply that every analytical method is confirmatory. The l
 - **Completion:** Each displayed taxonomy reports evaluated coverage and meets a declared minimum precision or is labeled exploratory.
 
 ### `WP-13` — Retrieval evaluation corpus
+
+- **Status:** `blocked-awaiting-evidence`; retrieval judgments can be persisted, but Recall@k/MRR/nDCG and default-mode selection require labeled technical queries.
 
 - **Objective:** Choose dense, lexical, or hybrid retrieval from measured relevance and latency.
 - **Justification:** RRF is implemented, but no labeled query set supports a quality claim.
@@ -164,66 +179,85 @@ This baseline does not imply that every analytical method is confirmatory. The l
 
 ### `WP-14` — Citation distribution inference
 
+- **Status:** Complete on 2026-09-21; the estimator and its dashboard panel both ship.
+
 - **Objective:** Replace descriptive best-KS selection with defensible tail comparison.
 - **Justification:** Current KS p-values reuse fitted data, force `x_min` to the observed minimum, and omit zeros.
 - **Dependencies:** `WP-07`.
 - **Deliverable:** Documented zero handling, `x_min` selection/sensitivity, MLE comparisons, likelihood ratios, bootstrap goodness-of-fit, and uncertainty for parameters.
 - **Completion:** Simulation tests recover known generating families at acceptable rates; the dashboard presents CCDF/diagnostics once without duplicate histograms.
+- **Evidence:** Zero handling, a KS-minimising `x_min` sweep, tail MLE, AIC-based family selection, likelihood ratios, and a refit-per-sample bootstrap are implemented in `analytics.py::fit_heavy_tail_distributions`. The Impact page now reports the AIC comparison table, the tail/zero population, and the bootstrap p-value separately from the reused-parameter KS p-values that only apply to the log-normal and exponential fits. A Vuong test for the likelihood ratios is deliberately not claimed; the ratios are labelled descriptive.
 
 ### `WP-15` — Citation count-model diagnostics
+
+- **Status:** Partially delivered; the diagnostics are computed and now rendered, while a fitted zero-inflated model and alternative age specifications remain open.
 
 - **Objective:** Report robust associations without hiding misspecification or selection effects.
 - **Justification:** The current Poisson/NB choice uses a heuristic dispersion rule and lacks multicollinearity, influence, zero-inflation, and sensitivity diagnostics.
 - **Dependencies:** `WP-07`.
 - **Deliverable:** Missingness profile, VIF/condition number, residual/influence checks, Poisson/NB/zero-inflated comparison when identifiable, alternative age specifications, and coefficient forest with CIs.
 - **Completion:** Synthetic/fixture tests cover convergence and known coefficients; unsupported models are rejected; the UI states association rather than causation.
+- **Evidence:** Missingness profile, condition number, VIF, Cook's-distance influence count, observed-versus-predicted zero fraction, and the alternative family AIC are computed in `analytics.py::citation_determinants_glm` and displayed in the Impact page's specification-diagnostics panel, which also labels the estimates exploratory when the zero gap is large. Still missing: an actual ZIP/ZINB fit (family choice remains the dispersion > 1.5 heuristic rather than an AIC or likelihood-ratio decision) and any alternative to the fixed `log(age + 1)` exposure.
 
 ### `WP-16` — Multiple testing and temporal trend validity
+
+- **Status:** Partially delivered; the keyword trend family is now corrected as a whole, while the other ranked surfaces and serial-dependence sensitivity remain open.
 
 - **Objective:** Control false discoveries across keyword/topic trend panels.
 - **Justification:** Many Mann-Kendall and breakpoint tests are interpreted independently.
 - **Dependencies:** `WP-04`.
 - **Deliverable:** Test-family definitions, minimum prevalence, Benjamini-Hochberg adjusted values, effect-size thresholds, serial-dependence sensitivity, and exploratory breakpoint correction/bootstrap.
 - **Completion:** Every ranked trend table shows raw effect, uncertainty, adjusted significance, sample span, and zero-filled years.
+- **Evidence:** Benjamini-Hochberg previously adjusted only the 7 most-positive and 7 most-negative slopes -- a family already selected for being extreme, which inflates significance rather than controlling it. Mann-Kendall now runs over every keyword meeting the minimum-prevalence rule, the adjustment is applied to that full family, and only then is the table narrowed to the charted terms; the caption states the family size. Still open: the keyword growth ranking on Trends, the OLS slope chart that drives the selection, and the searched-breakpoint Chow test all report no uncertainty or adjustment, and no serial-dependence correction exists anywhere.
 
 ### `WP-17` — Semantic stability and projection diagnostics
+
+- **Status:** Partially delivered; bootstrap ARI and trustworthiness are computed and displayed beside the map, while persistence and cluster-count sensitivity remain open.
 
 - **Objective:** Separate robust high-dimensional structure from unstable 2D presentation.
 - **Justification:** Silhouette-selected KMeans and t-SNE/UMAP views can change with samples and parameters.
 - **Dependencies:** `WP-06`.
 - **Deliverable:** Bootstrap/subsample ARI, cluster-count sensitivity, projection trustworthiness, neighborhood preservation, seed stability, and drift computed in embedding space before visualization.
 - **Completion:** Theme/novelty panels show stability and coverage; unstable labels remain numbered/exploratory rather than receiving fixed ontological names.
+- **Evidence:** `analytics.py::semantic_stability_diagnostics` computes subsample/seed bootstrap ARI and projection trustworthiness, and the Screening page's stability panel reports both next to the projection along with the population used and an explicit warning that theme numbering carries no ontological claim. Still open: nothing is persisted to a table, there is no cluster-count sweep, no neighbourhood-preservation metric beyond trustworthiness, and no embedding-space drift measure.
 
 ### `WP-18` — Forecast and Bass validation
+
+- **Status:** Partially delivered; the complete-year cutoff, baseline skill, and an out-of-sample coverage metric now ship, while by-horizon backtests, MASE, and Bass stability remain open.
 
 - **Objective:** Quantify whether projections improve on persistence and whether intervals cover future observations.
 - **Justification:** Short annual series can make model selection and conformal bands unstable.
 - **Dependencies:** `WP-07`, `WP-16`.
 - **Deliverable:** Expanding-window backtests by horizon, MAE/MASE or baseline skill, empirical interval coverage/width, dynamic complete-year cutoff, and Bass parameter bootstrap/sensitivity.
 - **Completion:** Forecasts that do not outperform persistence are labeled accordingly; displayed intervals meet the declared backtest coverage tolerance or carry a warning.
+- **Evidence:** The cutoff was already dynamic (`LAKE_RESEARCH_MAP_COMPLETE_YEAR`, defaulting to the previous calendar year); the remaining hard-coded years in the forecast path -- the keyword baseline year, the ranking axis, and the CV label -- now derive from it. Skill against persistence is displayed and says "No better than naive" when it is not positive. Interval coverage was scored on the same errors that set the conformal radius, so it returned ~0.9 by construction and could never fail; it is now measured on held-out folds and returns nothing when the series is too short to spare any. Still open: every fold scores one step ahead, so the two-year horizon is unvalidated; there is no MASE; and the Bass fit discards its covariance, so no parameter uncertainty is available.
 
 ### `WP-19` — Network null models and temporal collaboration
+
+- **Status:** Partially delivered; the degree-preserving null model ships and does not depend on WP-11. Assortativity and periodized tie dynamics remain open, and every claim stays bounded by heuristic author identity.
 
 - **Objective:** Distinguish structural collaboration evidence from corpus-size artifacts.
 - **Justification:** Static centralities and a single random comparison do not describe network uncertainty or evolution.
 - **Dependencies:** `WP-11`.
 - **Deliverable:** Component-aware metrics, degree-preserving null models, assortativity/robustness checks, and periodized new-versus-repeated collaboration ties.
 - **Completion:** Network claims include identity coverage, component scope, null distribution, and sensitivity to the selected author subset.
+- **Evidence:** `analytics.py::network_null_model_diagnostics` rewires the graph preserving every author's degree and reports observed clustering, null mean/standard deviation, z-score, and an empirical p-value; the Researchers page displays it and states that path length and small-world sigma cover only the largest component while density and centralities cover the whole graph. Still open: assortativity, robustness checks, and periodized new-versus-repeated ties (the existing recurrent-edge count is static).
 
 ## 6. Medium term — dashboard consolidation
 
 ### `WP-20` — Analytical inventory and redundancy removal
 
-- **Status:** Overview deep-dive duplication and duplicate quality-richness charts removed; complete dead-controller inventory remains open.
+- **Status:** Complete on 2026-09-21; the inventory was taken and every unreachable analytical controller was removed.
 - **Objective:** Make every visualization answer one unique question.
 - **Justification:** The repository retains inactive helpers and analytical functions for retired pages, while Overview contains deep-dive diagnostics.
 - **Dependencies:** `WP-04`, validity work packages relevant to each method.
 - **Deliverable:** Machine-readable or documented chart inventory with owner/question/population; removal of dead helpers/tests; relocation or deletion of duplicates; Overview reduced to macro state.
 - **Completion:** A review finds one canonical owner per question; no unreachable analytical controller remains; removed methods are not claimed in docs/tests.
+- **Evidence:** Twenty public functions had no page controller calling them, and seventeen still had passing tests, so the suite stayed green while the features were unreachable. Five implemented methods that `METHODOLOGY.md` already declares unavailable were deleted outright (`price_index_analysis`, `sleeping_beauties_detection`, `disruption_index_estimation`, `citation_longevity_and_decay`, `open_access_impact_analysis`) -- the last of these fabricated a 20% open-access share from a salted `hash()` when real access data was missing, which is exactly the kind of manufactured evidence `ADR-05` forbids. Eleven further exploratory functions with no owner page in the section 7 matrix, plus `fit_quantile_forecast`, were removed with their tests, and `tests/test_strategic_analytics.py` disappeared entirely. Five orphans were wired into their owner pages under `WP-14` through `WP-19` instead of being deleted. The `src/lake_literature` compatibility shim was kept because external importers cannot be ruled out from inside the repository.
 
 ### `WP-21` — Integrate validated analyses into existing pages
 
-- **Status:** First Quality and Screening increment delivered; all other page-specific increments remain open.
+- **Status:** Partially delivered; the Impact, Screening, Researchers, and Trends increments landed on 2026-09-21. Retrieval benchmark, taxonomy validation, identity audit, and temporal tie dynamics remain blocked on their evidence packages.
 - **Objective:** Add knowledge without adding pages or decorative charts.
 - **Justification:** New methods should extend established workflows and preserve navigation stability.
 - **Dependencies:** `WP-10` through `WP-19`, `WP-20`.
@@ -239,7 +273,7 @@ This baseline does not imply that every analytical method is confirmatory. The l
 
 ### `WP-22` — Streamlit performance, behavior, and accessibility
 
-- **Status:** Dynamic heavy tabs plus headless screening-workflow and Production-page smoke tests delivered; application-wide behavior/accessibility coverage remains open.
+- **Status:** Dynamic heavy tabs now cover Semantics, Quality, Forecasting, Pipeline, Topics, and Highlights; headless smoke coverage and binary-first search are delivered. Remaining mixed-language copy, Researchers sub-tabs, application-wide AppTests, and the under-five-second suite target remain open.
 - **Objective:** Keep the 10-page app responsive and testable as analytical depth grows.
 - **Justification:** Some pages still compute hidden tab content, and first-party AppTest coverage does not yet span navigation, filters, and all degraded states.
 - **Dependencies:** `WP-20`, `WP-21`.
@@ -250,6 +284,8 @@ This baseline does not imply that every analytical method is confirmatory. The l
 
 ### `WP-23` — Reference-year and citation-history ingestion
 
+- **Status:** OpenAlex work and annual-count persistence implemented; credentialed coverage validation remains open.
+
 - **Objective:** Enable valid literature-age and delayed-recognition analyses.
 - **Justification:** Price's index, citation longevity, and Sleeping Beauty metrics cannot be reconstructed from cumulative counts.
 - **Dependencies:** `WP-01`, `WP-07`.
@@ -258,6 +294,8 @@ This baseline does not imply that every analytical method is confirmatory. The l
 
 ### `WP-24` — Citation graph and verified access data
 
+- **Status:** Outgoing citation-edge and access-observation persistence implemented; incoming-edge collection, coverage, and confounding audits remain open.
+
 - **Objective:** Enable disruption and access-association research with the required observables.
 - **Justification:** CD disruption requires forward/backward citation relations; OACA requires verified access status and confounder control.
 - **Dependencies:** `WP-01`, `WP-07`.
@@ -265,6 +303,8 @@ This baseline does not imply that every analytical method is confirmatory. The l
 - **Completion:** Graph integrity and access-validation audits pass; CD/OACA remain unavailable if coverage or confounding control is inadequate.
 
 ### `WP-25` — Scale-triggered storage and compute evolution
+
+- **Status:** Complete for the current corpus; binary-first loading and vectorized local search meet the recorded memory/latency thresholds, so no infrastructure migration is approved.
 
 - **Objective:** Adopt external vector/search or distributed compute only when the current design misses SLOs.
 - **Justification:** Current corpus size does not justify additional infrastructure.

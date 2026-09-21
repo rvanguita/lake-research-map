@@ -41,7 +41,7 @@ Streamlit dashboard ----------------------------┘
 | `transform/bronze_articles.py` | Harmonize IEEE and Elsevier records | `bronze.lit_articles` |
 | `transform/silver_articles.py` | DOI deduplication, rejection audit, non-article flags, PDF matching | Silver tables |
 | `transform/gold_articles.py` | Apply approved merges; build curated articles and reconcile chunks | Gold articles/chunks |
-| `transform/embeddings.py` | Embed pending chunks locally | Chunk vector fields |
+| `transform/embeddings.py` | Model identity, revision check, batch/thread bounds | Nothing; the writer is `versioned_gold.py` |
 | `transform/semantics.py` | Contrastive scoring, themes, projection, duplicate candidates | Semantic tables |
 | `transform/duplicate_resolution.py` | Validate persistent merge/keep/undo decisions | Duplicate overrides |
 | `pipeline.py` | Bootstrap, stage routing, CLI, and run telemetry | Pipeline-run records |
@@ -129,14 +129,14 @@ Gold articles are rebuilt, while chunks are reconciled by comparing stored and d
 
 ### 3.6 Embedding contract
 
-Current versioned embeddings use `BAAI/bge-small-en-v1.5`, float32 vectors, binary BLOB storage, and a JSON compatibility copy. Candidate work is selected when the binary vector is absent or its model contract differs. The legacy direct transform still selects by the JSON field and remains scheduled for removal under `WP-06`.
+Current versioned embeddings use `BAAI/bge-small-en-v1.5`, float32 vectors, and binary BLOB storage. Candidate work is selected when the binary vector is absent, its text hash has changed, or its model contract differs. The JSON compatibility copy is no longer written: it roughly doubled chunk storage and dominated the dashboard's vector load (11.6 s to 2.3 s once it was excluded from the query). Readers are binary-only. The column is retained, nullable, because previously published versions carry both representations and stay reactivatable through the binary one; nothing reads the JSON.
 
 The target embedding contract requires:
 
 - `text_sha256`, model name, immutable model revision, vector dimension, dtype, normalization mode, and embedded timestamp.
 - Pending means binary vector absent, text hash changed, or model contract incompatible.
 - Binary length equals `dimension * 4`; non-finite vectors fail the stage.
-- JSON fallback is transitional and can be retired only after a verified migration.
+- The JSON fallback is retired: it is neither written nor read. The column is retained and nullable so that dropping it stays a separately reviewed migration rather than an unattended one.
 
 ### 3.7 Semantic and screening contract
 
@@ -163,7 +163,7 @@ Screening labels remain target governed data rather than dashboard session state
 
 ### 4.2 Current versioned run protocol
 
-1. Create or resume a parent execution shared by CLI/Airflow stage attempts; project-scoped advisory locking remains an operational hardening item.
+1. Create or resume a parent execution shared by CLI/Airflow stage attempts under the project-scoped MySQL advisory lock.
 2. Create a parent run containing code revision, configuration hash, trigger, and requested stages.
 3. Scan inputs into a candidate dataset version and reconcile additions, changes, and removals.
 4. Execute each stage in a transaction or staging tables appropriate to its size.
@@ -268,9 +268,9 @@ Logs use structured fields with parent run ID, stage run ID, and dataset version
 
 ### 9.1 Current baseline
 
-The repository has 212 pytest tests across 26 files. They run with isolated in-memory SQLite sessions and additionally cover deterministic fingerprints, content-addressed retention, rename detection, Bronze deletion propagation, isolated Gold candidates, embedding contract failures, atomic materialization, exact Gold reactivation, an end-to-end correlated pipeline fixture, Airflow parent correlation, and the persisted-contract dashboard state. Ruff lint and format checks pass.
+The repository has 229 pytest tests. They run with isolated in-memory SQLite sessions and additionally cover deterministic fingerprints, content-addressed retention, rename detection, Bronze deletion propagation, isolated Gold candidates, embedding contract failures, atomic materialization, exact Gold reactivation, an end-to-end correlated pipeline fixture, Airflow parent correlation, temporal enrichment observations, and persistent human-review evidence. Ruff lint and format checks are required.
 
-SQLite tests are fast but do not validate MySQL collation, JSON/NULL behavior, BLOBs, DDL, transaction isolation, or advisory locks.
+SQLite remains the default fast suite. MySQL-specific acceptance is recorded separately against MySQL 8.4 and must be rerun for changes to JSON/NULL behavior, BLOBs, DDL, transactions, or advisory locks.
 
 ### 9.2 Target test layers
 
@@ -329,6 +329,8 @@ Planned data extensions have explicit prerequisites:
 
 **Rationale:** They add operational complexity without demonstrated current benefit.
 
+The 2026-09-21 active-corpus benchmark measured an 11.06 MiB vector matrix and a 92.72 ms warm-search P95 after binary-first loading. Retain local vectorized search and reconsider at 512 MiB, 250 ms P95, or a demonstrated concurrency requirement.
+
 ### `ADR-05` — Human authority for exclusion and cross-DOI identity
 
 **Decision:** Models prioritize and measure; reviewers decide.
@@ -347,10 +349,10 @@ Planned data extensions have explicit prerequisites:
 
 ## 12. Known technical debt
 
-- Dashboard selection is Gold-first, but `WP-04` still needs to bind loader readiness explicitly to `lit_publication_state`.
-- The legacy direct embedding transform still privileges the JSON field; the versioned pipeline uses binary readiness.
-- Parent correlation and dataset versions are implemented; cross-process advisory locking and automatic retry policy remain open.
-- OpenAlex observations lack time and response provenance.
+- Analytical reads are already bound to the publication pointer: `dashboard/data.py::load_articles` routes Gold through `load_active_dataset_table`, which scopes every query by `active_dataset_version()`. The residual is narrower than previously recorded -- `assess_gold_articles` is still a structural check (non-empty, unique DOI, expected columns) rather than a read of the persisted `lit_quality_results` for that version.
+- Resolved on 2026-09-21: the legacy direct embedding transform and the dashboard action that called it were removed. It wrote the live `lit_chunks` table, which `materialize_version` rebuilds from the candidate on every publish, so vectors generated from the Quality page were discarded at the next publication and never passed `embed_contract`. Embedding now has exactly one writer, `versioned_gold.py::build_dataset_embeddings`, operating on the immutable candidate.
+- Parent correlation, dataset versions, cross-process advisory locking, heartbeats, stale-run recovery, and stage-specific Airflow retry/timeout policies are implemented.
+- OpenAlex responses are append-only observations with observation time, response state, HTTP status, response hash, retry count, longitudinal counts, outgoing edges, and access metadata. A real refresh still requires local API credentials.
 - Chunk and duplicate-candidate logical keys are not fully constrained in the database.
 - Several retired analytical functions and inactive page helpers remain in source/tests.
 - Expensive tabs are only conditionally rendered on some pages.

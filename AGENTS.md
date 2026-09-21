@@ -9,10 +9,10 @@ This document defines the architecture, design principles, testing protocols, an
 `lake-research-map` is a production-grade **Medallion Data Lake** and analytical research platform built for a Systematic Literature Review (SLR) on the engineering topic:
 > **"Distribution System Planning" (Electric Power Distribution Networks)**
 
-The corpus comprises hand-curated bibliographic exports from **IEEE Xplore** and **Elsevier ScienceDirect** (~1,831 deduplicated articles). The project provides:
+The corpus comprises hand-curated bibliographic exports from **IEEE Xplore** and **Elsevier ScienceDirect** (3,115 articles in the active Gold version as of 2026-09-21; re-measure before quoting). The project provides:
 1. **Medallion Ingestion & Transform Pipeline** (`src/lake_research_map/`): Multi-tier extraction, normalization, deduplication, chunking, binary vector embedding, and contrastive relevance screening.
 2. **Orchestration** (`airflow/`): 1:1 Airflow DAGs mirroring CLI pipeline stages (`raw`, `bronze`, `silver`, `gold`, `embed`, `semantic`, `all`).
-3. **Interactive Analytical Dashboard** (`src/lake_research_map/dashboard/`): Multipage Streamlit application featuring 13 deduplicated pages for bibliometric, scientometric, econometric, network, and semantic intelligence.
+3. **Interactive Analytical Dashboard** (`src/lake_research_map/dashboard/`): Multipage Streamlit application featuring 10 deduplicated pages for bibliometric, scientometric, econometric, network, and semantic intelligence.
 
 ---
 
@@ -45,7 +45,8 @@ The pipeline connects to a MySQL server with 4 discrete databases named plainly 
        │                       lit_chunks (RAG units: abstracts & fulltext; reconciled against text hash)
        │                       lit_pipeline_runs (execution duration, stats JSON, status)
        ▼
-   5. EMBED (`embed`)      --> fills lit_chunks.embedding_bin (LargeBinary float32) & embedding (JSON fallback)
+   5. EMBED (`embed`)      --> fills lit_chunks.embedding_bin (LargeBinary float32); the JSON `embedding`
+       │                       mirror is no longer written, only kept nullable for older versions
        │                       via local ONNX fastembed (BAAI/bge-small-en-v1.5)
        ▼
    6. SEMANTIC (`semantic`)--> lit_semantics (contrastive topic vs logistics margin, KMeans themes, 2D projections)
@@ -92,11 +93,11 @@ The dashboard is structured into 10 workflow-oriented pages in `src/lake_researc
 
 ### 4.2 Deduplication and Tab Hygiene
 - **Zero Chart Duplication**: Charts must never be duplicated across tabs within a page or between specialized pages.
-- **Role of Visão Geral**: `overview.py` displays high-level macro summaries only. Deep-dive analytical charts belong exclusively to their respective analytical pages.
+- **Role of Overview**: `overview.py` displays high-level macro summaries only. Deep-dive analytical charts belong exclusively to their respective analytical pages.
 - **Logical Tab Grouping**:
-  - `production.py`: Strictly chronological views (Volume Anual, Crescimento Acumulado, Estratos CAPES/Qualis).
+  - `production.py`: Strictly chronological views (annual volume, cumulative growth, CAPES/Qualis strata).
   - `topics.py`: Venue ranking, Bradford Zones, semantic structure, Zipf's Law, c-TF-IDF, descriptive conceptual atypicality, and structural breaks.
-  - `highlights.py`: 2 tabs — *Fundamentação Teórica* and *Dinâmica de Citações & Econometria*, including heavy-tail diagnostics, age normalization, and exposure-adjusted count GLM.
+  - `highlights.py`: 2 tabs — *Theoretical grounding* and *Citation dynamics & econometrics*, including heavy-tail diagnostics (AIC family comparison, bootstrap p-value), age normalization, and an exposure-adjusted count GLM with its specification diagnostics.
   - `researchers.py`: Author productivity, scientific leadership, temporal trajectories, collaboration networks, research lines, and bibliometric laws.
   - `synthesis.py`: 6 selectable engineering-evidence dimensions covering methods, objectives, uncertainty, planning horizons, test systems, and solvers.
   - `forecasting.py`: Complete-year volume forecasts with rolling validation and conformal bands, topic trajectories, Bass diagnostics, and Kleinberg bursts.
@@ -106,7 +107,7 @@ The dashboard is structured into 10 workflow-oriented pages in `src/lake_researc
 
 ### 4.3 Visual & Theme Standards
 - **Responsive Width**: Always use `width="stretch"` for charts, tables, and containers. **NEVER use deprecated `use_container_width=True`**.
-- **Transparent Polar Charts**: For radar and polar charts (e.g., `thematic_radar_chart`), always set `paper_bgcolor="rgba(0,0,0,0)"` and `polar_bgcolor="rgba(0,0,0,0)"` so that the chart adapts seamlessly to Streamlit dark and light themes without an opaque white box.
+- **Transparent Polar Charts**: If a radar or polar chart is ever reintroduced, set `paper_bgcolor="rgba(0,0,0,0)"` and `polar_bgcolor="rgba(0,0,0,0)"` so it adapts to the theme instead of rendering an opaque white box. None currently exists; the previous `thematic_radar_chart` was removed with its unreachable analytics.
 - **Language Rule**: Code, comments, docstrings, variable names, documentation files
   (`docs/`, `*.md`), and all dashboard UI text are in **English**.
 - **Fixed Dark Theme**: The dashboard uses the dark Streamlit theme and matching

@@ -6,7 +6,13 @@ import pytest
 
 from lake_research_map import pipeline
 from lake_research_map.dashboard import data as dashboard_data
-from lake_research_map.db.gold_models import DuplicateOverride, DuplicatePair
+from lake_research_map.db.gold_models import (
+    DatasetDuplicatePair,
+    DatasetVersion,
+    DuplicateOverride,
+    DuplicatePair,
+    PublicationState,
+)
 from lake_research_map.db.silver_models import Article as SilverArticle
 from lake_research_map.transform.duplicate_resolution import (
     DuplicateResolutionError,
@@ -143,6 +149,19 @@ def test_decision_lifecycle_validation_and_dashboard_queue(
         reason="Reviewed again",
     )
     _candidate(gold_session, "10.1/c", "10.1/d", similarity=0.98)
+    version_id = "v1"
+    gold_session.add(DatasetVersion(version_id=version_id, status="active"))
+    gold_session.add(PublicationState(id=1, active_version_id=version_id))
+    for pair in gold_session.query(DuplicatePair).all():
+        gold_session.add(
+            DatasetDuplicatePair(
+                dataset_version_id=version_id,
+                doi_a=pair.doi_a,
+                doi_b=pair.doi_b,
+                similarity=pair.similarity,
+            )
+        )
+    gold_session.commit()
     monkeypatch.setattr(dashboard_data, "get_engine", lambda _layer: gold_session.get_bind())
 
     result = dashboard_data.load_duplicate_pairs()

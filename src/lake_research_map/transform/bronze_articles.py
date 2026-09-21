@@ -22,7 +22,10 @@ from sqlalchemy.orm import Session
 
 from lake_research_map.db.bronze_models import Article as BronzeArticle
 from lake_research_map.db.raw_models import BibEntry, IeeeCsvRow
-from lake_research_map.ingest.enrichment import load_enrichment_cache
+from lake_research_map.ingest.enrichment import (
+    load_enrichment_cache,
+    load_enrichment_observations,
+)
 from lake_research_map.transform.publication_categories import classify_publication
 
 
@@ -320,6 +323,7 @@ def _enrich_citation_counts(bronze_session: Session) -> int:
     overwritten by the cache.
     """
     cache = load_enrichment_cache()
+    cache.update(load_enrichment_observations(bronze_session))
     if not cache:
         return 0
 

@@ -22,6 +22,8 @@ since the pipeline is meant to be run on demand from the dashboard.
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 import pendulum
 from airflow.providers.standard.operators.bash import BashOperator
 from airflow.sdk import DAG, TaskGroup
@@ -30,6 +32,14 @@ PROJECT_DIR = "/opt/airflow/project"
 START_DATE = pendulum.datetime(2024, 1, 1, tz="UTC")
 
 STAGES = ("raw", "bronze", "silver", "gold", "embed", "semantic")
+STAGE_POLICY = {
+    "raw": {"retries": 1, "execution_timeout": timedelta(minutes=30)},
+    "bronze": {"retries": 0, "execution_timeout": timedelta(minutes=20)},
+    "silver": {"retries": 0, "execution_timeout": timedelta(minutes=20)},
+    "gold": {"retries": 0, "execution_timeout": timedelta(minutes=30)},
+    "embed": {"retries": 1, "execution_timeout": timedelta(hours=6)},
+    "semantic": {"retries": 0, "execution_timeout": timedelta(hours=2)},
+}
 
 
 def _bash_command(stage: str, workflow: str) -> str:
@@ -42,7 +52,7 @@ def _bash_command(stage: str, workflow: str) -> str:
 
 default_args = {
     "owner": "lake-research-map",
-    "retries": 0,
+    "retry_delay": timedelta(minutes=2),
 }
 
 # One single-task DAG per stage, mirroring the dashboard's individual buttons.
@@ -56,7 +66,11 @@ for stage in STAGES:
         default_args=default_args,
         tags=["lake-research-map"],
     ):
-        BashOperator(task_id=stage, bash_command=_bash_command(stage, stage))
+        BashOperator(
+            task_id=stage,
+            bash_command=_bash_command(stage, stage),
+            **STAGE_POLICY[stage],
+        )
 
 # One combined DAG running the full medallion flow as a single grouped unit,
 # for the "run all" button.
@@ -71,7 +85,11 @@ with DAG(
 ):
     with TaskGroup(group_id="medallion_pipeline") as medallion_pipeline:
         tasks = [
-            BashOperator(task_id=stage, bash_command=_bash_command(stage, "all"))
+            BashOperator(
+                task_id=stage,
+                bash_command=_bash_command(stage, "all"),
+                **STAGE_POLICY[stage],
+            )
             for stage in STAGES
         ]
         for upstream, downstream in zip(tasks, tasks[1:], strict=False):

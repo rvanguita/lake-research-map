@@ -5,7 +5,9 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import uuid
 from collections import Counter
+from datetime import UTC, datetime
 
 import numpy as np
 from sqlalchemy import delete, func, select
@@ -21,7 +23,9 @@ from lake_research_map.db.gold_models import (
     DatasetVersion,
     DuplicateOverride,
     DuplicatePair,
+    PipelineExecution,
     PublicationState,
+    SemanticRun,
     Semantics,
 )
 from lake_research_map.db.silver_models import Article as SilverArticle
@@ -29,7 +33,9 @@ from lake_research_map.transform.duplicate_resolution import active_merge_plan
 from lake_research_map.transform.embeddings import (
     EMBED_BATCH_SIZE,
     EMBED_MODEL_NAME,
+    EMBED_MODEL_REVISION,
     EMBED_THREADS,
+    resolved_model_revision,
 )
 from lake_research_map.transform.gold_articles import _desired_chunks, _merge_silver_group
 from lake_research_map.transform.semantics import (
@@ -106,6 +112,9 @@ def build_dataset_gold(
         )
     )
     gold_session.execute(
+        delete(SemanticRun).where(SemanticRun.dataset_version_id == dataset_version_id)
+    )
+    gold_session.execute(
         delete(DatasetSemantics).where(DatasetSemantics.dataset_version_id == dataset_version_id)
     )
     gold_session.execute(
@@ -166,9 +175,24 @@ def build_dataset_gold(
                     chunk_type=desired["chunk_type"],
                     text=desired["text"],
                     char_len=len(desired["text"]),
-                    embedding=previous.embedding if same_text else None,
                     embedding_bin=previous.embedding_bin if same_text else None,
                     embed_model=previous.embed_model if same_text else None,
+                    text_sha256=(
+                        previous.text_sha256
+                        if same_text and getattr(previous, "text_sha256", None)
+                        else hashlib.sha256(desired["text"].encode("utf-8")).hexdigest()
+                    ),
+                    embed_revision=(
+                        getattr(previous, "embed_revision", None) if same_text else None
+                    ),
+                    embedding_dim=(getattr(previous, "embedding_dim", None) if same_text else None),
+                    embedding_dtype=(
+                        getattr(previous, "embedding_dtype", None) if same_text else None
+                    ),
+                    embedding_normalized=(
+                        getattr(previous, "embedding_normalized", None) if same_text else None
+                    ),
+                    embedded_at=getattr(previous, "embedded_at", None) if same_text else None,
                 )
             )
             chunk_counts[desired["chunk_type"]] += 1
@@ -185,7 +209,12 @@ def build_dataset_gold(
     }
 
 
-def build_dataset_embeddings(gold_session: Session, dataset_version_id: str) -> dict[str, int]:
+def build_dataset_embeddings(
+    gold_session: Session,
+    dataset_version_id: str,
+    *,
+    execution_id: str | None = None,
+) -> dict[str, int]:
     """Embed a candidate incrementally so an interrupted run can resume.
 
     Only one batch of ORM objects and vectors is kept in memory.  Each batch
@@ -208,6 +237,9 @@ def build_dataset_embeddings(gold_session: Session, dataset_version_id: str) -> 
             (DatasetChunk.embedding_bin.is_(None))
             | (DatasetChunk.embed_model.is_(None))
             | (DatasetChunk.embed_model != EMBED_MODEL_NAME)
+            | (DatasetChunk.embed_revision.is_(None))
+            | (DatasetChunk.embed_revision != EMBED_MODEL_REVISION)
+            | (DatasetChunk.text_sha256.is_(None))
         )
         .order_by(DatasetChunk.id)
     ).all()
@@ -217,6 +249,7 @@ def build_dataset_embeddings(gold_session: Session, dataset_version_id: str) -> 
     from fastembed import TextEmbedding
 
     model = TextEmbedding(model_name=EMBED_MODEL_NAME, threads=EMBED_THREADS)
+    model_revision = resolved_model_revision(model)
     embedded = 0
     logger = logging.getLogger(__name__)
     for start in range(0, len(pending_ids), EMBED_BATCH_SIZE):
@@ -229,9 +262,24 @@ def build_dataset_embeddings(gold_session: Session, dataset_version_id: str) -> 
         vectors = model.embed([row.text for row in batch])
         for row, vector in zip(batch, vectors, strict=True):
             array = np.asarray(vector, dtype=np.float32)
-            row.embedding = array.tolist()
+            # Binary is canonical. The JSON mirror is not written any more: it
+            # roughly doubled chunk storage and dominated the dashboard's vector
+            # load (11.6s -> 2.3s once it was excluded from the query). The column
+            # stays in place and nullable so an older version can still be
+            # reactivated; only new versions leave it empty.
             row.embedding_bin = array.tobytes()
             row.embed_model = EMBED_MODEL_NAME
+            row.embed_revision = model_revision
+            row.text_sha256 = hashlib.sha256(row.text.encode("utf-8")).hexdigest()
+            row.embedding_dim = int(array.size)
+            row.embedding_dtype = str(array.dtype)
+            row.embedding_normalized = bool(np.isclose(np.linalg.norm(array), 1.0, atol=1e-3))
+            row.embedded_at = datetime.now(UTC).replace(tzinfo=None)
+        heartbeat_execution_id = execution_id or gold_session.info.get("execution_id")
+        if heartbeat_execution_id:
+            execution = gold_session.get(PipelineExecution, heartbeat_execution_id)
+            if execution is not None:
+                execution.heartbeat_at = datetime.now(UTC).replace(tzinfo=None)
         gold_session.flush()
         gold_session.commit()
         gold_session.expunge_all()
@@ -290,6 +338,9 @@ def build_dataset_semantics(
         delete(DatasetSemantics).where(DatasetSemantics.dataset_version_id == dataset_version_id)
     )
     gold_session.execute(
+        delete(SemanticRun).where(SemanticRun.dataset_version_id == dataset_version_id)
+    )
+    gold_session.execute(
         delete(DatasetDuplicatePair).where(
             DatasetDuplicatePair.dataset_version_id == dataset_version_id
         )
@@ -309,6 +360,20 @@ def build_dataset_semantics(
             )
             for index, doi in enumerate(dois)
         ]
+    )
+    gold_session.add(
+        SemanticRun(
+            run_id=uuid.uuid4().hex,
+            dataset_version_id=dataset_version_id,
+            embed_model=EMBED_MODEL_NAME,
+            embed_revision=EMBED_MODEL_REVISION,
+            embedding_dim=int(matrix.shape[1]),
+            article_count=len(dois),
+            parameters={
+                "anchor_sha256": hashlib.sha256(ANCHOR_TEXT.encode("utf-8")).hexdigest(),
+                "off_anchor_sha256": hashlib.sha256(OFF_ANCHOR_TEXT.encode("utf-8")).hexdigest(),
+            },
+        )
     )
     gold_session.add_all(
         [

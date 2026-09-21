@@ -58,8 +58,8 @@ def render() -> None:
     page_header(
         "🏗️",
         "Pipeline and provenance",
-        "O funil raw → bronze → silver → gold: quanto sobrevive em cada etapa, por que, e onde a "
-        "cobertura de metadados melhora ou piora.",
+        "The raw → bronze → silver → gold funnel: how much survives each stage, why, and where "
+        "metadata coverage improves or degrades.",
     )
 
     runs_df = loaders.pipeline_runs()
@@ -70,7 +70,7 @@ def render() -> None:
     if runs_df.empty:
         hero_banner(
             "No execution history",
-            "Perform the pipeline to popularize the historical —"
+            "Perform the pipeline to popularize the historical — "
             "The statistics are automatically recorded at each execution.",
         )
     else:
@@ -91,7 +91,7 @@ def render() -> None:
 
     if funnel_df.empty or funnel_df[["raw", "bronze", "silver", "gold"]].sum().sum() == 0:
         st.warning(
-            "No data found in any layer yet."
+            "No data found in any layer yet. "
             "(`uv run lake-research-map --stage all`) and reload this page."
         )
         has_pipeline_data = False
@@ -121,7 +121,7 @@ def render() -> None:
             _render_contract_status(quality_df)
         elif has_pipeline_data:
             st.info(
-                "There are still no contracts persisted; the diagnosis below is just one"
+                "There are still no contracts persisted; the diagnosis below is just one "
                 "Legacy verification on the loaded tables."
             )
             _drift_check(funnel_df)
@@ -165,7 +165,7 @@ def _render_contract_status(quality_df: pd.DataFrame) -> None:
         ]
     )
     if failures.empty:
-        st.success("Nenhuma falha bloqueante no conjunto mais recente de contratos.")
+        st.success("No blocking failure in the most recent contract run.")
     else:
         st.error(
             f"{len(failures)} blocking contract(s) failed; the candidate version cannot "
@@ -336,10 +336,10 @@ def _sankey_funnel(funnel_df: pd.DataFrame) -> None:
     fig.update_layout(title="Article volume by stage and source, with labeled losses")
     render_chart(
         fig,
-        caption="The visible loss ('Discarded (without DOI)') happens in the silver: bronze articles without DOI"
+        caption="The visible loss ('Discarded (without DOI)') happens in the silver: bronze articles without DOI "
         "normalized DOI never form a Silver record (`silver_articles.py`). Bronze may contain "
-        "more lines than the direct sum of the raw because it is upsert-only and never removes orphan lines (see the"
-        "painel de drift abaixo).",
+        "more lines than the direct sum of the raw because it is upsert-only and never removes orphan lines (see the "
+        "drift panel below).",
     )
 
 
@@ -379,8 +379,8 @@ def _retention_by_stage(funnel_df: pd.DataFrame) -> None:
     fig.update_layout(xaxis_title="Layer", yaxis_title="Number of articles")
     render_chart(
         fig,
-        caption="Bronze deduplicates only within each source (`(source, source_id)` key); silver and gold"
-        "then converge to the same total because there is no DOI overlap between IEEE and Elsevier in this"
+        caption="Bronze deduplicates only within each source (`(source, source_id)` key); silver and gold "
+        "then converge to the same total because there is no DOI overlap between IEEE and Elsevier in this "
         "corpus.",
     )
 
@@ -396,10 +396,10 @@ def _drift_check(funnel_df: pd.DataFrame) -> None:
     st.dataframe(drift_display, hide_index=True, width="stretch")
     if has_drift:
         st.warning(
-            "Bronze is upsert-only and never removes lines"
-            "orphans (`_upsert` in `bronze_articles.py`) — if a `.bib`/CSV file is removed from `data/`,"
-            "A positive `bronze > raw` is this symptom; investigate before"
-            "confiar nas contagens de bronze como espelho fiel do raw atual."
+            "Bronze is upsert-only and never removes lines "
+            "orphans (`_upsert` in `bronze_articles.py`) — if a `.bib`/CSV file is removed from `data/`, "
+            "A positive `bronze > raw` is this symptom; investigate before "
+            "trusting bronze counts as a faithful mirror of the current raw layer."
         )
     else:
         st.success("Bronze and Raw are aligned to both bases — no drift signal.")
@@ -414,7 +414,7 @@ def _metadata_coverage_by_layer() -> None:
         "doi": "DOI",
         "abstract": "Resumo",
         "keywords": "Keywords",
-        "citation_count": "Quotations",
+        "citation_count": "Citations",
         "has_pdf": "PDF vinculado",
     }
     rows = []
@@ -459,7 +459,7 @@ def _metadata_coverage_by_layer() -> None:
     fig.update_traces(hovertemplate="<b>%{x}</b><br>%{data.name}: %{y:.1f}%<extra></extra>")
     render_chart(
         fig,
-        caption="Shows what each layer gains and loses: gold projects silver discarding `issn`, `volume`,"
-        "`issue`, `pages` and quality flags — but maintains `sources` (added in this refactoring)"
+        caption="Shows what each layer gains and loses: gold projects silver discarding `issn`, `volume`, "
+        "`issue`, `pages` and quality flags — but maintains `sources` (added in this refactoring) "
         "to allow the break IEEE/Elsevier also in gold.",
     )

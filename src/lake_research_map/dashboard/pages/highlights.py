@@ -36,60 +36,64 @@ def render() -> None:
     articles_df = loaders.require_articles()
 
     tab_refs, tab_citations = st.tabs(
-        ["📚 Theoretical Background (Reference)", "⭐ Citation Dynamics & Econometry"]
+        ["Theoretical background", "Citation dynamics and econometrics"],
+        on_change="rerun",
+        key="highlights_primary_tab",
     )
 
-    with tab_refs:
-        ref_df = _reference_distribution_intro(articles_df)
-        sub_dist, sub_vs_cit, sub_top = st.tabs(
-            [
-                "📊 Reference Distribution",
-                "🔗 Refs vs. Quotations",
-                "📖 Mais Referenciados",
-            ]
-        )
-        with sub_dist:
-            if ref_df is not None:
+    if tab_refs.open:
+        with tab_refs:
+            ref_df = _reference_distribution_intro(articles_df)
+            reference_view = st.segmented_control(
+                "Reference analysis",
+                options=["Distribution", "References vs. citations", "Most referenced"],
+                default="Distribution",
+                key="reference_analysis_view",
+            )
+            if reference_view == "Distribution" and ref_df is not None:
                 view_mode = (
                     st.segmented_control(
                         "Distribution visualization format",
-                        options=["Histograma", "Curva Cumulativa (ECDF)", "Box Plot"],
-                        default="Histograma",
+                        options=["Histogram", "Cumulative curve (ECDF)", "Box plot"],
+                        default="Histogram",
                         key="ref_dist_mode",
                     )
-                    or "Histograma"
+                    or "Histogram"
                 )
-                if view_mode == "Histograma":
+                if view_mode == "Histogram":
                     _reference_histogram(ref_df)
-                elif view_mode == "Curva Cumulativa (ECDF)":
+                elif view_mode == "Cumulative curve (ECDF)":
                     _reference_ecdf(ref_df)
                 else:
                     _reference_box(ref_df)
-        with sub_vs_cit:
-            _references_vs_citations(articles_df)
-        with sub_top:
-            _top_referenced(articles_df)
-
-    with tab_citations:
-        sub_cited, sub_by_year, sub_heavytail, sub_agenorm, sub_glm = st.tabs(
-            [
-                "🏆 Mais Citados",
-                "📅 Cited by Year",
-                "📐 Cauda Pesada (Power-Law)",
-                "⏳ Normalizado por Idade",
-                "🔬 Determinantes GLM",
-            ]
-        )
-        with sub_cited:
-            _top_cited(articles_df)
-        with sub_by_year:
-            _cited_by_year(articles_df)
-        with sub_heavytail:
-            _heavy_tail_analysis(articles_df)
-        with sub_agenorm:
-            _age_normalized_rankings(articles_df)
-        with sub_glm:
-            _citation_determinants_glm_view(articles_df)
+            elif reference_view == "References vs. citations":
+                _references_vs_citations(articles_df)
+            elif reference_view == "Most referenced":
+                _top_referenced(articles_df)
+    elif tab_citations.open:
+        with tab_citations:
+            citation_view = st.segmented_control(
+                "Citation analysis",
+                options=[
+                    "Most cited",
+                    "Cited by year",
+                    "Heavy-tail diagnostics",
+                    "Age-normalized impact",
+                    "GLM determinants",
+                ],
+                default="Most cited",
+                key="citation_analysis_view",
+            )
+            if citation_view == "Most cited":
+                _top_cited(articles_df)
+            elif citation_view == "Cited by year":
+                _cited_by_year(articles_df)
+            elif citation_view == "Heavy-tail diagnostics":
+                _heavy_tail_analysis(articles_df)
+            elif citation_view == "Age-normalized impact":
+                _age_normalized_rankings(articles_df)
+            else:
+                _citation_determinants_glm_view(articles_df)
 
 
 def _reference_distribution_intro(articles_df: pd.DataFrame) -> pd.DataFrame | None:
@@ -139,9 +143,9 @@ def _reference_distribution_intro(articles_df: pd.DataFrame) -> pd.DataFrame | N
         ]
     )
     st.caption(
-        "Distribution of the number of references cited per article — such as histogram, cumulative curve"
-        "(ECDF) and box plot, in the tabs below."
-        "Xplore (`Reference Count`)."
+        "Distribution of the number of references cited per article — such as histogram, cumulative curve "
+        "(ECDF) and box plot, in the tabs below. "
+        "Xplore (`Reference Count`). "
         "(`data/enrichment_cache.json`); see the cards above for averages by source."
     )
     return ref_df
@@ -192,7 +196,7 @@ def _reference_ecdf(ref_df: pd.DataFrame) -> None:
     )
     fig_cdf.update_layout(
         xaxis_title="References cited by article (bibliography size)",
-        yaxis_title="Accumulated % of articles",
+        yaxis_title="Cumulative % of articles",
         hovermode="x unified",
     )
     render_chart(
@@ -262,13 +266,13 @@ def _references_vs_citations(articles_df: pd.DataFrame) -> None:
     metric_row(
         [
             ("📚 Average of references", f"{ref_mean:.1f}", None),
-            ("", f"{cit_mean:.1f}", None),
+            ("📑 Average citations", f"{cit_mean:.1f}", None),
             ("📈 Pearson's correlation (r)", f"{corr:.2f}", None),
         ]
     )
     render_chart(
         fig,
-        caption="It examines articles that build a theoretical foundation with a greater number of"
+        caption="It examines articles that build a theoretical foundation with a greater number of "
         "references tend to receive more citations over the years.",
     )
 
@@ -286,10 +290,10 @@ def _top_referenced(articles_df: pd.DataFrame) -> None:
     article_table(
         top_ref,
         ["title", "year", "venue", "source", "reference_count", "citation_count", "doi"],
-        download_key="artigos_mais_referenciados",
+        download_key="most_referenced_articles",
     )
     st.caption(
-        "Articles ordered by the size of the bibliography — high counts are typical of"
+        "Articles ordered by the size of the bibliography — high counts are typical of "
         "Researches, comprehensive literature reviews and state of the art studies."
     )
 
@@ -307,9 +311,9 @@ def _top_cited(articles_df: pd.DataFrame) -> None:
     article_table(
         top_cited,
         ["title", "year", "venue", "source", "citation_count", "reference_count", "doi"],
-        download_key="artigos_mais_citados",
+        download_key="most_cited_articles",
     )
-    st.caption("Articles ordered by the volume of citations accumulated in the corpus.")
+    st.caption("Articles ordered by the volume of citations cumulative in the corpus.")
 
 
 def _cited_by_year(articles_df: pd.DataFrame) -> None:
@@ -343,19 +347,28 @@ def _cited_by_year(articles_df: pd.DataFrame) -> None:
     )
     render_chart(
         fig,
-        caption="Number of articles published in each year that accumulated at least one citation"
+        caption="Number of articles published in each year that cumulative at least one citation "
         "literature, by source and overall.",
     )
 
 
+_HEAVY_TAIL_NAMES = {
+    "power_law": "Power law (Pareto)",
+    "log_normal": "Log-normal",
+    "exponential": "Exponential",
+}
+
+
 def _heavy_tail_analysis(articles_df: pd.DataFrame) -> None:
-    st.subheader("📐 Heavy Caude Modeling in Quotations (Power-Law vs. Log-Normal)")
+    st.subheader("📐 Heavy-tail modelling of citations (power law vs. log-normal)")
     st.caption(
-        "Academic citations exhibit extreme asymmetry."
-        "by Maximum Likelihood (MLE) and evaluates adherence by the Kolmogorov-Smirnov test (KS)."
+        "Citation counts are extremely skewed. Each family is fitted by maximum likelihood "
+        "above a data-driven x_min, and the families are compared by AIC rather than by "
+        "goodness-of-fit alone — a lower KS distance does not by itself favour a model "
+        "with more free parameters."
     )
     if "citation_count" not in articles_df.columns:
-        st.info("Count of citations not available.")
+        st.info("Citation counts are not available for this population.")
         return
 
     from lake_research_map.dashboard.analytics import fit_heavy_tail_distributions
@@ -363,36 +376,64 @@ def _heavy_tail_analysis(articles_df: pd.DataFrame) -> None:
     cites = articles_df["citation_count"].dropna().to_numpy()
     fit_res = fit_heavy_tail_distributions(cites)
     if not fit_res.get("valid"):
-        st.info("Insufficient data for statistical adjustment of heavy tail.")
+        st.info("Not enough citation mass to fit a heavy tail.")
         return
 
     models = fit_res["models"]
     best = fit_res["best_fit"]
-    best_name = {
-        "power_law": "Power Law (Pareto)",
-        "log_normal": "Log-Normal",
-        "exponential": "Exponencial",
-    }.get(best, best)
+    best_name = _HEAVY_TAIL_NAMES.get(best, best)
 
     metric_row(
         [
-            ("🏆 Best fit (KS)", best_name, f"KS distance: {models[best]['ks_stat']:.4f}"),
             (
-                "⚡ Expoente Power-Law (α)",
+                "🏆 Best fit (AIC)",
+                best_name,
+                f"AIC {models[best]['aic']:.1f} · KS {models[best]['ks_stat']:.4f}",
+            ),
+            (
+                "⚡ Power-law exponent (α)",
                 f"{models['power_law']['alpha']:.2f}",
                 f"x_min = {models['power_law']['x_min']:.0f}",
             ),
             (
-                "📊 Log-Normal Mean (μ)",
+                "📊 Log-normal mean (μ)",
                 f"{models['log_normal']['mu']:.2f}",
                 f"σ = {models['log_normal']['sigma']:.2f}",
             ),
             (
-                "📉 P-value KS (Best)",
-                f"{models[best]['p_value']:.4f}",
-                "H0: adherence to data",
+                "🧮 Population used",
+                f"{fit_res['tail_n']:,}",
+                f"of {fit_res['n']:,} articles · {fit_res['zero_count']:,} with zero citations",
             ),
         ]
+    )
+
+    # The bootstrap p-value resamples from the fitted Pareto and refits alpha per
+    # sample, so it is the only one here that does not reuse its own parameters.
+    # The log-normal and exponential p-values do, which makes them optimistic --
+    # labelling them together as one "KS p-value" hid exactly that difference.
+    comparison = pd.DataFrame(
+        [
+            {
+                "Family": _HEAVY_TAIL_NAMES.get(name, name),
+                "AIC": round(model["aic"], 1),
+                "ΔAIC": round(model["aic"] - models[best]["aic"], 1),
+                "Log-likelihood": round(model["log_likelihood"], 1),
+                "KS distance": round(model["ks_stat"], 4),
+            }
+            for name, model in models.items()
+        ]
+    ).sort_values("AIC")
+    st.dataframe(comparison, hide_index=True, width="stretch")
+
+    ratios = fit_res["log_likelihood_ratios"]
+    st.caption(
+        f"Bootstrap goodness-of-fit for the power law: p = "
+        f"{models['power_law']['p_value']:.4f} (H0: the data are Pareto above x_min; "
+        "refitted per simulated sample). Log-likelihood ratios — power law vs. log-normal "
+        f"{ratios['power_law_vs_log_normal']:+.1f}, vs. exponential "
+        f"{ratios['power_law_vs_exponential']:+.1f}; a positive value favours the power law. "
+        "The ratios are reported without a significance test, so treat them as descriptive."
     )
 
     arr = cites[cites > 0]
@@ -406,26 +447,27 @@ def _heavy_tail_analysis(articles_df: pd.DataFrame) -> None:
         y="ccdf",
         log_x=True,
         log_y=True,
-        title="Empirical Complementary Accumulated Distribution (CCDF Log-Log)",
+        title="Empirical complementary cumulative distribution (CCDF, log-log)",
         labels={
-            "citation_count": "Quotations (log scale)",
+            "citation_count": "Citations (log scale)",
             "ccdf": "P(Citations ≥ x) (log scale)",
         },
         color_discrete_sequence=[CATEGORICAL_PALETTE[0]],
     )
     render_chart(
         fig,
-        caption="On log-log scale, a pure Power Law (Pareto) forms a decreasing straight line."
-        "The smooth curvature in the intermediate values confirms that the Log-Normal distribution"
-        "It often models the literature with greater fidelity before the asymptotic regime.",
+        caption="On log-log axes a pure power law is a straight descending line, while a log-normal "
+        "curves through the middle of the range before the tail straightens out. Read the shape "
+        "against the AIC comparison above rather than instead of it: the eye is a poor judge of "
+        "which family fits a heavy tail, which is why the selection is made by likelihood.",
     )
 
 
 def _age_normalized_rankings(articles_df: pd.DataFrame) -> None:
     st.subheader("⏳ Impact Normalized by the Article Age")
     st.caption(
-        "Old articles accumulate more gross citations due to mere temporal exposure."
-        "Annualized citation rate and z-score by annual publication cohort reveal studies"
+        "Old articles accumulate more gross citations due to mere temporal exposure. "
+        "Annualized citation rate and z-score by annual publication cohort reveal studies "
         "recent that are reaching exceptional impact velocity."
     )
     from lake_research_map.dashboard.analytics import age_normalized_citations
@@ -463,14 +505,16 @@ def _age_normalized_rankings(articles_df: pd.DataFrame) -> None:
 def _citation_determinants_glm_view(articles_df: pd.DataFrame) -> None:
     st.subheader("Determinants associated with citation rate")
     st.caption(
-        "GLM of counting with exposure by the age of the article, diagnosis of overdispersity and"
-        "The IRR of the numerical fields represents a variation of a standard deviation."
+        "Count GLM with an exposure offset for article age. The IRR of a numeric field is the "
+        "multiplier for a one-standard-deviation change. These are conditional associations "
+        "within this corpus, not causal effects — the source indicator in particular also "
+        "encodes source-specific missingness."
     )
     from lake_research_map.dashboard.analytics import citation_determinants_glm
 
     glm_res = citation_determinants_glm(articles_df)
     if not glm_res.get("valid"):
-        st.info(glm_res.get("warning") or "Amostra insuficiente para o modelo de contagem.")
+        st.info(glm_res.get("warning") or "Sample too small for the count model.")
         return
 
     features = glm_res["features"]
@@ -478,27 +522,127 @@ def _citation_determinants_glm_view(articles_df: pd.DataFrame) -> None:
     irrs = glm_res["irr"]
 
     feat_labels = {
-        "ano_publicacao": "Year of Publication (time effect)",
-        "qtd_referencias": "Number of references (basement)",
-        "tamanho_equipe": "Team Size (authors)",
-        "origem_ieee": "Publicado na IEEE (vs. Elsevier)",
+        "ano_publicacao": "Publication year (time effect)",
+        "qtd_referencias": "Reference count",
+        "tamanho_equipe": "Team size (authors)",
+        "origem_ieee": "Published in IEEE (vs. Elsevier)",
     }
 
     glm_df = pd.DataFrame(
         {
-            "Explanatory Variable": [feat_labels.get(f, f) for f in features],
-            "Coeficiente (β)": [round(c, 4) for c in coefs],
-            "IRR (Citation Multiplier)": [round(i, 4) for i in irrs],
-            "IC 95% inferior": [round(i, 4) for i in glm_res["irr_lower"]],
-            "IC 95% superior": [round(i, 4) for i in glm_res["irr_upper"]],
-            "robust p-value": [round(i, 4) for i in glm_res["p_values"]],
+            "Explanatory variable": [feat_labels.get(f, f) for f in features],
+            "Coefficient (β)": [round(c, 4) for c in coefs],
+            "IRR (citation multiplier)": [round(i, 4) for i in irrs],
+            "95% CI lower": [round(i, 4) for i in glm_res["irr_lower"]],
+            "95% CI upper": [round(i, 4) for i in glm_res["irr_upper"]],
+            "Robust p-value": [round(i, 4) for i in glm_res["p_values"]],
         }
     )
     st.dataframe(glm_df, hide_index=True, width="stretch")
     st.caption(
-        f"Family: {glm_res['family'].replace('_', ' ')} · Poisson dispersion: "
-        f"{glm_res['dispersion']:.2f} · cobertura: {glm_res['n_used']}/{glm_res['n_total']} "
-        f"({glm_res['coverage']:.1%}) · pseudo R²: {glm_res.get('score', 0):.3f}."
+        f"Family: {glm_res['family'].replace('_', ' ')} · Poisson dispersion "
+        f"{glm_res['dispersion']:.2f} · coverage {glm_res['n_used']}/{glm_res['n_total']} "
+        f"({glm_res['coverage']:.1%}) · pseudo R² {glm_res.get('score', 0):.3f}."
     )
     if glm_res.get("warning"):
         st.warning(glm_res["warning"])
+
+    _glm_specification_diagnostics(glm_res)
+
+
+def _family_aic_metric(glm_res: dict) -> tuple[str, str, str]:
+    """Compare the candidate families by AIC beside the heuristic that chose one.
+
+    `candidate_aic` maps each fitted family to its AIC. The family actually
+    selected still comes from the dispersion > 1.5 rule, so showing both makes
+    it visible when AIC would have preferred the other one.
+    """
+    candidates = glm_res.get("candidate_aic") or {}
+    selected = glm_res["family"]
+    readable = selected.replace("_", " ")
+    if not candidates:
+        return ("\U0001f9ee Family AIC", "n/a", f"selected: {readable}")
+
+    best = min(candidates, key=lambda name: candidates[name])
+    detail = " \u00b7 ".join(
+        f"{name.replace('_', ' ')} {value:.1f}" for name, value in sorted(candidates.items())
+    )
+    if len(candidates) > 1 and best != selected:
+        detail += f" \u2014 AIC would prefer {best.replace('_', ' ')}"
+    value = f"{candidates[selected]:.1f}" if selected in candidates else f"{candidates[best]:.1f}"
+    return (f"\U0001f9ee AIC ({readable})", value, detail)
+
+
+def _glm_specification_diagnostics(glm_res: dict) -> None:
+    """Show the misspecification evidence the model already computes.
+
+    A coefficient table on its own invites a confirmatory reading. PRD section
+    8.1 requires multicollinearity, influence and zero-inflation to be visible
+    beside it, and every number below is already in the model result.
+    """
+    with st.expander("Specification diagnostics", expanded=False):
+        condition_number = glm_res.get("condition_number")
+        max_cooks = glm_res.get("max_cooks_distance")
+        observed_zero = glm_res.get("observed_zero_fraction")
+        predicted_zero = glm_res.get("predicted_zero_fraction")
+        zero_gap = glm_res.get("zero_inflation_gap")
+
+        metric_row(
+            [
+                (
+                    "📐 Condition number",
+                    "n/a" if condition_number is None else f"{condition_number:.1f}",
+                    "Above ~30 indicates collinear predictors",
+                ),
+                (
+                    "🎯 Influential observations",
+                    f"{glm_res.get('influential_count', 0):,}",
+                    "n/a" if max_cooks is None else f"max Cook's distance {max_cooks:.3f}",
+                ),
+                (
+                    "⚠️ Zero-inflation gap",
+                    "n/a" if zero_gap is None else f"{zero_gap:+.1%}",
+                    "n/a"
+                    if observed_zero is None or predicted_zero is None
+                    else f"observed {observed_zero:.1%} vs. predicted {predicted_zero:.1%}",
+                ),
+                _family_aic_metric(glm_res),
+            ]
+        )
+
+        vif = glm_res.get("vif") or {}
+        if vif:
+            st.dataframe(
+                pd.DataFrame(
+                    {"Predictor": list(vif), "VIF": [round(float(v), 2) for v in vif.values()]}
+                ),
+                hide_index=True,
+                width="stretch",
+            )
+            st.caption("Variance inflation factor; above 5 a coefficient is hard to read.")
+
+        missingness = glm_res.get("missingness") or {}
+        if missingness:
+            st.dataframe(
+                pd.DataFrame(
+                    {
+                        "Field": list(missingness),
+                        "Missing": [
+                            f"{float(value):.1%}" if isinstance(value, int | float) else value
+                            for value in missingness.values()
+                        ],
+                    }
+                ),
+                hide_index=True,
+                width="stretch",
+            )
+            st.caption(
+                "Rows with any missing predictor are dropped, so a field that is missing "
+                "unevenly across sources also shifts which articles the model sees."
+            )
+
+        st.caption(
+            "A positive zero-inflation gap means the model under-predicts articles with zero "
+            "citations. No zero-inflated model is fitted here, so a large gap marks these "
+            "estimates as exploratory rather than being corrected for."
+        )

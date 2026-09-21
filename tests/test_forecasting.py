@@ -12,13 +12,15 @@ import numpy as np
 import pandas as pd
 
 from lake_research_map.dashboard.forecasting import (
+    FORECAST_YEARS,
+    HOLDOUT_YEAR,
     _fit_model,
     _mae,
     fit_and_forecast,
     yearly_counts,
 )
 
-TRAIN_YEARS = tuple(range(2010, 2026))  # 2010..2025, the full training range
+TRAIN_YEARS = tuple(range(2010, HOLDOUT_YEAR))
 
 
 def _series(values_by_year: dict[int, float]) -> pd.Series:
@@ -35,7 +37,8 @@ def test_fit_model_linear_recovers_a_straight_line():
 
     predict = _fit_model("linear", years, values)
 
-    assert np.allclose(predict([2026]), [10 + 3.0 * 16], atol=1e-6)
+    expected = 10 + 3.0 * (HOLDOUT_YEAR - 2010)
+    assert np.allclose(predict([HOLDOUT_YEAR]), [expected], atol=1e-6)
 
 
 def test_fit_model_log_linear_recovers_exponential_growth():
@@ -44,7 +47,8 @@ def test_fit_model_log_linear_recovers_exponential_growth():
 
     predict = _fit_model("log_linear", years, values)
 
-    assert np.allclose(predict([2026]), [np.expm1(0.2 * 16)], rtol=1e-4)
+    expected = np.expm1(0.2 * (HOLDOUT_YEAR - 2010))
+    assert np.allclose(predict([HOLDOUT_YEAR]), [expected], rtol=1e-4)
 
 
 def test_fit_model_rejects_unknown_kind():
@@ -71,7 +75,7 @@ def test_fit_and_forecast_flags_insufficient_data():
 
 def test_fit_and_forecast_picks_linear_for_a_straight_line():
     history = _linear_series()
-    history.loc[2026] = 10 + 3.0 * 16  # holdout year, perfectly on the line
+    history.loc[HOLDOUT_YEAR] = 10 + 3.0 * (HOLDOUT_YEAR - 2010)
 
     result = fit_and_forecast(history.sort_index())
 
@@ -85,7 +89,7 @@ def test_fit_and_forecast_extrapolates_the_trend():
 
     result = fit_and_forecast(history)
 
-    assert result.forecast_years == (2027, 2028)
+    assert result.forecast_years == FORECAST_YEARS
     assert len(result.forecast_values) == 2
     # A rising line must keep rising, and 2028 must exceed 2027.
     assert result.forecast_values[1] > result.forecast_values[0] > history.iloc[-1]
@@ -118,11 +122,11 @@ def test_fit_and_forecast_ignores_years_before_the_training_window():
 
 def test_fit_and_forecast_reports_the_holdout_year():
     history = _linear_series()
-    history.loc[2026] = 42.0
+    history.loc[HOLDOUT_YEAR] = 42.0
 
     result = fit_and_forecast(history.sort_index())
 
-    assert result.holdout_year == 2026
+    assert result.holdout_year == HOLDOUT_YEAR
     assert result.holdout_actual == 42.0
     assert result.holdout_predicted is not None
 
@@ -179,3 +183,26 @@ def test_fit_and_forecast_expanding_confidence_interval():
     margin_1 = result.forecast_upper[0] - result.forecast_values[0]
     margin_2 = result.forecast_upper[1] - result.forecast_values[1]
     assert margin_2 > margin_1
+
+
+def test_fit_and_forecast_reports_baseline_skill_and_interval_coverage():
+    result = fit_and_forecast(_linear_series())
+
+    assert result.baseline_skill is not None
+    assert result.baseline_skill > 0
+    assert result.empirical_interval_coverage is not None
+    assert 0 <= result.empirical_interval_coverage <= 1
+
+
+def test_interval_coverage_abstains_when_no_folds_can_be_held_out():
+    """A radius scored on the errors that produced it always "covers" ~90%.
+
+    The metric must return None rather than that reassurance when the series is
+    too short to keep any fold back.
+    """
+    short = pd.Series(
+        {year: float(value) for year, value in zip(range(2016, 2022), range(10, 16), strict=True)}
+    )
+    result = fit_and_forecast(short)
+
+    assert result.empirical_interval_coverage is None

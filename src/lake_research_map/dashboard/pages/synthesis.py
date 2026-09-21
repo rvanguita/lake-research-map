@@ -69,8 +69,8 @@ def render() -> None:
 def _render_methods_tab(df: pd.DataFrame) -> None:
     st.markdown("##⚙ Ta Taxonomy of Paradigms of Optimization & Mathematical Complexity")
     st.caption(
-        "It identifies and quantifies the mathematical methods used in the distribution planning literature."
-        "Evidences the historical transition from classical metaheuristics to exact programming (MILP, SOCP),"
+        "It identifies and quantifies the mathematical methods used in the distribution planning literature. "
+        "Evidences the historical transition from classical metaheuristics to exact programming (MILP, SOCP), "
         "optimization under uncertainty (Robusta, Stochastic) and artificial intelligence."
     )
 
@@ -96,8 +96,8 @@ def _render_methods_tab(df: pd.DataFrame) -> None:
         [
             ("🏆 Most frequent method", top_method, f"{summary_df.iloc[0]['articles']} articles"),
             ("🚀 Maior Momentum Recente", top_recent_method, "Higher proportion ≥ 2021"),
-            ("💡 Maior Impacto Citacional", top_cites_method, "Average citations/article"),
-            ("📐 Paradigmas Mapeados", str(len(summary_df)), "Resolution families"),
+            ("💡 Highest citation impact", top_cites_method, "Average citations/article"),
+            ("📐 Paradigms mapped", str(len(summary_df)), "Resolution families"),
         ]
     )
 
@@ -220,9 +220,9 @@ def _render_methods_tab(df: pd.DataFrame) -> None:
 def _render_objectives_tab(df: pd.DataFrame) -> None:
     st.markdown("## 🎯 Objective Functions & Multi-Criteria Formulations")
     st.caption(
-        "Maps which criteria the literature seeks to optimize: economic costs of investment and operation (CAPEX/OPEX),"
-        "Reliability and supply continuity (SAIDI, SAIFI, ENS), technical losses ($I^2R$), voltage profile,"
-        "decarbonization and emissions, and resilience to extreme climatic events."
+        "Maps which criteria the literature seeks to optimize: economic costs of investment and operation (CAPEX/OPEX), "
+        "Reliability and supply continuity (SAIDI, SAIFI, ENS), technical losses ($I^2R$), voltage profile, "
+        "decarbonization and emissions, and resilience to extreme climatic events. "
         "The co-occurrence matrix reveals which pairs of objectives are often solved together."
     )
 
@@ -243,7 +243,7 @@ def _render_objectives_tab(df: pd.DataFrame) -> None:
         [
             ("🏆 Most frequent objective", top_obj, f"{summary_df.iloc[0]['articles']} articles"),
             ("🌐 Taxa Multi-Objetivo", f"{multi_ratio:.1f}%", "Estudos com ≥ 2 objetivos"),
-            ("💡 Maior Impacto Citacional", top_cites, "Average citations/article"),
+            ("💡 Highest citation impact", top_cites, "Average citations/article"),
             ("📐 Objective Families", str(len(summary_df)), "Fundamental criteria"),
         ]
     )
@@ -360,9 +360,9 @@ def _render_objectives_tab(df: pd.DataFrame) -> None:
 def _render_uncertainty_tab(df: pd.DataFrame) -> None:
     st.markdown("## 🎲 Uncertainty & Stochastic Modeling Paradigms")
     st.caption(
-        "Evaluates how the literature deals with the randomness of renewable generation (solar, wind),"
-        "load and recharge behavior of electric vehicles."
-        "Counterposes deterministic approaches to stochastic programming with scenarios reduction,"
+        "Evaluates how the literature deals with the randomness of renewable generation (solar, wind), "
+        "load and recharge behavior of electric vehicles. "
+        "Counterposes deterministic approaches to stochastic programming with scenarios reduction, "
         "Robust optimization (worst case uncertainty sets), fuzzy logic and distributionally robust optimization (DRO)."
     )
 
@@ -390,8 +390,8 @@ def _render_uncertainty_tab(df: pd.DataFrame) -> None:
                 paradigms_df.sort_values(by="pct_recent", ascending=False).iloc[0]["paradigm"],
                 "Higher % post-2021",
             ),
-            ("💡 Maior Impacto Citacional", top_cites, "Average citations/article"),
-            ("📐 Paradigmas Mapeados", str(len(paradigms_df)), "Modelos de incerteza"),
+            ("💡 Highest citation impact", top_cites, "Average citations/article"),
+            ("📐 Paradigms mapped", str(len(paradigms_df)), "Uncertainty models"),
         ]
     )
 
@@ -485,8 +485,8 @@ def _render_uncertainty_tab(df: pd.DataFrame) -> None:
 def _render_horizons_tab(df: pd.DataFrame) -> None:
     st.markdown("## ⏱")
     st.caption(
-        "Maps how literature structures the temporal horizon of expansion:"
-        "from the **Static Planning** (single target year *snapshot*) to the **Multi-Year Dynamic Expansion** (*Multi-Year*),"
+        "Maps how literature structures the temporal horizon of expansion: "
+        "from the **Static Planning** (single target year *snapshot*) to the **Multi-Year Dynamic Expansion** (*Multi-Year*), "
         "and the modern**Co-Optimization Planning + Operation** with hourly representation and representative days of demand / generation."
     )
 
@@ -509,7 +509,7 @@ def _render_horizons_tab(df: pd.DataFrame) -> None:
                 "Higher % post-2021",
             ),
             (
-                "💡 Maior Impacto Citacional",
+                "💡 Highest citation impact",
                 horizons_df.sort_values(by="mean_citations", ascending=False).iloc[0]["horizon"],
                 "Average citations/article",
             ),
@@ -520,7 +520,7 @@ def _render_horizons_tab(df: pd.DataFrame) -> None:
     col_hbar, col_hcite = st.columns([1, 1])
 
     with col_hbar:
-        st.markdown("#### 📊 Volume por Estrutura de Horizonte")
+        st.markdown("#### 📊 Volume by horizon structure")
         fig_h = px.bar(
             horizons_df.sort_values(by="articles", ascending=True),
             x="articles",
@@ -543,7 +543,7 @@ def _render_horizons_tab(df: pd.DataFrame) -> None:
         render_chart(fig_h)
 
     with col_hcite:
-        st.markdown("### 💡 Average Quotations by Adopted Horizon")
+        st.markdown("### 💡 Average citations by adopted horizon")
         fig_hc = px.bar(
             horizons_df.sort_values(by="mean_citations", ascending=True),
             x="mean_citations",
@@ -566,8 +566,8 @@ def _render_horizons_tab(df: pd.DataFrame) -> None:
 
     st.markdown(
         "> [!TIP]\n"
-        ">**Methodological Evidence**: The transition to decarbonized networks forced literature to migrate from static planning"
-        "Assets of short duration (such as BESS batteries and demand response)"
+        ">**Methodological Evidence**: The transition to decarbonized networks forced literature to migrate from static planning "
+        "Assets of short duration (such as BESS batteries and demand response) "
         "> can not be dimensioned without modeling the sub-clockwise operational flexibility and typical days throughout the year."
     )
 
@@ -591,7 +591,7 @@ def _render_horizons_tab(df: pd.DataFrame) -> None:
 def _render_feeders_tab(df: pd.DataFrame) -> None:
     st.markdown("## ")
     st.caption(
-        "Maps which electrical test networks are used to validate the theoretical models."
+        "Maps which electrical test networks are used to validate the theoretical models. "
         "Differentiation of standardized IEEE radial feeders (33, 69 and 123 nodes) of real concessionaire networks."
     )
 
@@ -614,7 +614,7 @@ def _render_feeders_tab(df: pd.DataFrame) -> None:
                 f"{feeders_df.iloc[0]['articles']} articles",
             ),
             ("🏢 Validation in real networks", f"{real_nets} articles", "Studies with utilities"),
-            ("⚡ Sistemas Mapeados", str(len(feeders_df)), "IEEE standards and practical networks"),
+            ("⚡ Systems mapped", str(len(feeders_df)), "IEEE standards and practical networks"),
         ]
     )
 
@@ -649,13 +649,13 @@ def _render_feeders_tab(df: pd.DataFrame) -> None:
                 color_continuous_scale="Purp",
                 labels={
                     "x": "Recurso / Tecnologia",
-                    "y": "Rede de Teste / Benchmark",
+                    "y": "Test network / benchmark",
                     "color": "Joint Articles",
                 },
             )
             fig_c.update_layout(
                 xaxis_title="Recurso / Tecnologia",
-                yaxis_title="Rede de Teste / Benchmark",
+                yaxis_title="Test network / benchmark",
                 height=440,
                 margin={"l": 20, "r": 20, "t": 30, "b": 30},
             )
@@ -681,7 +681,7 @@ def _render_feeders_tab(df: pd.DataFrame) -> None:
 def _render_solvers_tab(df: pd.DataFrame) -> None:
     st.markdown("### 💻 Ferramental Computacional, Modeladores & Solvers")
     st.caption(
-        "Analyzes mathematical software, algebraic modeling platforms and specialized simulators"
+        "Analyzes mathematical software, algebraic modeling platforms and specialized simulators "
         "that enable the computational implementation of theoretical formulations in the distribution literature."
     )
 
@@ -750,7 +750,7 @@ def _render_solvers_tab(df: pd.DataFrame) -> None:
             )
             render_chart(fig_pie)
 
-    st.markdown("#### 📋 Detalhamento do Ecossistema Computacional")
+    st.markdown("#### 📋 Computational ecosystem breakdown")
     disp_s = solvers_df.copy()
     disp_s["pct_recent"] = disp_s["pct_recent"].astype(str) + "%"
     disp_s.columns = [

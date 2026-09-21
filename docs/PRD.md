@@ -4,7 +4,7 @@
 
 **Evidence cutoff:** 2026-09-21
 
-**Implementation baseline:** 1,831 deduplicated Silver articles, 6,235 Gold chunks, 10 registered dashboard pages, and 212 automated tests
+**Implementation baseline:** the active 2026-09-21 Gold audit contains 3,115 articles and 7,552 chunks; the application has 10 registered dashboard pages and 229 automated tests.
 
 **Related documents:** [SDD.md](SDD.md), [ROADMAP.md](ROADMAP.md), [METHODOLOGY.md](METHODOLOGY.md)
 
@@ -156,7 +156,7 @@ Every inferential or predictive result must report effect size, uncertainty, sam
 | `NFR-04` | Auditability | Exclusions, overrides, quality failures, and pipeline errors are retained. |
 | `NFR-05` | Performance | Current corpus remains responsive without distributed compute; scaling changes require benchmarks. |
 | `NFR-06` | Security | Database roles are limited to required `lit_*` tables; secrets are not committed or sent to the browser. |
-| `NFR-07` | Accessibility | UI labels are non-empty, Portuguese, legible in both themes, and usable without color alone. |
+| `NFR-07` | Accessibility | UI labels are non-empty, English, legible in the fixed dark theme, and usable without color alone. |
 | `NFR-08` | Testability | Mathematical logic remains Streamlit-free; UI behavior has headless smoke coverage. |
 
 ## 7. Analytical ownership and visualization contract
@@ -165,16 +165,16 @@ Each analytical question has exactly one canonical page. Overview may link to a 
 
 | Page | Exclusive decision/question | Canonical evidence | Planned hardening |
 |---|---|---|---|
-| **Visão geral** | What is the corpus state now? | Counts, recency, source composition, readiness | Deep correlation/concentration/temporal views removed; add snapshot/as-of status |
-| **Produção e periódicos** | How did output and qualified venue composition change? | Annual and cumulative series, Qualis evolution | Explicit complete/partial-year status; no generic venue ranking duplication |
-| **Tópicos e estrutura científica** | What concepts and venues structure the field? | Keyword prevalence, Bradford/Zipf, c-TF-IDF, semantic venue groups | FDR-adjusted trends, taxonomy/cluster stability disclosure |
-| **Impacto e citações** | How is impact distributed and conditionally associated? | Citation distributions, age normalization, count models | Bootstrap tail comparison, VIF/condition number, residual/influence and sensitivity panels |
-| **Pesquisadores e colaboração** | How are corpus authors and ties organized over time? | Productivity, corpus indices, network structure | Identity ambiguity audit and temporal formation/repetition of ties |
-| **Evidências de engenharia** | Which methods, objectives, uncertainties, networks, and tools occur? | Multi-label engineering taxonomy | Labeled audit set, precision/recall, unknown/ambiguous coverage |
-| **Tendências e frentes** | What can be projected, with what historical error? | Baseline comparison, rolling-origin forecast, Bass/burst diagnostics | Skill by horizon, empirical interval coverage, parameter stability |
-| **Triagem e descoberta** | What should be reviewed, included, or reconciled? | Margin, themes, projections, isolation, duplicate queue, in-memory review calibration | Persist labels/models; add cluster/projection stability |
-| **Qualidade e RAG** | Are metadata, text, embeddings, and retrieval fit for use? | Coverage matrix, PDF selection bias, chunk diagnostics, anomaly audit, search | Add Recall@k/MRR/nDCG benchmark |
-| **Pipeline e proveniência** | Can results be traced and trusted operationally? | Funnel, runs, rejections, source configuration | Snapshot, freshness, contract failures, removal reconciliation |
+| **Overview** | What is the corpus state now? | Counts, recency, source composition, readiness | Deep correlation/concentration/temporal views removed; add snapshot/as-of status |
+| **Production and venues** | How did output and qualified venue composition change? | Annual and cumulative series, Qualis evolution | Explicit complete/partial-year status; no generic venue ranking duplication |
+| **Topics and scientific structure** | What concepts and venues structure the field? | Keyword prevalence, Bradford/Zipf, c-TF-IDF, semantic venue groups | FDR now covers the full keyword family; the growth ranking, slope chart, and searched-breakpoint test still report no adjustment |
+| **Impact and citations** | How is impact distributed and conditionally associated? | Citation distributions, age normalization, count models, specification diagnostics | Delivered: AIC family comparison, bootstrap tail p-value, VIF/condition number, influence, zero-inflation gap. Open: a fitted zero-inflated model and alternative age specifications |
+| **Researchers and collaboration** | How are corpus authors and ties organized over time? | Productivity, Lotka's law, corpus indices, network structure vs. a degree-preserving null | Identity ambiguity audit; assortativity; temporal formation/repetition of ties |
+| **Engineering evidence** | Which methods, objectives, uncertainties, networks, and tools occur? | Multi-label engineering taxonomy | Labeled audit set, precision/recall, unknown/ambiguous coverage |
+| **Trends and fronts** | What can be projected, with what historical error? | Persistence-baseline skill, rolling-origin forecast, held-out interval coverage, Bass/burst diagnostics | Skill and coverage by horizon (every fold is currently one-step), MASE, Bass parameter stability |
+| **Screening and discovery** | What should be reviewed, included, or reconciled? | Margin, themes, projections with bootstrap ARI and trustworthiness, isolation, duplicate queue, persistent review protocols/labels | Collect independent labels; persist stability; sweep cluster count |
+| **Quality and RAG** | Are metadata, text, embeddings, and retrieval fit for use? | Coverage matrix, PDF selection bias, chunk diagnostics, anomaly audit, search | Add Recall@k/MRR/nDCG benchmark |
+| **Pipeline and provenance** | Can results be traced and trusted operationally? | Funnel, runs, rejections, source configuration, quality gates | Snapshot, freshness, removal reconciliation |
 
 Visualization selection follows the question: bars for discrete comparisons, lines for ordered time, ECDF/CCDF for distributions, scatterplots for associations with uncertainty, heatmaps for dense matrices, and tables when exact values or audit context dominate. Multiple chart types for the same knowledge are alternatives behind one selector, not separate claims.
 

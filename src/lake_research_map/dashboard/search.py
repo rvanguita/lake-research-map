@@ -13,59 +13,58 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import streamlit as st
-from sklearn.metrics.pairwise import cosine_similarity
 
 from lake_research_map.transform.embeddings import EMBED_MODEL_NAME
 
 
-def _parse_embedding(emb_bin, emb_json) -> np.ndarray | None:
-    """Parse embedding from binary or JSON, preferring binary."""
-    if emb_bin is not None:
-        return np.frombuffer(emb_bin, dtype=np.float32).copy()
-    if emb_json is not None:
-        return np.array(emb_json, dtype=np.float32)
-    return None
+def _parse_embedding(emb_bin) -> np.ndarray | None:
+    """Parse a stored vector. Binary is the only canonical representation.
+
+    The JSON mirror is no longer written (see `transform/versioned_gold.py`),
+    and every published version carries the binary column, so falling back to
+    JSON only kept a slower parse alive for rows that do not need it.
+    """
+    if emb_bin is None:
+        return None
+    return np.frombuffer(emb_bin, dtype=np.float32).copy()
 
 
 def _rank_by_similarity(
     query_vector: np.ndarray, chunks_df: pd.DataFrame, top_k: int
 ) -> pd.DataFrame:
-    """Rank `chunks_df` by cosine similarity of `embedding` to `query_vector`.
+    """Rank `chunks_df` by cosine similarity of `embedding_bin` to `query_vector`.
 
-    Rows with a null `embedding` are excluded. Returns a copy of the top_k
+    Rows with no stored vector are excluded. Returns a copy of the top_k
     matching rows with an added `score` column, sorted descending. Empty
     input (no column, no embedded rows) returns an empty frame.
     """
-    has_bin = "embedding_bin" in chunks_df.columns
-    has_json = "embedding" in chunks_df.columns
-    if not has_bin and not has_json:
+    if "embedding_bin" not in chunks_df.columns:
         return chunks_df.iloc[0:0].copy()
 
-    if has_bin:
-        mask = chunks_df["embedding_bin"].notna()
-        if has_json:
-            mask = mask | chunks_df["embedding"].notna()
-    else:
-        mask = chunks_df["embedding"].notna()
-
-    embedded = chunks_df[mask]
+    embedded = chunks_df[chunks_df["embedding_bin"].notna()]
     if embedded.empty:
         return embedded.copy()
 
-    if has_bin:
-        vectors = embedded.apply(
-            lambda row: _parse_embedding(row.get("embedding_bin"), row.get("embedding")),
-            axis=1,
-        )
-    else:
-        vectors = embedded["embedding"]
+    matrix = np.stack(
+        [np.frombuffer(value, dtype=np.float32) for value in embedded["embedding_bin"]]
+    )
+    query = np.asarray(query_vector, dtype=np.float32)
+    denominator = np.linalg.norm(matrix, axis=1) * np.linalg.norm(query)
+    scores = np.divide(
+        matrix @ query,
+        denominator,
+        out=np.full(len(matrix), -np.inf, dtype=np.float32),
+        where=denominator > 0,
+    )
 
-    matrix = np.stack(vectors.to_numpy())
-    scores = cosine_similarity(query_vector.reshape(1, -1), matrix)[0]
-
-    result = embedded.copy()
-    result["score"] = scores
-    return result.sort_values("score", ascending=False).head(top_k).reset_index(drop=True)
+    limit = min(max(int(top_k), 0), len(scores))
+    if limit == 0:
+        return embedded.iloc[0:0].assign(score=pd.Series(dtype=float))
+    candidate_indices = np.argpartition(scores, -limit)[-limit:]
+    ranked_indices = candidate_indices[np.argsort(scores[candidate_indices])[::-1]]
+    result = embedded.iloc[ranked_indices].copy()
+    result["score"] = scores[ranked_indices]
+    return result.reset_index(drop=True)
 
 
 @st.cache_resource

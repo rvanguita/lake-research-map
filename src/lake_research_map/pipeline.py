@@ -18,12 +18,13 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import json
 import logging
 import os
 import signal
 import sys
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select, text
 
@@ -208,6 +209,7 @@ def _ensure_execution(
         execution.dataset_version_id = version_id
     execution.status = "running"
     execution.error_message = None
+    execution.heartbeat_at = datetime.now(UTC).replace(tzinfo=None)
     session.flush()
     return execution
 
@@ -292,6 +294,11 @@ def _finish_stage(
     row.stats = stats
     row.status = status
     row.error_message = error
+    from lake_research_map.db.gold_models import PipelineExecution
+
+    execution = session.get(PipelineExecution, row.execution_id) if row.execution_id else None
+    if execution is not None:
+        execution.heartbeat_at = finished.replace(tzinfo=None)
     session.flush()
 
 
@@ -639,6 +646,7 @@ def run_embed(*, execution_id: str, workflow: str = "embed", trigger: str = "cli
             return _complete_skipped_stage(
                 gold_session, run_id, started, execution_id, version_id, "embed"
             )
+        gold_session.info["execution_id"] = execution_id
         stats = build_dataset_embeddings(gold_session, version_id)
         results = embed_contract(gold_session, version_id)
         _record_results(
@@ -827,6 +835,269 @@ def _configure_version_commands(subparsers) -> None:
     activate.add_argument("--version-id", required=True)
 
 
+def _configure_review_commands(subparsers) -> None:
+    reviews = subparsers.add_parser("reviews", help="Manage persistent human-evidence workflows")
+    actions = reviews.add_subparsers(dest="review_action", required=True)
+    setup = actions.add_parser("setup", help="Create protocol and dual-review assignments")
+    setup.add_argument("--workflow", required=True)
+    setup.add_argument("--version-id", required=True)
+    setup.add_argument("--protocol-version", required=True)
+    setup.add_argument("--instructions-file", required=True)
+    setup.add_argument("--reviewer", action="append", required=True)
+    export = actions.add_parser("export", help="Export one reviewer's assignments")
+    export.add_argument("--workflow", required=True)
+    export.add_argument("--version-id", required=True)
+    export.add_argument("--reviewer", required=True)
+    export.add_argument("--output", required=True)
+    import_parser = actions.add_parser("import", help="Import append-only reviewer labels")
+    import_parser.add_argument("--workflow", required=True)
+    import_parser.add_argument("--reviewer", required=True)
+    import_parser.add_argument("--input", required=True)
+    adjudicate_parser = actions.add_parser("adjudicate", help="Record a final adjudication")
+    adjudicate_parser.add_argument("--workflow", required=True)
+    adjudicate_parser.add_argument("--version-id", required=True)
+    adjudicate_parser.add_argument("--subject-id", required=True)
+    adjudicate_parser.add_argument("--label", required=True)
+    adjudicate_parser.add_argument("--adjudicator", required=True)
+    adjudicate_parser.add_argument("--reason", required=True)
+    approve = actions.add_parser("approve", help="Persist an evaluated model decision")
+    approve.add_argument("--workflow", required=True)
+    approve.add_argument("--version-id", required=True)
+    approve.add_argument("--model-sha256", required=True)
+    approve.add_argument("--label-set-sha256", required=True)
+    approve.add_argument("--parameters-json", required=True)
+    approve.add_argument("--metrics-json", required=True)
+    approve.add_argument("--approved-by", required=True)
+    approve.add_argument("--reject", action="store_true")
+
+
+def _run_review_command(args: argparse.Namespace) -> None:
+    from pathlib import Path
+
+    from lake_research_map.transform.review_workflows import (
+        adjudicate,
+        approve_model,
+        assign_dataset_articles,
+        ensure_protocol,
+        export_assignments,
+        import_labels,
+    )
+
+    bootstrap()
+    session = get_session("gold")
+    try:
+        if args.review_action == "setup":
+            instructions = Path(args.instructions_file).read_text(encoding="utf-8")
+            protocol = ensure_protocol(
+                session,
+                workflow=args.workflow,
+                protocol_version=args.protocol_version,
+                instructions=instructions,
+            )
+            count = assign_dataset_articles(
+                session,
+                workflow=args.workflow,
+                dataset_version_id=args.version_id,
+                protocol=protocol,
+                reviewer_ids=args.reviewer,
+            )
+            print(f"Created {count} assignments.")
+        elif args.review_action == "export":
+            count = export_assignments(
+                session,
+                workflow=args.workflow,
+                dataset_version_id=args.version_id,
+                reviewer_id=args.reviewer,
+                output_path=Path(args.output),
+            )
+            print(f"Exported {count} assignments to {args.output}.")
+        elif args.review_action == "import":
+            count = import_labels(
+                session,
+                workflow=args.workflow,
+                reviewer_id=args.reviewer,
+                input_path=Path(args.input),
+            )
+            print(f"Imported {count} immutable labels.")
+        elif args.review_action == "adjudicate":
+            adjudicate(
+                session,
+                workflow=args.workflow,
+                dataset_version_id=args.version_id,
+                subject_id=args.subject_id,
+                final_label=args.label,
+                adjudicator_id=args.adjudicator,
+                rationale=args.reason,
+            )
+            print(f"Adjudicated {args.subject_id} as {args.label}.")
+        else:
+            approve_model(
+                session,
+                workflow=args.workflow,
+                dataset_version_id=args.version_id,
+                model_sha256=args.model_sha256,
+                label_set_sha256=args.label_set_sha256,
+                parameters=json.loads(args.parameters_json),
+                metrics=json.loads(args.metrics_json),
+                approved_by=args.approved_by,
+                approved=not args.reject,
+            )
+            print("Recorded model approval decision.")
+    finally:
+        session.close()
+
+
+def _configure_enrichment_commands(subparsers) -> None:
+    enrichment = subparsers.add_parser(
+        "enrichment", help="Append reproducible external metadata observations"
+    )
+    actions = enrichment.add_subparsers(dest="enrichment_action", required=True)
+    refresh = actions.add_parser("refresh-openalex", help="Refresh the active DOI population")
+    refresh.add_argument("--max-fetch", type=int, default=100)
+    refresh.add_argument("--delay", type=float, default=0.1)
+
+
+def _run_enrichment_command(args: argparse.Namespace) -> None:
+    from lake_research_map.db.gold_models import DatasetArticle, PublicationState
+    from lake_research_map.ingest.openalex import refresh_openalex_observations
+
+    if not os.environ.get("OPENALEX_API_KEY") or not os.environ.get("OPENALEX_EMAIL"):
+        raise ValueError("OPENALEX_API_KEY and OPENALEX_EMAIL must be set")
+    bootstrap()
+    gold_session = get_session("gold")
+    bronze_session = get_session("bronze")
+    try:
+        state = gold_session.get(PublicationState, 1)
+        if state is None or not state.active_version_id:
+            raise ValueError("no active dataset version")
+        dois = gold_session.scalars(
+            select(DatasetArticle.doi)
+            .where(DatasetArticle.dataset_version_id == state.active_version_id)
+            .order_by(DatasetArticle.doi)
+        ).all()
+        stats = refresh_openalex_observations(
+            bronze_session,
+            dois,
+            max_fetch=args.max_fetch,
+            delay=args.delay,
+        )
+        print(stats)
+    finally:
+        bronze_session.close()
+        gold_session.close()
+
+
+def _configure_audit_commands(subparsers) -> None:
+    audit = subparsers.add_parser("audit", help="Run read-only corpus acceptance audits")
+    actions = audit.add_subparsers(dest="audit_action", required=True)
+    actions.add_parser("reference-corpus", help="Report active version and contract coverage")
+
+
+def _run_audit_command(args: argparse.Namespace) -> None:
+    from lake_research_map.db.gold_models import (
+        DatasetArticle,
+        DatasetChunk,
+        DatasetSemantics,
+        PublicationState,
+        QualityResult,
+    )
+
+    bootstrap()
+    session = get_session("gold")
+    try:
+        state = session.get(PublicationState, 1)
+        version_id = state.active_version_id if state else None
+        if not version_id:
+            raise ValueError("no active dataset version")
+        counts = {
+            "version_id": version_id,
+            "articles": session.scalar(
+                select(func.count())
+                .select_from(DatasetArticle)
+                .where(DatasetArticle.dataset_version_id == version_id)
+            ),
+            "chunks": session.scalar(
+                select(func.count())
+                .select_from(DatasetChunk)
+                .where(DatasetChunk.dataset_version_id == version_id)
+            ),
+            "semantics": session.scalar(
+                select(func.count())
+                .select_from(DatasetSemantics)
+                .where(DatasetSemantics.dataset_version_id == version_id)
+            ),
+            "failed_quality_checks": session.scalar(
+                select(func.count())
+                .select_from(QualityResult)
+                .where(
+                    QualityResult.dataset_version_id == version_id,
+                    QualityResult.severity == "error",
+                    QualityResult.passed.is_(False),
+                )
+            ),
+        }
+        print(counts)
+    finally:
+        session.close()
+
+
+def _configure_maintenance_commands(subparsers) -> None:
+    maintenance = subparsers.add_parser("maintenance", help="Safe pipeline recovery operations")
+    actions = maintenance.add_subparsers(dest="maintenance_action", required=True)
+    recover = actions.add_parser("recover-stale", help="Fail stale running executions")
+    recover.add_argument("--older-than-minutes", type=int, default=30)
+
+
+def _run_maintenance_command(args: argparse.Namespace) -> None:
+    from lake_research_map.db.gold_models import PipelineExecution, PipelineRun
+
+    if args.older_than_minutes < 1:
+        raise ValueError("--older-than-minutes must be positive")
+    execution_id = f"recovery-{uuid.uuid4()}"
+    with _pipeline_lock(execution_id):
+        bootstrap()
+        session = get_session("gold")
+        try:
+            cutoff = datetime.now(UTC).replace(tzinfo=None) - timedelta(
+                minutes=args.older_than_minutes
+            )
+            # A missing heartbeat has to count as stale, not as "still alive".
+            # `heartbeat_at` is NULL for every execution that predates the column
+            # and for any process killed before its first batch, so requiring it
+            # to be non-null made the recovery a no-op on exactly the abandoned
+            # runs it exists to clear (NULL < cutoff is NULL, never true).
+            # `started_at` is always present, so fall back to it.
+            last_signal = func.coalesce(
+                PipelineExecution.heartbeat_at, PipelineExecution.started_at
+            )
+            executions = session.scalars(
+                select(PipelineExecution).where(
+                    PipelineExecution.status == "running",
+                    last_signal < cutoff,
+                )
+            ).all()
+            for execution in executions:
+                execution.status = "error"
+                execution.finished_at = datetime.now(UTC).replace(tzinfo=None)
+                execution.error_message = "recovered after stale heartbeat"
+                for run_row in session.scalars(
+                    select(PipelineRun).where(
+                        PipelineRun.execution_id == execution.execution_id,
+                        PipelineRun.status == "running",
+                    )
+                ):
+                    run_row.status = "error"
+                    run_row.finished_at = execution.finished_at
+                    run_row.duration_seconds = max(
+                        0.0, (execution.finished_at - run_row.started_at).total_seconds()
+                    )
+                    run_row.error_message = execution.error_message
+            session.commit()
+            print({"recovered": len(executions), "cutoff": cutoff.isoformat()})
+        finally:
+            session.close()
+
+
 def _run_duplicate_command(args: argparse.Namespace) -> None:
     from lake_research_map.transform.duplicate_resolution import (
         list_review_rows,
@@ -974,6 +1245,10 @@ def main(argv: list[str] | None = None) -> None:
     subparsers = parser.add_subparsers(dest="command")
     _configure_duplicate_commands(subparsers)
     _configure_version_commands(subparsers)
+    _configure_review_commands(subparsers)
+    _configure_enrichment_commands(subparsers)
+    _configure_audit_commands(subparsers)
+    _configure_maintenance_commands(subparsers)
     args = parser.parse_args(argv if argv is not None else sys.argv[1:])
     try:
         if args.command == "duplicates":
@@ -986,6 +1261,26 @@ def main(argv: list[str] | None = None) -> None:
         elif args.command == "versions":
             try:
                 _run_version_command(args)
+            except ValueError as exc:
+                parser.error(str(exc))
+        elif args.command == "reviews":
+            try:
+                _run_review_command(args)
+            except (OSError, ValueError) as exc:
+                parser.error(str(exc))
+        elif args.command == "enrichment":
+            try:
+                _run_enrichment_command(args)
+            except ValueError as exc:
+                parser.error(str(exc))
+        elif args.command == "audit":
+            try:
+                _run_audit_command(args)
+            except ValueError as exc:
+                parser.error(str(exc))
+        elif args.command == "maintenance":
+            try:
+                _run_maintenance_command(args)
             except ValueError as exc:
                 parser.error(str(exc))
         else:

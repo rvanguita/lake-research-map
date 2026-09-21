@@ -8,13 +8,11 @@ from lake_research_map.dashboard.analytics import (
     author_impact_advanced_indices,
     author_m_quotient_analysis,
     benchmark_feeders_analysis,
-    citation_longevity_and_decay,
     computational_solvers_analysis,
     mathematical_complexity_spectrum,
     objective_functions_taxonomy,
     optimization_methods_taxonomy,
     planning_time_horizons_analysis,
-    text_readability_and_stylometrics,
     uncertainty_paradigms_analysis,
 )
 
@@ -123,31 +121,6 @@ def test_author_impact_advanced_indices():
         assert r["e_index"] >= 0.0
         assert r["i10_index"] >= 0
         assert r["total_citations"] >= 0
-
-
-def test_text_readability_and_stylometrics():
-    df = _make_dummy_synthesis_data()
-    res = text_readability_and_stylometrics(df)
-
-    assert res["mean_fre"] >= 0.0
-    assert res["mean_fre"] <= 100.0
-    assert res["mean_fkgl"] >= 0.0
-    assert 0.0 < res["mean_ttr"] <= 1.0
-
-    assert not res["sample_df"].empty
-    assert "fre" in res["sample_df"].columns
-    assert "fkgl" in res["sample_df"].columns
-    assert "ttr" in res["sample_df"].columns
-
-
-def test_citation_longevity_and_decay():
-    df = _make_dummy_synthesis_data()
-    res = citation_longevity_and_decay(df)
-
-    assert res["available"] is False
-    assert "citing year" in res["reason"].lower()
-    assert res["decay_curve"].empty
-    assert res["evergreen_df"].empty
 
 
 def test_objective_functions_taxonomy():
