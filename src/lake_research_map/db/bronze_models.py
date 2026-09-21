@@ -28,6 +28,8 @@ class Article(Base):
     source: Mapped[str] = mapped_column(String(32), index=True)  # 'ieee' | 'elsevier'
     source_id: Mapped[str] = mapped_column(String(255))  # bib key or csv row ref
     record_type: Mapped[str] = mapped_column(String(32))  # article, incollection, book...
+    publication_category: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    publication_category_basis: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     doi: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)
     title: Mapped[str | None] = mapped_column(Text, nullable=True)

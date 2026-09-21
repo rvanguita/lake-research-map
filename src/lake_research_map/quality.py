@@ -29,6 +29,7 @@ from lake_research_map.db.silver_models import Article as SilverArticle
 from lake_research_map.db.silver_models import RejectedArticle
 from lake_research_map.transform.bronze_articles import normalize_doi
 from lake_research_map.transform.embeddings import EMBED_MODEL_NAME
+from lake_research_map.transform.publication_categories import PUBLICATION_CATEGORIES
 
 EMBED_DIMENSION = 384
 
@@ -114,6 +115,12 @@ def bronze_contract(
         or (row.raw_csv_id is not None and row.raw_csv_id not in raw_csv_ids)
     ]
     versions = {row.dataset_version_id for row in rows}
+    invalid_categories = [
+        row.id
+        for row in rows
+        if row.publication_category not in PUBLICATION_CATEGORIES
+        or not row.publication_category_basis
+    ]
     return [
         _result("bronze.non_empty", bool(rows), len(rows), "> 0"),
         _result(
@@ -131,6 +138,13 @@ def bronze_contract(
             versions == {version_id},
             sorted(str(v) for v in versions),
             [version_id],
+        ),
+        _result(
+            "bronze.publication_categories",
+            not invalid_categories,
+            len(invalid_categories),
+            0,
+            details={"row_ids": invalid_categories[:20]},
         ),
     ]
 
@@ -151,6 +165,12 @@ def silver_contract(
     versions = {row.dataset_version_id for row in rows} | {
         row.dataset_version_id for row in rejected
     }
+    invalid_categories = [
+        row.doi
+        for row in rows
+        if row.publication_category not in PUBLICATION_CATEGORIES
+        or not row.publication_category_basis
+    ]
     return [
         _result("silver.doi_unique", len(dois) == len(set(dois)), len(dois) - len(set(dois)), 0),
         _result(
@@ -175,6 +195,13 @@ def silver_contract(
             sorted(str(v) for v in versions),
             [version_id],
         ),
+        _result(
+            "silver.publication_categories",
+            not invalid_categories,
+            len(invalid_categories),
+            0,
+            details={"dois": invalid_categories[:20]},
+        ),
     ]
 
 
@@ -190,6 +217,12 @@ def gold_contract(session: Session, version_id: str) -> list[CheckResult]:
     keys = [(row.doi, row.chunk_type, row.seq) for row in chunks]
     orphans = [row.id for row in chunks if row.doi not in doi_set]
     bad_lengths = [row.id for row in chunks if row.char_len != len(row.text)]
+    invalid_categories = [
+        row.doi
+        for row in articles
+        if row.publication_category not in PUBLICATION_CATEGORIES
+        or not row.publication_category_basis
+    ]
     return [
         _result("gold.non_empty", bool(articles), len(articles), "> 0"),
         _result("gold.doi_unique", len(dois) == len(doi_set), len(dois) - len(doi_set), 0),
@@ -209,6 +242,13 @@ def gold_contract(session: Session, version_id: str) -> list[CheckResult]:
             len(bad_lengths),
             0,
             details={"chunk_ids": bad_lengths[:20]},
+        ),
+        _result(
+            "gold.publication_categories",
+            not invalid_categories,
+            len(invalid_categories),
+            0,
+            details={"dois": invalid_categories[:20]},
         ),
     ]
 

@@ -1,4 +1,4 @@
-"""Parse every .bib file under data/ieee/ and data/elsevier/ into
+"""Parse every supported IEEE and ScienceDirect .bib export into
 lit_raw.bib_entries.
 
 Uses bibtexparser (a real BibTeX parser) rather than naive line/`@`
@@ -13,7 +13,7 @@ import bibtexparser
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from lake_research_map.config import ELSEVIER_DIR, IEEE_DIR, relative_path
+from lake_research_map.config import ELSEVIER_BIB_DIRS, IEEE_BIB_DIRS, relative_path
 from lake_research_map.db.raw_models import BibEntry
 from lake_research_map.ingest.hashing import record_source_file
 
@@ -55,7 +55,9 @@ def _load_bib_dir(session: Session, source: str, directory) -> int:
 def load_bib_entries(session: Session) -> int:
     """Parse both sources' .bib files. Returns rows written."""
     written = 0
-    written += _load_bib_dir(session, "ieee", IEEE_DIR)
-    written += _load_bib_dir(session, "elsevier", ELSEVIER_DIR)
+    for directory in IEEE_BIB_DIRS:
+        written += _load_bib_dir(session, "ieee", directory)
+    for directory in ELSEVIER_BIB_DIRS:
+        written += _load_bib_dir(session, "elsevier", directory)
     session.flush()
     return written

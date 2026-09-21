@@ -113,6 +113,8 @@ def build_dataset_gold(
                 dataset_version_id=dataset_version_id,
                 doi=row.doi,
                 sources=row.sources or [],
+                publication_category=row.publication_category,
+                publication_category_basis=row.publication_category_basis,
                 title=row.title,
                 authors=row.authors or [],
                 year=row.year,

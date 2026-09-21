@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -95,6 +96,57 @@ def test_manifest_diff_recognizes_rename_without_duplicating_content(tmp_path):
     assert renamed[0]["path"] == "data/ieee/renamed.bib"
 
 
+def test_append_policy_retains_archived_sources_absent_from_new_batch(raw_session):
+    archived_time = datetime(2026, 1, 1, tzinfo=UTC).replace(tzinfo=None)
+    raw_session.add(
+        raw_models.SourceBlob(
+            sha256="a" * 64,
+            archive_path="data/.lake_research_map/objects/aa/archived",
+            size_bytes=12,
+        )
+    )
+    raw_session.add(
+        raw_models.SourceRevision(
+            revision_id="r" * 64,
+            path="data/references/IEEE Xplore/previous.bib",
+            source="ieee",
+            kind="bib",
+            sha256="a" * 64,
+            size_bytes=12,
+            mtime=archived_time,
+        )
+    )
+    raw_session.add(
+        raw_models.SourceFile(
+            path="data/references/IEEE Xplore/previous.bib",
+            source="ieee",
+            kind="bib",
+            sha256="a" * 64,
+            size_bytes=12,
+            mtime=archived_time,
+            source_revision_id="r" * 64,
+        )
+    )
+    raw_session.commit()
+
+    current = ScannedSource(
+        path="data/references/IEEE Xplore/current.bib",
+        source="ieee",
+        kind="bib",
+        sha256="b" * 64,
+        size_bytes=24,
+        mtime=archived_time,
+        revision_id="s" * 64,
+        archive_path="data/.lake_research_map/objects/bb/current",
+    )
+    effective = pipeline._append_effective_sources(raw_session, [current])
+
+    assert [source.path for source in effective] == [
+        "data/references/IEEE Xplore/current.bib",
+        "data/references/IEEE Xplore/previous.bib",
+    ]
+
+
 def test_bronze_rebuild_uses_file_qualified_keys_and_propagates_removal(
     raw_session, bronze_session
 ):
@@ -182,7 +234,16 @@ def test_versioned_gold_build_does_not_mutate_live_publication(silver_session, g
 def _candidate(session, version_id: str, doi: str, value: float) -> None:
     vector = np.full(384, value, dtype=np.float32)
     session.add(DatasetVersion(version_id=version_id, status="candidate"))
-    session.add(DatasetArticle(dataset_version_id=version_id, doi=doi, sources=["ieee"], title=doi))
+    session.add(
+        DatasetArticle(
+            dataset_version_id=version_id,
+            doi=doi,
+            sources=["ieee"],
+            title=doi,
+            publication_category="journal",
+            publication_category_basis="journal_record_type",
+        )
+    )
     session.add(
         DatasetChunk(
             dataset_version_id=version_id,
@@ -433,10 +494,13 @@ def test_golden_corpus_add_edit_rename_remove_and_reactivate(monkeypatch, tmp_pa
 
     monkeypatch.setattr(pipeline, "bootstrap", lambda: None)
     monkeypatch.setattr(pipeline, "get_session", lambda layer: factories[layer]())
-    monkeypatch.setattr(raw_bib, "IEEE_DIR", data / "ieee")
-    monkeypatch.setattr(raw_bib, "ELSEVIER_DIR", data / "elsevier")
-    monkeypatch.setattr(raw_config, "IEEE_DIR", data / "ieee")
-    monkeypatch.setattr(raw_config, "ELSEVIER_DIR", data / "elsevier")
+    monkeypatch.setattr(raw_bib, "IEEE_BIB_DIRS", (data / "ieee",))
+    monkeypatch.setattr(raw_bib, "ELSEVIER_BIB_DIRS", (data / "elsevier",))
+    monkeypatch.setattr(
+        raw_config,
+        "SEARCH_CONFIG_PATHS",
+        (("ieee", data / "ieee" / "config.csv"), ("elsevier", data / "elsevier" / "config.csv")),
+    )
     monkeypatch.setattr(raw_csv, "IEEE_DIR", data / "ieee")
     monkeypatch.setattr(raw_pdfs, "ARTICLES_DIR", data / "articles")
 
@@ -509,7 +573,7 @@ def test_golden_corpus_add_edit_rename_remove_and_reactivate(monkeypatch, tmp_pa
     monkeypatch.setattr(pipeline, "build_dataset_semantics", semantics)
 
     def run_and_assert(execution_id: str, expected_dois: set[str]) -> str:
-        pipeline.run_all(execution_id=execution_id)
+        pipeline.run_all(execution_id=execution_id, source_policy="snapshot")
         raw_session = factories["raw"]()
         bronze_session = factories["bronze"]()
         silver_session = factories["silver"]()

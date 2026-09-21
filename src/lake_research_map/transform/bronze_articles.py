@@ -17,12 +17,13 @@ import datetime as dt
 import hashlib
 import re
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from lake_research_map.db.bronze_models import Article as BronzeArticle
 from lake_research_map.db.raw_models import BibEntry, IeeeCsvRow
 from lake_research_map.ingest.enrichment import load_enrichment_cache
+from lake_research_map.transform.publication_categories import classify_publication
 
 
 def normalize_doi(doi: str | None) -> str | None:
@@ -128,6 +129,27 @@ def _source_token(path: str) -> str:
     return hashlib.sha256(path.encode("utf-8")).hexdigest()[:12]
 
 
+def _classification_fields(
+    *,
+    record_type: str | None,
+    title: str | None,
+    venue: str | None,
+    document_type: str | None = None,
+    note: str | None = None,
+) -> dict[str, str]:
+    classification = classify_publication(
+        record_type=record_type,
+        title=title,
+        venue=venue,
+        document_type=document_type,
+        note=note,
+    )
+    return {
+        "publication_category": classification.category,
+        "publication_category_basis": classification.basis,
+    }
+
+
 def _build_ieee_records(raw_session: Session, bronze_session: Session) -> int:
     csv_rows = raw_session.scalars(select(IeeeCsvRow)).all()
     bib_entries = raw_session.scalars(select(BibEntry).where(BibEntry.source == "ieee")).all()
@@ -165,16 +187,27 @@ def _build_ieee_records(raw_session: Session, bronze_session: Session) -> int:
         elif start_page:
             pages = str(start_page)
 
+        record_type = matching_bib.entry_type.lower() if matching_bib else "article"
+        title = f.get("Document Title")
+        venue = f.get("Publication Title")
+        document_type = f.get("Document Identifier") or None
         _upsert(
             bronze_session,
             source="ieee",
             source_id=f"csv:{_source_token(row.source_file)}:{row.row_index}",
-            record_type="article",
+            record_type=record_type,
+            **_classification_fields(
+                record_type=record_type,
+                title=title,
+                venue=venue,
+                document_type=document_type,
+                note=matching_bib.fields.get("note") if matching_bib else None,
+            ),
             doi=doi,
-            title=f.get("Document Title"),
+            title=title,
             authors=_split_ieee_csv_authors(f.get("Authors")),
             year=_to_int(f.get("Publication Year")),
-            venue=f.get("Publication Title"),
+            venue=venue,
             volume=str(f.get("Volume")) if f.get("Volume") is not None else None,
             issue=str(f.get("Issue")) if f.get("Issue") is not None else None,
             pages=pages,
@@ -186,7 +219,7 @@ def _build_ieee_records(raw_session: Session, bronze_session: Session) -> int:
             reference_count=_to_int(f.get("Reference Count")),
             countries=_split_countries(f.get("Author Affiliations")),
             online_date=_parse_online_date(f.get("Online Date")),
-            document_type=f.get("Document Identifier") or None,
+            document_type=document_type,
             license=f.get("License") or None,
             raw_csv_id=row.id,
             raw_bib_id=matching_bib.id if matching_bib else None,
@@ -200,16 +233,25 @@ def _build_ieee_records(raw_session: Session, bronze_session: Session) -> int:
         if doi and doi in csv_dois:
             continue
         f = entry.fields
+        record_type = entry.entry_type.lower()
+        title = f.get("title")
+        venue = f.get("journal") or f.get("booktitle")
         _upsert(
             bronze_session,
             source="ieee",
             source_id=f"bib:{_source_token(entry.source_file)}:{entry.bib_key}",
-            record_type=entry.entry_type.lower(),
+            record_type=record_type,
+            **_classification_fields(
+                record_type=record_type,
+                title=title,
+                venue=venue,
+                note=f.get("note"),
+            ),
             doi=doi,
-            title=f.get("title"),
+            title=title,
             authors=_split_bibtex_authors(f.get("author")),
             year=_to_int(f.get("year")),
-            venue=f.get("journal") or f.get("booktitle"),
+            venue=venue,
             volume=f.get("volume"),
             issue=f.get("number"),
             pages=f.get("pages"),
@@ -233,17 +275,26 @@ def _build_elsevier_records(raw_session: Session, bronze_session: Session) -> in
     for entry in bib_entries:
         f = entry.fields
         doi = normalize_doi(entry.doi)
+        record_type = entry.entry_type.lower()
+        title = f.get("title")
+        venue = f.get("journal") or f.get("booktitle")
 
         _upsert(
             bronze_session,
             source="elsevier",
             source_id=f"bib:{_source_token(entry.source_file)}:{entry.bib_key}",
-            record_type=entry.entry_type.lower(),
+            record_type=record_type,
+            **_classification_fields(
+                record_type=record_type,
+                title=title,
+                venue=venue,
+                note=f.get("note"),
+            ),
             doi=doi,
-            title=f.get("title"),
+            title=title,
             authors=_split_bibtex_authors(f.get("author")),
             year=_to_int(f.get("year")),
-            venue=f.get("journal") or f.get("booktitle"),
+            venue=venue,
             volume=f.get("volume"),
             issue=f.get("number"),
             pages=f.get("pages"),
@@ -295,7 +346,7 @@ def _enrich_citation_counts(bronze_session: Session) -> int:
 
 def build_bronze_articles(
     raw_session: Session, bronze_session: Session, dataset_version_id: str | None = None
-) -> dict[str, int]:
+) -> dict[str, int | dict[str, int]]:
     # Bronze is a working projection of the active Raw snapshot. Rebuilding it
     # is the simplest deterministic way to propagate removals and avoids stale
     # rows from the historical upsert-only implementation.
@@ -309,4 +360,11 @@ def build_bronze_articles(
         )
     enriched = _enrich_citation_counts(bronze_session)
     bronze_session.flush()
-    return {"written": written, "enriched": enriched}
+    categories: dict[str, int] = {}
+    for category, count in bronze_session.execute(
+        select(BronzeArticle.publication_category, func.count()).group_by(
+            BronzeArticle.publication_category
+        )
+    ):
+        categories[str(category)] = int(count)
+    return {"written": written, "enriched": enriched, "categories": categories}

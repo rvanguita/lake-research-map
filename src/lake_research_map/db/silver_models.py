@@ -27,6 +27,8 @@ class Article(Base):
     doi: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     sources: Mapped[list] = mapped_column(JSON, default=list)  # ['ieee'] | ['elsevier'] | both
     record_type: Mapped[str] = mapped_column(String(32))
+    publication_category: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    publication_category_basis: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     title: Mapped[str | None] = mapped_column(Text, nullable=True)
     authors: Mapped[list] = mapped_column(JSON, default=list)
@@ -84,5 +86,7 @@ class RejectedArticle(Base):
     source: Mapped[str] = mapped_column(String(32), nullable=False)
     source_id: Mapped[str] = mapped_column(String(256), nullable=False)
     title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    publication_category: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    publication_category_basis: Mapped[str | None] = mapped_column(String(64), nullable=True)
     reason: Mapped[str] = mapped_column(String(64), nullable=False)  # e.g. 'no_doi'
     rejected_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False)

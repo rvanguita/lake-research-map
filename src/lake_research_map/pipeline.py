@@ -35,7 +35,7 @@ from lake_research_map.ingest.reconciliation import (
     persist_snapshot,
     remove_absent_sources,
 )
-from lake_research_map.ingest.snapshots import build_fingerprint, scan_sources
+from lake_research_map.ingest.snapshots import ScannedSource, build_fingerprint, scan_sources
 from lake_research_map.quality import (
     ContractViolation,
     assert_contract,
@@ -245,10 +245,51 @@ def _handle_stage_failure(
     session.commit()
 
 
-def _prepare_raw_version(execution_id: str, workflow: str, trigger: str):
+def _append_effective_sources(raw_session, scanned: list[ScannedSource]) -> list[ScannedSource]:
+    """Retain archived active paths that are absent from an additive download batch."""
+    from lake_research_map.db.raw_models import SourceBlob, SourceFile, SourceRevision
+
+    effective = {source.path: source for source in scanned}
+    for row in raw_session.scalars(select(SourceFile)).all():
+        if row.path in effective:
+            continue
+        revision = (
+            raw_session.get(SourceRevision, row.source_revision_id)
+            if row.source_revision_id
+            else raw_session.scalar(
+                select(SourceRevision).where(
+                    SourceRevision.path == row.path, SourceRevision.sha256 == row.sha256
+                )
+            )
+        )
+        blob = raw_session.get(SourceBlob, row.sha256)
+        if revision is None or blob is None:
+            raise RuntimeError(
+                f"append policy cannot retain {row.path!r}: archived revision is incomplete"
+            )
+        effective[row.path] = ScannedSource(
+            path=row.path,
+            source=row.source,
+            kind=row.kind,
+            sha256=row.sha256,
+            size_bytes=row.size_bytes,
+            mtime=row.mtime,
+            revision_id=revision.revision_id,
+            archive_path=blob.archive_path,
+        )
+    return sorted(effective.values(), key=lambda source: source.path)
+
+
+def _prepare_raw_version(execution_id: str, workflow: str, trigger: str, source_policy: str):
     from lake_research_map.db.gold_models import DatasetVersion, PublicationState
 
     sources = scan_sources()
+    raw_session = get_session("raw")
+    try:
+        if source_policy == "append":
+            sources = _append_effective_sources(raw_session, sources)
+    finally:
+        raw_session.close()
     gold_session = get_session("gold")
     try:
         fingerprint = build_fingerprint(sources, curation_records=_curation_records(gold_session))
@@ -288,8 +329,16 @@ def _prepare_raw_version(execution_id: str, workflow: str, trigger: str):
         gold_session.close()
 
 
-def run_raw(*, execution_id: str, workflow: str = "raw", trigger: str = "cli") -> dict:
-    sources, version_id, already_active = _prepare_raw_version(execution_id, workflow, trigger)
+def run_raw(
+    *,
+    execution_id: str,
+    workflow: str = "raw",
+    trigger: str = "cli",
+    source_policy: str = "append",
+) -> dict:
+    sources, version_id, already_active = _prepare_raw_version(
+        execution_id, workflow, trigger, source_policy
+    )
     gold_session = get_session("gold")
     raw_session = get_session("raw")
     run_id, started = _begin_stage(gold_session, "raw", execution_id, version_id)
@@ -299,8 +348,13 @@ def run_raw(*, execution_id: str, workflow: str = "raw", trigger: str = "cli") -
                 gold_session, run_id, started, execution_id, version_id, "raw"
             )
         previous = active_manifest(raw_session)
-        removed = remove_absent_sources(raw_session, {source.path for source in sources})
+        removed = (
+            remove_absent_sources(raw_session, {source.path for source in sources})
+            if source_policy == "snapshot"
+            else 0
+        )
         stats = {
+            "source_policy": source_policy,
             "config": load_configs(raw_session),
             "ieee_csv_rows": load_ieee_csv(raw_session),
             "bib_entries": load_bib_entries(raw_session),
@@ -581,11 +635,21 @@ def run_semantic(*, execution_id: str, workflow: str = "semantic", trigger: str 
         gold_session.close()
 
 
-def run_all(*, execution_id: str | None = None, trigger: str = "cli") -> dict:
+def run_all(
+    *,
+    execution_id: str | None = None,
+    trigger: str = "cli",
+    source_policy: str = "append",
+) -> dict:
     execution_id = execution_id or str(uuid.uuid4())
     bootstrap()
     return {
-        "raw": run_raw(execution_id=execution_id, workflow="all", trigger=trigger),
+        "raw": run_raw(
+            execution_id=execution_id,
+            workflow="all",
+            trigger=trigger,
+            source_policy=source_policy,
+        ),
         "bronze": run_bronze(execution_id=execution_id, workflow="all", trigger=trigger),
         "silver": run_silver(execution_id=execution_id, workflow="all", trigger=trigger),
         "gold": run_gold(execution_id=execution_id, workflow="all", trigger=trigger),
@@ -600,12 +664,13 @@ def run(
     execution_id: str | None = None,
     trigger: str = "cli",
     workflow: str | None = None,
+    source_policy: str = "append",
 ) -> None:
     bootstrap()
     execution_id = execution_id or str(uuid.uuid4())
     workflow = workflow or stage
     if stage == "all":
-        run_all(execution_id=execution_id, trigger=trigger)
+        run_all(execution_id=execution_id, trigger=trigger, source_policy=source_policy)
         return
     runners = {
         "raw": run_raw,
@@ -615,7 +680,15 @@ def run(
         "embed": run_embed,
         "semantic": run_semantic,
     }
-    runners[stage](execution_id=execution_id, workflow=workflow, trigger=trigger)
+    if stage == "raw":
+        run_raw(
+            execution_id=execution_id,
+            workflow=workflow,
+            trigger=trigger,
+            source_policy=source_policy,
+        )
+    else:
+        runners[stage](execution_id=execution_id, workflow=workflow, trigger=trigger)
 
 
 def _add_pair_arguments(parser: argparse.ArgumentParser) -> None:
@@ -787,6 +860,12 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("--trigger", choices=("cli", "airflow", "dashboard"), default="cli")
     parser.add_argument("--workflow", choices=STAGES, help="parent workflow for stage correlation")
+    parser.add_argument(
+        "--source-policy",
+        choices=("append", "snapshot"),
+        default="append",
+        help="retain absent archived sources (append) or mirror the files currently on disk",
+    )
     subparsers = parser.add_subparsers(dest="command")
     _configure_duplicate_commands(subparsers)
     _configure_version_commands(subparsers)
@@ -805,13 +884,17 @@ def main(argv: list[str] | None = None) -> None:
             parser.error(str(exc))
     else:
         if args.execution_id is None and args.trigger == "cli" and args.workflow is None:
-            run(args.stage)
+            if args.source_policy == "append":
+                run(args.stage)
+            else:
+                run(args.stage, source_policy=args.source_policy)
         else:
             run(
                 args.stage,
                 execution_id=args.execution_id,
                 trigger=args.trigger,
                 workflow=args.workflow,
+                source_policy=args.source_policy,
             )
 
 

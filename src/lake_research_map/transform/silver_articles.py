@@ -24,6 +24,7 @@ from lake_research_map.db.bronze_models import Article as BronzeArticle
 from lake_research_map.db.raw_models import PdfFile
 from lake_research_map.db.silver_models import Article as SilverArticle
 from lake_research_map.db.silver_models import RejectedArticle
+from lake_research_map.transform.publication_categories import preferred_classification
 
 PDF_MATCH_THRESHOLD = 85.0
 
@@ -51,10 +52,13 @@ def _merge_group(doi: str, group: list[BronzeArticle]) -> dict:
     # fall back to the first one deterministically.
     primary = max(group, key=lambda a: len(a.abstract or ""))
     sources = sorted({a.source for a in group})
+    publication_category, publication_category_basis = preferred_classification(group)
     return {
         "doi": doi,
         "sources": sources,
         "record_type": primary.record_type,
+        "publication_category": publication_category,
+        "publication_category_basis": publication_category_basis,
         "title": primary.title,
         "authors": primary.authors or [],
         "year": primary.year,
@@ -130,6 +134,8 @@ def build_silver_articles(
                     source=article.source,
                     source_id=article.source_id,
                     title=article.title,
+                    publication_category=article.publication_category,
+                    publication_category_basis=article.publication_category_basis,
                     reason="no_doi",
                     rejected_at=now,
                 )
@@ -158,10 +164,14 @@ def build_silver_articles(
 
     silver_session.flush()
 
+    categories: dict[str, int] = defaultdict(int)
+    for row in silver_rows:
+        categories[str(row.publication_category)] += 1
     return {
         "written": len(silver_rows),
         "skipped_no_doi": len(rejected_rows),
         "rejected_persisted": len(rejected_rows),
         "non_articles": sum(1 for r in silver_rows if r.is_non_article),
         "has_pdf": sum(1 for r in silver_rows if r.has_pdf),
+        "categories": dict(categories),
     }
