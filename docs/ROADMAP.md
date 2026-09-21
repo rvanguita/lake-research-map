@@ -26,7 +26,7 @@ Dependencies use work-package IDs. Horizons are sequencing bands rather than cal
 
 ## 2. Delivered baseline
 
-The following capabilities are implemented and covered by the current 212-test suite:
+The following capabilities are implemented and covered by the current 232-test suite:
 
 - Raw/Bronze/Silver/Gold ingestion and transformations with DOI normalization and rejection audit.
 - Local PDF inventory/matching, full-text extraction, chunk reconciliation, and local BGE embeddings.
@@ -36,6 +36,7 @@ The following capabilities are implemented and covered by the current 212-test s
 - Pipeline-run history and seven Airflow DAGs matching the six stages plus the complete flow.
 - Ten workflow-oriented Streamlit pages with global filters, theme support, and read-only analytical access.
 - Contract-valid Gold-first analytical selection with an explicit Silver/Bronze degraded mode.
+- Canonical publication-category classification (`journal`, `conference`, `review`, `other`) propagated through Bronze, Silver, Gold, global filters, and the three-section Production and venues view.
 - Source-denominated metadata completeness, PDF-selection-bias effect sizes, and in-memory human-label screening calibration with holdout evaluation.
 - Bibliometric, network, engineering-taxonomy, burst, forecasting, and anomaly functions described in `METHODOLOGY.md`.
 
@@ -108,8 +109,9 @@ This baseline does not imply that every analytical method is confirmatory. The l
 
 ### `WP-08` — Concurrency, recovery, and operational security
 
+- **Status:** Advisory locking, persistent CLI logs, signal-aware failure recording, and resumable batch embeddings delivered; retry/timeout policy, stale-run heartbeat recovery, database roles, and deployment guidance remain open.
 - **Objective:** Make mutation predictable under failure and prevent unsafe overlapping runs.
-- **Justification:** There is no pipeline lock; stage retries are absent; telemetry failure can be swallowed; local Airflow admin mode is unsafe on shared networks.
+- **Justification:** Writer serialization and resumable embeddings now protect the common local failure path, but automatic retry/timeout policy, abandoned-run recovery, and shared-network hardening are not complete.
 - **Dependencies:** `WP-01`.
 - **Deliverable:** Project advisory lock, stage retry/timeout matrix, reliable terminal run status, least-privilege database roles, deployment-mode security guidance, and audited trigger identity.
 - **Completion:** Concurrent-run and injected-failure integration tests prove one active writer, safe retry behavior, visible telemetry failure, and unchanged prior published state.
@@ -237,7 +239,7 @@ This baseline does not imply that every analytical method is confirmatory. The l
 
 ### `WP-22` — Streamlit performance, behavior, and accessibility
 
-- **Status:** Dynamic heavy tabs and one headless screening-workflow smoke test delivered; application-wide behavior/accessibility coverage remains open.
+- **Status:** Dynamic heavy tabs plus headless screening-workflow and Production-page smoke tests delivered; application-wide behavior/accessibility coverage remains open.
 - **Objective:** Keep the 10-page app responsive and testable as analytical depth grows.
 - **Justification:** Some pages still compute hidden tab content, and first-party AppTest coverage does not yet span navigation, filters, and all degraded states.
 - **Dependencies:** `WP-20`, `WP-21`.
