@@ -62,12 +62,22 @@ _ADDITIVE_COLUMNS: dict[str, dict[str, tuple[str, tuple[str, ...]]]] = {
         # ROADMAP #4: flag non-article records (book front matter, etc.).
         "is_non_article": ("BOOLEAN NOT NULL DEFAULT FALSE", ("silver", "gold")),
         "dataset_version_id": ("VARCHAR(64) NULL", ("bronze", "silver")),
+        "publication_category": ("VARCHAR(32) NULL", ("bronze", "silver", "gold")),
+        "publication_category_basis": ("VARCHAR(64) NULL", ("bronze", "silver", "gold")),
     },
     # Cosine to the logistics anchor, see transform/semantics.py.
     "lit_semantics": {"offtopic_score": ("FLOAT NULL", ("gold",))},
     # ROADMAP #1: binary embedding storage (migration from JSON to BLOB).
     "lit_chunks": {"embedding_bin": ("LONGBLOB NULL", ("gold",))},
-    "lit_rejected": {"dataset_version_id": ("VARCHAR(64) NULL", ("silver",))},
+    "lit_rejected": {
+        "dataset_version_id": ("VARCHAR(64) NULL", ("silver",)),
+        "publication_category": ("VARCHAR(32) NULL", ("silver",)),
+        "publication_category_basis": ("VARCHAR(64) NULL", ("silver",)),
+    },
+    "lit_dataset_articles": {
+        "publication_category": ("VARCHAR(32) NULL", ("gold",)),
+        "publication_category_basis": ("VARCHAR(64) NULL", ("gold",)),
+    },
     "lit_source_files": {
         "dataset_version_id": ("VARCHAR(64) NULL", ("raw",)),
         "source_revision_id": ("VARCHAR(64) NULL", ("raw",)),

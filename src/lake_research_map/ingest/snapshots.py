@@ -19,7 +19,13 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from lake_research_map.config import DATA_DIR, REPO_ROOT
+from lake_research_map.config import (
+    DATA_DIR,
+    ELSEVIER_BIB_DIRS,
+    IEEE_BIB_DIRS,
+    REPO_ROOT,
+    SEARCH_CONFIG_PATHS,
+)
 
 FINGERPRINT_SCHEMA_VERSION = 1
 ARCHIVE_DIR = DATA_DIR / ".lake_research_map" / "objects"
@@ -70,12 +76,30 @@ def _relative(path: Path, root: Path) -> str:
 
 def _supported_paths(data_dir: Path) -> list[tuple[Path, str, str]]:
     paths: list[tuple[Path, str, str]] = []
-    for source in ("ieee", "elsevier"):
-        directory = data_dir / source
-        config = directory / "config.csv"
+    # Use paths relative to DATA_DIR in tests that supply an alternate root,
+    # while retaining the configured directory names for the real project.
+    if data_dir.resolve() == DATA_DIR.resolve():
+        bib_dirs = {"ieee": IEEE_BIB_DIRS, "elsevier": ELSEVIER_BIB_DIRS}
+        config_paths = SEARCH_CONFIG_PATHS
+    else:
+        bib_dirs = {
+            "ieee": (data_dir / "ieee", data_dir / "references" / "IEEE Xplore"),
+            "elsevier": (
+                data_dir / "elsevier",
+                data_dir / "references" / "Science Direct",
+            ),
+        }
+        config_paths = (
+            ("ieee", data_dir / "ieee" / "config.csv"),
+            ("elsevier", data_dir / "elsevier" / "config.csv"),
+            ("elsevier", data_dir / "config.csv"),
+        )
+    for source, config in config_paths:
         if config.is_file():
             paths.append((config, source, "config"))
-        paths.extend((path, source, "bib") for path in sorted(directory.glob("*.bib")))
+    for source, directories in bib_dirs.items():
+        for directory in directories:
+            paths.extend((path, source, "bib") for path in sorted(directory.glob("*.bib")))
     paths.extend((path, "ieee", "csv") for path in sorted((data_dir / "ieee").glob("export*.csv")))
     paths.extend(
         (path, "articles", "pdf") for path in sorted((data_dir / "articles").glob("*.pdf"))

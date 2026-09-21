@@ -13,7 +13,7 @@ import re
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from lake_research_map.config import ELSEVIER_DIR, IEEE_DIR, relative_path
+from lake_research_map.config import SEARCH_CONFIG_PATHS, relative_path
 from lake_research_map.db.raw_models import Config
 from lake_research_map.ingest.hashing import record_source_file
 
@@ -55,10 +55,7 @@ def _parse_config_text(raw_text: str) -> dict:
 def load_configs(session: Session) -> int:
     """Parse both config.csv files into lit_raw.config. Returns rows written."""
     written = 0
-    for source, config_path in (
-        ("ieee", IEEE_DIR / "config.csv"),
-        ("elsevier", ELSEVIER_DIR / "config.csv"),
-    ):
+    for source, config_path in SEARCH_CONFIG_PATHS:
         if not config_path.exists():
             continue
 

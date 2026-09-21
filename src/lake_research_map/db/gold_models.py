@@ -40,6 +40,8 @@ class Article(Base):
 
     doi: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     sources: Mapped[list] = mapped_column(JSON, default=list)  # ['ieee'] / ['elsevier'] / both
+    publication_category: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    publication_category_basis: Mapped[str | None] = mapped_column(String(64), nullable=True)
     title: Mapped[str | None] = mapped_column(Text, nullable=True)
     authors: Mapped[list] = mapped_column(JSON, default=list)
     year: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -258,6 +260,8 @@ class DatasetArticle(Base):
     dataset_version_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     doi: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     sources: Mapped[list] = mapped_column(JSON, default=list)
+    publication_category: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    publication_category_basis: Mapped[str | None] = mapped_column(String(64), nullable=True)
     title: Mapped[str | None] = mapped_column(Text, nullable=True)
     authors: Mapped[list] = mapped_column(JSON, default=list)
     year: Mapped[int | None] = mapped_column(Integer, nullable=True)

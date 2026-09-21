@@ -30,6 +30,7 @@ from lake_research_map.db.gold_models import Article as GoldArticle
 from lake_research_map.db.gold_models import Chunk
 from lake_research_map.db.silver_models import Article as SilverArticle
 from lake_research_map.transform.duplicate_resolution import active_merge_plan
+from lake_research_map.transform.publication_categories import preferred_classification
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +130,8 @@ class _GoldArticleSource:
     id: int | None
     doi: str
     sources: list
+    publication_category: str
+    publication_category_basis: str
     title: str | None
     authors: list
     year: int | None
@@ -171,10 +174,13 @@ def _merge_silver_group(
         return max(present) if present else None
 
     pdf_row = next((row for row in rows if row.has_pdf and row.pdf_path), None)
+    publication_category, publication_category_basis = preferred_classification(rows)
     return _GoldArticleSource(
         id=primary.id,
         doi=primary.doi,
         sources=_union_values(rows, "sources"),
+        publication_category=publication_category,
+        publication_category_basis=publication_category_basis,
         title=first_value("title"),
         authors=_union_values(rows, "authors"),
         year=first_value("year"),
@@ -234,6 +240,8 @@ def build_gold_articles(silver_session: Session, gold_session: Session) -> dict:
             GoldArticle(
                 doi=row.doi,
                 sources=row.sources or [],
+                publication_category=row.publication_category,
+                publication_category_basis=row.publication_category_basis,
                 title=row.title,
                 authors=row.authors or [],
                 year=row.year,
