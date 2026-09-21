@@ -50,7 +50,7 @@ Streamlit dashboard ----------------------------┘
 | `dashboard/loaders.py` | Cached normalization, joins, and filtered datasets | Streamlit cache only |
 | `dashboard/analytics.py`, `forecasting.py` | Pure analytical computation | None |
 | `dashboard/charts.py` | Plotly figure construction and chart contracts | None |
-| `dashboard/pages/` | Portuguese presentation controllers | None |
+| `dashboard/pages/` | English presentation controllers | None |
 
 ## 3. Data architecture and contracts
 
@@ -88,7 +88,8 @@ Current enrichment fills missing citation/reference counts from `data/enrichment
 **Current contract:**
 
 - Each row references its Raw source revision and output dataset version.
-- Rows absent from the active Raw snapshot are removed during a transactional rebuild.
+- The default append policy retains archived active sources that are absent from a
+  newly downloaded batch; explicit snapshot mode removes absent rows transactionally.
 - Citation/reference enrichment is stored as an observation with provider, `observed_at`, work identifier, response status, and optional raw response hash.
 - Precedence is deterministic and separately documented for identity fields, descriptive metadata, and time-varying metrics.
 

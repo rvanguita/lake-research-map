@@ -107,9 +107,13 @@ The dashboard is structured into 10 workflow-oriented pages in `src/lake_researc
 ### 4.3 Visual & Theme Standards
 - **Responsive Width**: Always use `width="stretch"` for charts, tables, and containers. **NEVER use deprecated `use_container_width=True`**.
 - **Transparent Polar Charts**: For radar and polar charts (e.g., `thematic_radar_chart`), always set `paper_bgcolor="rgba(0,0,0,0)"` and `polar_bgcolor="rgba(0,0,0,0)"` so that the chart adapts seamlessly to Streamlit dark and light themes without an opaque white box.
-- **Bilingual Rule**:
-  - Code, comments, docstrings, variable names, and documentation files (`docs/`, `*.md`) are in **English**.
-  - Dashboard UI text (page titles, tabs, headers, metric labels, tooltips, warnings, captions) is in **Portuguese**.
+- **Language Rule**: Code, comments, docstrings, variable names, documentation files
+  (`docs/`, `*.md`), and all dashboard UI text are in **English**.
+- **Fixed Dark Theme**: The dashboard uses the dark Streamlit theme and matching
+  Plotly tokens. Do not add a light-mode toggle or browser-dependent palette.
+- **Publication Categories**: Store only the canonical English values `journal`,
+  `conference`, `review`, and `other`. Classification precedence is review,
+  conference, journal, then other.
 
 ---
 

@@ -61,9 +61,9 @@ The pipeline implements a 6-tier Medallion architecture orchestrated by Apache A
 
 | Stage | Target Database / Table | Core Responsibilities |
 |---|---|---|
-| **1. Raw** | `raw.lit_*` | Content-addressed retention of consumed IEEE/Elsevier exports, search configuration, enrichment cache, and PDFs. Immutable manifests/revisions record additions, modifications, renames, and removals while the active Raw projection is reconciled transactionally. |
-| **2. Bronze** | `bronze.lit_articles` | Transactional cross-source schema harmonization with file-qualified natural keys and dataset lineage. A full rebuild propagates Raw removals deterministically and applies citation/reference backfills from `data/enrichment_cache.json`. |
-| **3. Silver** | `silver.lit_articles`<br>`silver.lit_rejected` | Deduplicates records by normalized DOI into single authoritative paper records. Tags non-article items (prefaces, book covers), executes fuzzy title matching against PDFs via `rapidfuzz` ($\ge 85$), and logs dropped rows without DOIs to `silver.lit_rejected`. |
+| **1. Raw** | `raw.lit_*` | Content-addressed retention of consumed IEEE/Elsevier exports, search configuration, enrichment cache, and PDFs. The default append policy combines new files with archived active sources; `--source-policy snapshot` explicitly mirrors only the files currently on disk. |
+| **2. Bronze** | `bronze.lit_articles` | Transactional cross-source schema harmonization with file-qualified natural keys and dataset lineage. Records are classified as `journal`, `conference`, `review`, or `other`, and citation/reference backfills are applied from `data/enrichment_cache.json`. |
+| **3. Silver** | `silver.lit_articles`<br>`silver.lit_rejected` | Deduplicates records by normalized DOI into single authoritative paper records while preserving publication category and classification basis. Tags non-article items, executes fuzzy PDF matching via `rapidfuzz` ($\ge 85$), and audits DOI-less rows in `silver.lit_rejected`. |
 | **4. Gold** | `gold.lit_articles`<br>`gold.lit_chunks`<br>`gold.lit_dataset_*`<br>`gold.lit_pipeline_*` | Builds an isolated, immutable candidate snapshot, applies reviewed duplicate decisions, reuses compatible unchanged vectors, and records parent/stage lineage. The live Gold projection is replaced only after publication gates pass. |
 | **5. Embed** | `gold.lit_dataset_chunks.embedding_bin` | In-process vectorization using local ONNX-accelerated `fastembed` (`BAAI/bge-small-en-v1.5`, 384 dimensions). Completeness, model, binary dimension, and finite-value contracts block incompatible candidates. |
 | **6. Semantic** | `gold.lit_dataset_semantics`<br>`gold.lit_dataset_duplicate_pairs` | Contrastive semantic screening, theme discovery, projections, and duplicate candidates at 100% eligible abstract coverage. Successful completion atomically publishes all candidate Gold outputs. |
@@ -85,20 +85,20 @@ Vector embeddings for RAG retrieval and manifold projections are stored directly
 
 ## 📊 Interactive Analytical Dashboard (10 Pages)
 
-The Streamlit dashboard (`src/lake_research_map/dashboard/`) is partitioned into **10 workflow-oriented pages**. Native Streamlit theming, responsive containers (`width="stretch"`), and compact navigation keep the interface consistent.
+The Streamlit dashboard (`src/lake_research_map/dashboard/`) is partitioned into **10 workflow-oriented pages**. A fixed dark theme, responsive containers (`width="stretch"`), English interface text, and global publication-category filtering keep the interface consistent.
 
-| Page | Portuguese Title | Analytical Scope & Dedicated Tabs |
-|---|---|---|
-| **Overview** | *Visão Geral* | High-level macro summaries: headline article counts, publisher split, publication timeline, and editorial concentration. |
-| **Production & Journals** | *Produção e periódicos* | Annual output, cumulative growth, venue concentration, and CAPES/Qualis coverage. |
-| **Topics & Scientific Structure** | *Tópicos e estrutura científica* | Vocabulary, co-occurrence, semantic themes, Bradford/Zipf diagnostics, and descriptive keyword-combination novelty. |
-| **Impact & Citations** | *Impacto e citações* | Reference and citation distributions, age-normalized impact, heavy-tail diagnostics, and an exposure-adjusted count GLM with robust intervals. |
-| **Researchers & Collaboration** | *Pesquisadores e colaboração* | Corpus-scoped author productivity and impact, temporal trajectories, co-authorship networks, research lines, and bibliometric laws. |
-| **Engineering Evidence** | *Evidências de engenharia* | Optimization paradigms, objectives, uncertainty, planning horizons, test feeders, and solver evidence. |
-| **Trends & Fronts** | *Tendências e frentes* | Complete-year volume forecasts with rolling validation and conformal bands, topic trajectories, Bass diagnostics, and two-state Kleinberg bursts. |
-| **Screening & Discovery** | *Triagem e descoberta* | Contrastive relevance margins, semantic projections and themes, isolation scores, and persistent near-duplicate review history. |
-| **Quality & RAG** | *Qualidade e RAG* | Metadata coverage, full-text and embedding readiness, anomaly audit, and hybrid retrieval diagnostics. |
-| **Pipeline & Provenance** | *Pipeline e proveniência* | Medallion funnel, schema drift, run history, rejected-record audit, Airflow triggers, and source-search provenance. |
+| Page | Analytical Scope & Dedicated Tabs |
+|---|---|
+| **Overview** | High-level article counts plus publisher and publication-category distributions. |
+| **Production & Journals** | Annual output by category, cumulative growth, venue concentration, and CAPES/Qualis coverage. |
+| **Topics & Scientific Structure** | Vocabulary, co-occurrence, semantic themes, Bradford/Zipf diagnostics, and descriptive keyword-combination novelty. |
+| **Impact & Citations** | Reference and citation distributions, age-normalized impact, heavy-tail diagnostics, and an exposure-adjusted count GLM with robust intervals. |
+| **Researchers & Collaboration** | Corpus-scoped author productivity and impact, temporal trajectories, co-authorship networks, research lines, and bibliometric laws. |
+| **Engineering Evidence** | Optimization paradigms, objectives, uncertainty, planning horizons, test feeders, and solver evidence. |
+| **Trends & Fronts** | Complete-year volume forecasts with rolling validation and conformal bands, topic trajectories, Bass diagnostics, and two-state Kleinberg bursts. |
+| **Screening & Discovery** | Contrastive relevance margins, semantic projections and themes, isolation scores, and persistent near-duplicate review history. |
+| **Data Quality & RAG** | Metadata coverage, full-text and embedding readiness, anomaly audit, and hybrid retrieval diagnostics. |
+| **Pipeline & Provenance** | Medallion funnel, schema drift, run history, rejected-record audit, Airflow triggers, and source-search provenance. |
 
 ---
 

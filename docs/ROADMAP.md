@@ -241,7 +241,7 @@ This baseline does not imply that every analytical method is confirmatory. The l
 - **Objective:** Keep the 10-page app responsive and testable as analytical depth grows.
 - **Justification:** Some pages still compute hidden tab content, and first-party AppTest coverage does not yet span navigation, filters, and all degraded states.
 - **Dependencies:** `WP-20`, `WP-21`.
-- **Deliverable:** Dynamic heavy tabs, bounded caches, stable loading slots, forms for expensive searches, native responsive layout where practical, stable widget keys, Portuguese sentence-case/accessibility review, and `st.testing.v1.AppTest` smoke tests.
+- **Deliverable:** Dynamic heavy tabs, bounded caches, stable loading slots, forms for expensive searches, native responsive layout where practical, stable widget keys, English sentence-case/accessibility review, and `st.testing.v1.AppTest` smoke tests.
 - **Completion:** Navigation/filter/degraded-state tests pass without MySQL; heavy hidden branches do not execute; no deprecated `use_container_width`; measured rerun targets are met on the reference corpus.
 
 ## 7. Long term — conditional evidence expansion
@@ -278,7 +278,7 @@ Every work package that changes data or analytical behavior must include:
 - SQLite unit coverage plus MySQL integration coverage where database semantics matter;
 - fixtures for missing, degenerate, and failure states;
 - documentation updates across PRD/SDD/ROADMAP/METHODOLOGY as applicable;
-- dashboard coverage and Portuguese UI copy when user-visible;
+- dashboard coverage and English UI copy when user-visible;
 - `uv run pytest`, `uv run ruff check`, and `uv run ruff format --check` passing;
 - an evidence note containing measured baseline, result, residual risk, and follow-up decision.
 
