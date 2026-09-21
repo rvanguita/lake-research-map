@@ -14,7 +14,7 @@
 `lake-research-map` is a production-grade **Medallion Data Lake**, automated ETL pipeline, and scientometric research platform engineered for a Systematic Literature Review (SLR) on:
 > **"Distribution System Planning" (Electric Power Distribution Networks)**
 
-It transforms raw, heterogeneous, and partial bibliographic search exports from **IEEE Xplore** and **Elsevier ScienceDirect** (~1,831 deduplicated articles, 6,235 text chunks) into a structured, audit-ready, RAG-enabled corpus. Without writing direct SQL queries, researchers explore deep scientometric, econometric, network, and semantic dynamics through an interactive 13-page Streamlit analytical dashboard orchestrated by Apache Airflow.
+It transforms raw, heterogeneous, and partial bibliographic search exports from **IEEE Xplore** and **Elsevier ScienceDirect** (~1,831 deduplicated articles, 6,235 text chunks) into a structured, audit-ready, RAG-enabled corpus. Without writing direct SQL queries, researchers explore scientometric, econometric, network, and semantic evidence through an interactive 10-page Streamlit analytical dashboard orchestrated by Apache Airflow.
 
 ---
 
@@ -25,7 +25,7 @@ It transforms raw, heterogeneous, and partial bibliographic search exports from 
   - [Pipeline Stages](#pipeline-stages)
   - [Multi-Project Database Isolation](#multi-project-database-isolation)
   - [Binary Vector Embeddings (`LargeBinary` float32)](#binary-vector-embeddings-largebinary-float32)
-- [Interactive Analytical Dashboard (13 Pages)](#-interactive-analytical-dashboard-13-pages)
+- [Interactive Analytical Dashboard (10 Pages)](#-interactive-analytical-dashboard-10-pages)
 - [Scientometric, Econometric & Machine Learning Rigor](#-scientometric-econometric--machine-learning-rigor)
 - [Quickstart & Deployment](#-quickstart--deployment)
   - [Prerequisites & Setup](#prerequisites--setup)
@@ -55,18 +55,18 @@ Doing this manually from raw publisher exports presents severe methodological ro
 
 The pipeline implements a 6-tier Medallion architecture orchestrated by Apache Airflow and managed through SQLAlchemy 2.0 declarative models:
 
-![Pipeline architecture: IEEE Xplore, OpenAlex, and Elsevier/ScienceDirect flowing through the raw, bronze, silver, gold, embed, and semantic layers, orchestrated by Apache Airflow, feeding the 13-page Streamlit dashboard](docs/images/medallion_architecture.svg)
+![Pipeline architecture: IEEE Xplore, OpenAlex, and Elsevier/ScienceDirect flowing through the raw, bronze, silver, gold, embed, and semantic layers, orchestrated by Apache Airflow, feeding the 10-page Streamlit dashboard](docs/images/medallion_architecture.svg)
 
 ### Pipeline Stages
 
 | Stage | Target Database / Table | Core Responsibilities |
 |---|---|---|
-| **1. Raw** | `raw.lit_*` | Verbatim, immutable ingestion of IEEE CSVs, BibTeX entries, config files, and PDF manifests. Sha256 content hashing (`lit_source_files`) guarantees idempotent execution (unchanged files are skipped). |
-| **2. Bronze** | `bronze.lit_articles` | Cross-source schema harmonization unioning IEEE and Elsevier fields. Collapses within-source pagination duplicates and enriches records with citation/reference backfills via OpenAlex REST API (`data/enrichment_cache.json`). |
+| **1. Raw** | `raw.lit_*` | Content-addressed retention of consumed IEEE/Elsevier exports, search configuration, enrichment cache, and PDFs. Immutable manifests/revisions record additions, modifications, renames, and removals while the active Raw projection is reconciled transactionally. |
+| **2. Bronze** | `bronze.lit_articles` | Transactional cross-source schema harmonization with file-qualified natural keys and dataset lineage. A full rebuild propagates Raw removals deterministically and applies citation/reference backfills from `data/enrichment_cache.json`. |
 | **3. Silver** | `silver.lit_articles`<br>`silver.lit_rejected` | Deduplicates records by normalized DOI into single authoritative paper records. Tags non-article items (prefaces, book covers), executes fuzzy title matching against PDFs via `rapidfuzz` ($\ge 85$), and logs dropped rows without DOIs to `silver.lit_rejected`. |
-| **4. Gold** | `gold.lit_articles`<br>`gold.lit_chunks`<br>`gold.lit_pipeline_runs` | Curated research layer. Splits abstracts and available full texts into RAG chunk units (`lit_chunks`) with invalidation-aware hash reconciliation (unchanged text preserves existing embeddings). Records run metrics and status to `lit_pipeline_runs`. |
-| **5. Embed** | `gold.lit_chunks.embedding_bin` | In-process vectorization using local ONNX-accelerated `fastembed` (`BAAI/bge-small-en-v1.5`, 384 dimensions). Bypasses cloud API rate limits, processing only records where `embedding_bin IS NULL`. |
-| **6. Semantic** | `gold.lit_semantics`<br>`gold.lit_duplicate_pairs` | Contrastive semantic screening (calculates margin $\Delta = \cos(\mathbf{e}_i, \mathbf{a}_{\text{topic}}) - \cos(\mathbf{e}_i, \mathbf{a}_{\text{logistics}})$). Generates 2D manifold projections (t-SNE, UMAP, PCA 2D), discovers themes, and surfaces near-duplicate abstracts ($S_C \ge 0.95$) under distinct DOIs. |
+| **4. Gold** | `gold.lit_articles`<br>`gold.lit_chunks`<br>`gold.lit_dataset_*`<br>`gold.lit_pipeline_*` | Builds an isolated, immutable candidate snapshot, applies reviewed duplicate decisions, reuses compatible unchanged vectors, and records parent/stage lineage. The live Gold projection is replaced only after publication gates pass. |
+| **5. Embed** | `gold.lit_dataset_chunks.embedding_bin` | In-process vectorization using local ONNX-accelerated `fastembed` (`BAAI/bge-small-en-v1.5`, 384 dimensions). Completeness, model, binary dimension, and finite-value contracts block incompatible candidates. |
+| **6. Semantic** | `gold.lit_dataset_semantics`<br>`gold.lit_dataset_duplicate_pairs` | Contrastive semantic screening, theme discovery, projections, and duplicate candidates at 100% eligible abstract coverage. Successful completion atomically publishes all candidate Gold outputs. |
 
 ### Multi-Project Database Isolation
 
@@ -83,25 +83,22 @@ Vector embeddings for RAG retrieval and manifold projections are stored directly
 
 ---
 
-## 📊 Interactive Analytical Dashboard (13 Pages)
+## 📊 Interactive Analytical Dashboard (10 Pages)
 
-The Streamlit dashboard (`src/lake_research_map/dashboard/`) is partitioned into **13 dedicated pages** with **zero chart redundancy across tabs**. Visualizations dynamically adapt to both dark and light modes through transparent polar/radar styling and modern responsive containers (`width="stretch"`).
+The Streamlit dashboard (`src/lake_research_map/dashboard/`) is partitioned into **10 workflow-oriented pages**. Native Streamlit theming, responsive containers (`width="stretch"`), and compact navigation keep the interface consistent.
 
 | Page | Portuguese Title | Analytical Scope & Dedicated Tabs |
 |---|---|---|
 | **Overview** | *Visão Geral* | High-level macro summaries: headline article counts, publisher split, publication timeline, and editorial concentration. |
-| **Output Over Time** | *Volume & Produção* | Strictly chronological views: Annual volume trends, Cumulative growth by venue, Publisher share over time (IEEE vs. Elsevier), and CAPES/Qualis strata longitudinal evolution. |
-| **Topics & Venues** | *Tópicos & Periódicos* | Unified venue ranking (Volume vs. Impact toggle), Bradford's 3-zone core-periphery scattering, class-based dynamic c-TF-IDF topic vocabularies, Zipf's Law rank-frequency regression, Chow test structural breaks, and Brian Uzzi conceptual atypicality. |
-| **Highlights & Impact** | *Destaques & Impacto* | **Tab 1: Fundamentação Teórica**: Reference distribution viewer, References vs. Citations scatter, Top referenced seminal works.<br>**Tab 2: Dinâmica de Citações & Econometria**: Top cited articles, Annual citation curves, Heavy-tail MLE fitting (Power-Law vs. Log-Normal), Age-normalized citation percentiles, and Poisson GLM regression. |
-| **Researchers** | *Pesquisadores & Redes* | Comprehensive Author Hub across 6 tabs: Productivity ranking, Scientific leadership ($h, g, e, m$-indices), Career trajectories, Louvain co-authorship community network & Small-World topology ($\sigma$), Research lines, and Lotka's Law of scientific productivity. |
-| **Semantics & Relevance** | *Semântica & Relevância* | Contrastive margin distribution ($\Delta = 0$ threshold), Multi-projection 2D map (t-SNE / UMAP / PCA 2D) with KDE contours, Discovered KMeans themes, Cosine outlier semantic novelty, and Near-duplicate abstracts under distinct DOIs. |
-| **Trends & Forecast** | *Tendências & Previsão* | Candidate volume regression models with dynamic expanding prediction intervals ($\sigma \sqrt{h}$), Rolling-origin cross-validation, Quantile regression uncertainty bands (P10/P50/P90), Keyword trajectories, and Continuous Non-Linear Least Squares (NLS) Bass innovation diffusion ($p, q, m$). |
-| **Strategic Scientometrics** | *Cienciometria Estratégica* | Callon's Strategic Diagram (1991) positioning themes by density vs. centrality across 4 quadrants, Jaccard-weighted keyword co-occurrence graph, Thematic centroid similarity matrix ($8 \times 8$), Transparent 5-axis maturity radar, Spearman rank correlation matrix, Longitudinal Shannon thematic entropy, and International research collaboration networks. |
-| **Methodological Synthesis** | *Evidências Metodológicas* | 7 engineering optimization tabs: Mathematical complexity spectrum (MILP, SOCP, MINLP, Metaheuristics, AI/RL), Multi-objective co-optimization taxonomy (Costs, Losses, Reliability, Voltage, Emissions, Resilience), Uncertainty paradigms (Stochastic, Robust, Fuzzy, DRO, Chance-Constrained) cross-referenced with DER physical resources, Multi-stage vs. static planning horizons, IEEE benchmark test feeders (33, 69, 123-bus, real grids), Exact solvers & power simulators (GAMS, CPLEX, Gurobi, OpenDSS, MATLAB), and Citation longevity & text stylometrics (Flesch, FKGL, TTR). |
-| **Technological Frontiers** | *Frentes Tecnológicas* | Derek de Solla Price's (1965) Index of theoretical recency, Delayed-recognition Sleeping Beauties ($B$ coefficient, Ke et al. 2015), Wu, Wang & Evans (Nature 2019) $CD$ disruption index, Open Access Citation Advantage (OACA), and Kleinberg (2002) hierarchical burst detection. |
-| **Layers & Pipeline** | *Camadas & Pipeline* | Medallion funnel conversion metrics, Cross-layer schema drift checks, Execution run history (`lit_pipeline_runs`), Rejected records SLR audit (`lit_rejected`), and Pipeline DAG execution triggers. |
-| **Quality & RAG** | *Qualidade & RAG* | Metadata richness scores, Full-text PDF coverage, Chunk and embedding readiness, Isolation Forest bibliometric anomaly detection, and Hybrid BM25 Okapi + Dense Vector Search with Reciprocal Rank Fusion (RRF). |
-| **Search Configuration** | *Configuração da Busca* | Audit inspection of raw provenance from `data/ieee/config.csv` and `data/elsevier/config.csv` (exact query strings, Boolean syntax, search dates, filters). |
+| **Production & Journals** | *Produção e periódicos* | Annual output, cumulative growth, venue concentration, and CAPES/Qualis coverage. |
+| **Topics & Scientific Structure** | *Tópicos e estrutura científica* | Vocabulary, co-occurrence, semantic themes, Bradford/Zipf diagnostics, and descriptive keyword-combination novelty. |
+| **Impact & Citations** | *Impacto e citações* | Reference and citation distributions, age-normalized impact, heavy-tail diagnostics, and an exposure-adjusted count GLM with robust intervals. |
+| **Researchers & Collaboration** | *Pesquisadores e colaboração* | Corpus-scoped author productivity and impact, temporal trajectories, co-authorship networks, research lines, and bibliometric laws. |
+| **Engineering Evidence** | *Evidências de engenharia* | Optimization paradigms, objectives, uncertainty, planning horizons, test feeders, and solver evidence. |
+| **Trends & Fronts** | *Tendências e frentes* | Complete-year volume forecasts with rolling validation and conformal bands, topic trajectories, Bass diagnostics, and two-state Kleinberg bursts. |
+| **Screening & Discovery** | *Triagem e descoberta* | Contrastive relevance margins, semantic projections and themes, isolation scores, and persistent near-duplicate review history. |
+| **Quality & RAG** | *Qualidade e RAG* | Metadata coverage, full-text and embedding readiness, anomaly audit, and hybrid retrieval diagnostics. |
+| **Pipeline & Provenance** | *Pipeline e proveniência* | Medallion funnel, schema drift, run history, rejected-record audit, Airflow triggers, and source-search provenance. |
 
 ---
 
@@ -116,12 +113,10 @@ All analytical functions reside in `dashboard/analytics.py` and `dashboard/forec
  ├───────────────────────────────────────┼──────────────────────────────────────────┤
  │ Contrastive Relevance Screening       │ Δ = cos(e_i, a_topic) - cos(e_i, a_log)   │
  │ Bass Innovation Diffusion             │ f(t) = (p+q)^2 / p * e^-(p+q)t / (1+q/p)  │
- │ Dynamic Prediction Intervals          │ ŷ_{t+h} ± 1.96 * σ_ε * √h                │
+ │ Conformal Forecast Intervals          │ ŷ_{t+h} ± Q₀.₉(|rolling error|) * √h     │
  │ Hybrid Retrieval (RRF)                │ RRF(d) = Σ 1 / (60 + rank_m(d))          │
- │ Price's Index of Theoretical Recency  │ P = N_{refs ≤ 5y} / N_{refs}             │
- │ Sleeping Beauties Beauty Coefficient  │ B = Σ [((c_m - c_0)/t_m)*t + c_0 - c_t]  │
- │ CD Disruption Index (Wu et al. 2019)  │ CD = (n_f - n_b) / (n_f + n_b + n_r)     │
- │ Conceptual Atypicality (Uzzi 2013)    │ z_ij = (obs_ij - μ_ij) / σ_ij            │
+ │ Exposure-adjusted Count GLM           │ log E[y] = Xβ + log(article age + 1)      │
+ │ Two-state Kleinberg Burst             │ min emission cost + upward state penalty  │
  │ Small-World Network Topology          │ σ = (C / C_rand) / (L / L_rand)          │
  │ Zhang's Excess Impact Index           │ e^2 = Σ_{i=1}^h c_i - h^2                │
  └───────────────────────────────────────┴──────────────────────────────────────────┘
@@ -164,6 +159,18 @@ uv run lake-research-map --stage gold       # Curated articles, chunks, telemetr
 uv run lake-research-map --stage embed      # Local ONNX binary vector embeddings
 uv run lake-research-map --stage semantic   # Contrastive screening, themes, projections
 
+# Review cross-DOI near-duplicate candidates (dashboard remains read-only)
+uv run lake-research-map duplicates list --all
+uv run lake-research-map duplicates merge --canonical-doi DOI --duplicate-doi DOI --reason "same work"
+uv run lake-research-map duplicates keep --doi-a DOI --doi-b DOI --reason "distinct publications"
+uv run lake-research-map duplicates undo --doi-a DOI --doi-b DOI
+# Any merge/undo changes the curation fingerprint; publish it through a new full run.
+uv run lake-research-map --stage all
+
+# Inspect versions or reactivate a previously published Gold snapshot
+uv run lake-research-map versions list
+uv run lake-research-map versions activate --version-id VERSION_SHA256
+
 # Schema bootstrap & additive column migration
 uv run python -m lake_research_map.db.bootstrap
 ```
@@ -195,7 +202,7 @@ Airflow DAGs (`airflow/dags/lake_research_map_dags.py`) execute stages via `Bash
 ## 🧪 Testing & Quality Assurance
 
 The codebase features an exhaustive automated test suite:
-- **186 tests across 22 test files** executing in **< 6 seconds**.
+- **212 tests across 26 test files**, with a **< 5-second reference-environment target**.
 - **Zero Live MySQL Dependency**: All tests execute against isolated, in-memory SQLite fixtures (`tests/conftest.py`) replicating the multi-layer medallion schemas.
 
 ```bash
@@ -232,7 +239,7 @@ lake-research-map/
 │   │   ├── raw_models.py         # lit_source_files, lit_config, lit_bib_entries
 │   │   ├── bronze_models.py      # lit_articles union schema
 │   │   ├── silver_models.py      # lit_articles deduplicated, lit_rejected audit log
-│   │   ├── gold_models.py        # lit_articles, lit_chunks, lit_semantics, lit_pipeline_runs
+│   │   ├── gold_models.py        # Gold articles, chunks, semantics, runs, duplicate overrides
 │   │   ├── engines.py            # Layer database session factories
 │   │   └── bootstrap.py          # Table creation and additive column migrations
 │   ├── ingest/                   # Raw parsing & API enrichment
@@ -246,6 +253,7 @@ lake-research-map/
 │   │   ├── bronze_articles.py    # Schema unification
 │   │   ├── silver_articles.py    # Normalized DOI dedup & RapidFuzz PDF matching
 │   │   ├── gold_articles.py      # Curated RAG chunks with hash reconciliation
+│   │   ├── duplicate_resolution.py # Persistent merge/keep review decisions
 │   │   ├── embeddings.py         # Local ONNX fastembed vectorization (LargeBinary float32)
 │   │   ├── semantics.py          # Contrastive screening, KMeans, UMAP/t-SNE/PCA
 │   │   └── screening_calibration.py # SLR sensitivity/recall threshold calibration
@@ -259,7 +267,7 @@ lake-research-map/
 │       ├── theme.py              # Dark/light theme tokens and transparent polar styling
 │       ├── components.py         # Reusable Streamlit UI widgets & metric cards
 │       ├── airflow_client.py     # Airflow REST API client
-│       └── pages/                # 13 modular, deduplicated analytical controllers
+│       └── pages/                # 10 workflow-oriented analytical controllers
 ├── airflow/                      # Airflow DAGs mirroring CLI pipeline stages
 │   └── dags/lake_research_map_dags.py
 ├── docs/                         # Architecture, product specs, and assets

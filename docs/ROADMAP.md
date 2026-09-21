@@ -1,209 +1,311 @@
-# Roadmap — lake-research-map
+# Engineering and Research Roadmap — lake-research-map
 
-Improvement backlog and strategic research agenda for the `lake-research-map` medallion pipeline and analytical dashboard. See [`../README.md`](../README.md) for orientation, [`PRD.md`](PRD.md) for domain motivation, and [`SDD.md`](SDD.md) for architecture.
+**Status:** Prioritized delivery plan
 
-Every measurement below reflects the active corpus on **2026-09-17** (1,831 articles, 6,235 chunks, 100% embedded).
+**Planning baseline:** 2026-09-21
 
----
+**Related documents:** [PRD.md](PRD.md), [SDD.md](SDD.md), [METHODOLOGY.md](METHODOLOGY.md)
 
-## 🏁 Completed Milestones
+This roadmap prioritizes evidential reliability before adding analytical breadth. A work package is complete only when its deliverable and acceptance evidence exist in the repository; implemented code without validation, migration, or documentation is not complete.
 
-The following foundational items were implemented, tested (183 automated unit and integration tests passing across 22 test files), and verified in the live system:
+## 1. Prioritization model
 
-- [x] **Item 1: Binary Embedding Storage** — Vectors migrated from heavy JSON strings (~50 MB, ~8 KB/vector) to native `LargeBinary` float32 BLOBs (~9 MB, ~1.5 KB/vector), with dual-write safety in `transform/embeddings.py` and zero-copy `np.frombuffer` reads in `semantics.py` and `search.py`.
-- [x] **Item 2: Relevance Screening Calibration & Stratified Sampling** — Replaced circular pseudo-label evaluation with `transform/screening_calibration.py`, enabling stratified sample extraction across 4 margin strata and threshold tuning for target SLR recall ($\ge 98\%$).
-- [x] **Item 3: Pipeline Execution Run History** — Persisted pipeline runs via `lit_pipeline_runs` table in Gold, capturing stage names, wall-clock start/finish timestamps, durations, structured execution metrics, and error traces across all 6 medallion stages; visualized in the "Camadas & Pipeline" dashboard.
-- [x] **Item 4: Explicit Non-Article Flagging at Silver** — Automated tagging of front matter, prefaces, and book chapters (105 `incollection` + 3 `book`/`inbook` with missing or short abstracts < 50 chars) via `is_non_article` boolean flag carried into Gold.
-- [x] **Item 5: Full-Text vs. Abstract Chunk Stratification** — Resolved coverage skew (96 PDF articles generating 70% of chunks) by segregating and disclosing chunk-type proportions in RAG quality metrics.
-- [x] **Item 6: Abstract-less Record Segregation** — Title-only records (31 articles without abstract) marked with `⚠️ título-only` badges and excluded from relevance margin percentile distributions to prevent dilution of screening signals.
-- [x] **Item 7: Auditability of Excluded Records** — Dropped bronze records lacking a valid DOI persisted into `silver.lit_rejected` with timestamps and rejection rationales, providing a complete audit trail for Systematic Literature Review (SLR) standards.
-- [x] **Item 8: Automated Citation Enrichment via OpenAlex** — Implemented `ingest/openalex.py` querying public OpenAlex REST API to fetch citations and references without API keys, caching incrementally into `data/enrichment_cache.json`.
-- [x] **Item 9: Core Test Gaps Closed & Expanded Suite** — 183 automated tests across 22 test files covering Airflow DAG imports (`test_dag_import.py`), additive schema bootstrap (`test_bootstrap.py`), semantics integration, heavy-tail statistics, machine learning forecasting, OpenAlex enrichment, screening calibration, dynamic c-TF-IDF, Zipf's law, network small-world/centralities, Isolation Forest anomaly detection, strategic scientometrics, advanced methodological synthesis, and technological frontiers/disruption.
-- [x] **Item 10: Advanced Multi-Projection & Semantic Novelty (Trilha A)** — UMAP and PCA 2D projections alongside t-SNE with zero-copy caching; Cosine Outlier Factor / Novelty score measuring cosine distance to corpus centroid and k-NN local dispersion.
-- [x] **Item 11: Zipf's Law & Bibliometric Triad (Trilha B)** — Power-law rank-frequency regression of vocabulary on log-log coordinates ($\gamma \approx -1$, $R^2$), completing the classic bibliometric triad (Lotka, Bradford, Zipf).
-- [x] **Item 12: Complex Network Centralities & Small-World Topology (Trilha C)** — PageRank and Closeness centralities computed alongside Betweenness; Small-World coefficient $\sigma = \frac{C/C_{rand}}{L/L_{rand}}$ evaluating knowledge diffusion efficiency.
-- [x] **Item 13: Dynamic Topic c-TF-IDF & Isolation Forest Anomaly Audit (Trilha D)** — Class-based dynamic TF-IDF tracking distinctive vocabulary per theme across chronological epochs; multi-dimensional Isolation Forest detecting bibliometric anomalies with explicit audit rationales.
-- [x] **Item 14: Fast Vector Indexing (Trilha E)** — Modular vector retrieval engine (`build_vector_index`, `search_vector_index`) supporting Faiss L2/IP indexing with accelerated linear vector fallbacks.
-- [x] **Item 15: Strategic Scientometrics & Epistemic Synthesis** — 11ª página do dashboard (`pages/strategic.py`) com 7 gráficos inéditos em 5 abas temáticas: Diagrama Estratégico de Callon (1991), Rede de Coocorrência de Palavras-Chave (Jaccard + Louvain), Proximidade Cosseno entre Centróides Temáticos ($8 \times 8$), Radar Multidimensional de Maturidade (5 eixos), Matriz de Correlações de Spearman, Entropia de Shannon / Gini-Simpson temporal e Paisagem de Colaboração Internacional.
-- [x] **Item 16: Methodological Synthesis & Scientometric Maturity** — 12ª página do dashboard (`pages/synthesis.py`) ampliada para **8 abas analíticas completas** com 18+ gráficos e matrizes cruzadas: Paradigmas de Otimização e Espectro de Complexidade (MILP, SOCP, MINLP, Heurística, IA), Funções-Objetivo e Matriz de Co-Otimização (Custos, Perdas, Confiabilidade, Tensão, Descarbonização, Resiliência), Modelagem de Incerteza (Estocástica, Robusta, Fuzzy, DRO), Horizontes Temporais (Multi-Estágio vs. Co-Otimização com Dias Representativos vs. Estático), Benchmarks IEEE e Redes Reais, Ferramental Computacional e Solvers (GAMS, CPLEX, Gurobi, MATLAB, OpenDSS, Python), Liderança Científica e Carreira ($h$, $g$, $e$-index e $m$-quotient de Hirsch), e Longevidade Citacional (Meia-Vida, Artigos Evergreen, Estilometria Flesch-Kincaid / TTR).
-- [x] **Item 17: Technological Frontiers, Scientometric Disruption & Open Access Dynamics** — 13ª página do dashboard (`pages/frontiers.py`) com 10 gráficos inéditos em 5 abas temáticas: Índice de Price (1965) da juventude da base de conhecimento por tema e série histórica; Belas Adormecidas na ciência (*Sleeping Beauties*, Ke et al. 2015 e van Raan 2004) com coeficiente de beleza $B$, lag de dormência e trajetórias de despertar; Índice de Disrupção Científica $CD$ (Wu, Wang & Evans, Nature 2019) e confirmação empírica de equipes pequenas vs grandes; Vantagem Citatória do Acesso Aberto (OACA) e dinâmica de licenciamento; e Algoritmo de Detecção de Rajadas Tecnológicas de Kleinberg (2002).
-- [x] **Item 18: Revisão e Otimização Metodológica de 58+ Funções Analíticas** — Auditoria completa de todas as 64 funções em `analytics.py` e módulos auxiliares:
-  - *Rigor Estatístico*: preenchimento de gaps temporais com zeros em trajetórias de autores (`author_productivity_trend`), incorporação de pesos em Louvain (`weight="weight"`), inversão semântica de pesos em centralidades de intermediação e proximidade ($d = 1/w$), regressão Poisson sem penalização enviesada, Mínimos Quadrados Ponderados (WLS) na Lei de Lotka, e vetorização matricial de similaridade de centroides ($C \cdot C^T$).
-  - *Performance & Robustez*: vetorização de Mann-Kendall e Gini/Lorenz, pré-compilação de regex taxonômicos, `CountVectorizer` com vocabulário global para c-TF-IDF inter-épocas, e resolução de busca vetorial para colunas binárias (`embedding_bin`).
-- [x] **Item 19: Fronteiras Preditivas, Dinâmica Estrutural e Recuperação Avançada (Trilha F Concluída)** —
-  - Detecção estatística de quebras estruturais e changepoints históricos via minimização de SSE e teste F de Chow (`detect_structural_breaks`).
-  - Intervalos de confiança preditivos dinâmicos com variância expansiva por horizonte ($\sigma \sqrt{h}$) em `forecasting.py`.
-  - Calibração Não-Linear contínua (NLS) da difusão tecnológica de Bass com bounds físicos (`fit_bass_diffusion_nls` via `scipy.optimize.curve_fit`).
-  - Busca Híbrida Densa-Esparsa com Reciprocal Rank Fusion (`bm25_search`, `hybrid_search_rrf`) e alternador no dashboard de Qualidade & RAG.
-  - Análise empírica de atipicidade e novidade conceitual de Brian Uzzi et al. (Science 2013) correlacionada com artigos hiper-citados top 5% (`conceptual_atypicality_analysis`).
-  - Agrupamento ontológico e clustering semântico de periódicos em $\mathbb{R}^{384}$ (`venue_semantic_clusters`).
+Priority follows five rules:
 
----
+1. Prevent incorrect or irreproducible evidence before improving presentation.
+2. Establish human ground truth before optimizing models against it.
+3. Validate a method before adding its visualization.
+4. Remove redundant or unsupported analyses before introducing new ones.
+5. Add infrastructure only when a measured limit justifies its operational cost.
 
-## 🚀 Trilha A — Metodologias Semânticas Avançadas e Análise do Espaço Vetorial
+Dependencies use work-package IDs. Horizons are sequencing bands rather than calendar promises:
 
-Ampliação metodológica da representação latente do corpus para extrair padrões conceituais além do mapa t-SNE 2D padrão.
+- **Short term:** data reliability and methodological foundations.
+- **Medium term:** statistical hardening and dashboard consolidation.
+- **Long term:** new external data and scale-dependent capabilities.
 
-### [x] A.1 Multi-Projeção Dimensional Comparativa (t-SNE vs. UMAP vs. PCA 2D)
-- **Status**: Concluído e integrado ao dashboard (`semantics.py`).
-- **Motivação**: O t-SNE preserva vizinhanças locais bem, mas distorce distâncias globais e não permite projeção paramétrica de novos artigos fora da amostra (`out-of-sample transform`).
-- **Ação**: Implementado em `loaders.py` (`alternative_projections`) e `semantics.py` com seletor interativo dinâmico (t-SNE, PCA 2D, UMAP) e cache zero-copy.
+## 2. Delivered baseline
 
-### [x] A.2 Topologia de Bacias de Pesquisa e Vazios Científicos (KDE 2D)
-- **Status**: Concluído e integrado ao dashboard (`pages/semantics.py`).
-- **Motivação**: Scatter plots sofrem de sobreposição em regiões densas e não quantificam a probabilidade de densidade conceitual.
-- **Ação**: Implementados contornos de densidade bidimensional por Kernel Density Estimation (`go.Histogram2dContour`) sobre o mapa semântico, destacando bacias temáticas consolidadas e vazios conceituais.
+The following capabilities are implemented and covered by the current 212-test suite:
 
-### [x] A.3 Trajetórias Temporais e Deriva Semântica (*Thematic Semantic Drift*)
-- **Status**: Concluído e integrado ao dashboard (`transform/semantics.py`, `pages/semantics.py`).
-- **Motivação**: O mapa estático não revela como as áreas de pesquisa evoluíram conceitualmente ao longo das décadas.
-- **Ação**: Implementado `compute_temporal_drift` calculando o centróide vetorial de cada cluster temático em janelas temporais de 5 anos, traçando trajetórias de velocidade e direção da evolução científica na distribuição de energia.
+- Raw/Bronze/Silver/Gold ingestion and transformations with DOI normalization and rejection audit.
+- Local PDF inventory/matching, full-text extraction, chunk reconciliation, and local BGE embeddings.
+- Binary float32 vectors with JSON compatibility, dense/BM25/RRF retrieval, and optional Faiss indexing.
+- Contrastive screening signals, KMeans themes, PCA/t-SNE/optional UMAP, novelty/isolation, and duplicate candidates.
+- Persistent, reversible cross-DOI `merge`/`keep` decisions applied in Gold.
+- Pipeline-run history and seven Airflow DAGs matching the six stages plus the complete flow.
+- Ten workflow-oriented Streamlit pages with global filters, theme support, and read-only analytical access.
+- Contract-valid Gold-first analytical selection with an explicit Silver/Bronze degraded mode.
+- Source-denominated metadata completeness, PDF-selection-bias effect sizes, and in-memory human-label screening calibration with holdout evaluation.
+- Bibliometric, network, engineering-taxonomy, burst, forecasting, and anomaly functions described in `METHODOLOGY.md`.
 
-### [x] A.4 Métrica de Novidade Semântica e Interdisciplinaridade
-- **Status**: Concluído e integrado ao dashboard (`loaders.py`, `semantics.py`).
-- **Motivação**: Identificar artigos pioneiros que transpõem fronteiras temáticas tradicionais.
-- **Ação**: Implementado cálculo de distância cosseno ao centróide global do corpus e distância média aos 10 vizinhos mais próximos no espaço $\mathbb{R}^{384}$, com painel dedicado de dispersão e ranking dos top 20 artigos singulares/interdisciplinares.
+This baseline does not imply that every analytical method is confirmatory. The limitations and required validation are explicit in `PRD.md`.
 
-### [x] A.5 Agrupamento Semântico de Periódicos e Ontologia de Palavras-Chave
-- **Status**: Concluído (`analytics.py`, `pages/topics.py`).
-- **Motivação**: Revistas e termos são agrupados por strings literais, mascarando sinonímias e afinidades epistemológicas.
-- **Ação**: Implementado `venue_semantic_clusters` projetando periódicos no espaço vetorial a partir da média dos artigos que publicam e agrupando-os por k-means em clusters ontológicos.
+## 3. Short term — trustworthy data and reproducible runs
 
----
+### `WP-01` — Dataset versions and correlated pipeline runs
 
-## 📊 Trilha B — Estatística Rigorosa de Caudas Pesadas e Cienciometria
+- **Status:** Implemented on 2026-09-21; live MySQL and reference-corpus validation pending.
+- **Objective:** Make every result resolve to an immutable input/output version and one parent execution.
+- **Justification:** The former stage records did not identify a shared `all` run, code revision, configuration, or active dataset snapshot.
+- **Dependencies:** None.
+- **Deliverable:** Additive version/run schema; parent and stage IDs; source-manifest/config/code hashes; active/published/failed state; lineage in run metrics.
+- **Completion:** Two unchanged full runs produce the same logical version; a changed file creates a new version; every stage/output can be traced to its parent run.
+- **Evidence:** Deterministic source/config/code/curation fingerprints, parent executions, stage attempts, active/working publication pointers, Airflow correlation, and no-change stage records are covered by SQLite acceptance tests. Completion still requires the MySQL/reference-corpus evidence defined in Section 9.
 
-Superação de estatísticas descritivas ingênuas através de modelos probabilísticos formais adequados aos dados bibliométricos.
+### `WP-02` — Source reconciliation and deletion propagation
 
-### [x] B.1 Modelagem de Caudas Pesadas de Citações (Power-Law vs. Log-Normal)
-- **Status**: Concluído e integrado ao dashboard (`highlights.py`, `analytics.py`).
-- **Motivação**: Citações em literatura científica não seguem distribuições normais; médias aritméticas são inflacionadas por papers outliers.
-- **Ação**: Ajustados modelos de cauda pesada (Power-Law, Log-Normal e Exponencial) via MLE com teste de Kolmogorov-Smirnov.
+- **Status:** Implemented on 2026-09-21; live MySQL and reference-corpus validation pending.
+- **Objective:** Detect input additions, modifications, and removals and propagate them deterministically.
+- **Justification:** Removed files and their records previously survived in Raw and Bronze.
+- **Dependencies:** `WP-01`.
+- **Deliverable:** Immutable source revisions or tombstones, active-snapshot reconciliation, stale Raw/Bronze cleanup, and removal metrics.
+- **Completion:** Golden-corpus tests add, edit, rename, and remove files; downstream rows/counts reconcile exactly and a rollback can reactivate the previous version.
+- **Evidence:** Content-addressed source retention, immutable revisions/manifests, per-file change audit, transactional Raw cleanup, file-qualified Bronze keys, full Bronze rebuild, and exact Gold snapshot reactivation are covered by an end-to-end SQLite golden-corpus mutation test (add, edit, rename, remove, and reactivate). MySQL/reference-corpus evidence remains required for completion.
 
-### [x] B.2 Indicadores de Citação Normalizados por Idade e Campo (*Age-Normalized Metrics*)
-- **Status**: Concluído e integrado ao dashboard (`highlights.py`, `analytics.py`).
-- **Motivação**: Artigos publicados há 15 anos acumulam mais citações brutas do que artigos de 2024, criando viés retrospectivo.
-- **Ação**: Calculada a Taxa Anualizada de Citações e $z$-score por coorte anual de publicação.
+### `WP-03` — Executable data contracts and publication gates
 
-### [x] B.3 Testes Não-Paramétricos de Tendência (Mann-Kendall e Estimador de Sen)
-- **Status**: Concluído e integrado ao dashboard (`topics.py`, `analytics.py`).
-- **Motivação**: A classificação atual de tendências de autores e termos usa limiares empíricos arbitrários ($\pm 0.15$ artigos/ano em OLS linear).
-- **Ação**: Implementado teste de Mann-Kendall ($S, \tau, z, p$) com estimador de inclinação de Sen.
+- **Status:** Implemented on 2026-09-21; live MySQL and reference-corpus validation pending.
+- **Objective:** Turn layer invariants into persisted, blocking quality checks.
+- **Justification:** Warnings and dashboard diagnostics previously did not prevent incomplete derived data from becoming visible.
+- **Dependencies:** `WP-01`, `WP-02`.
+- **Deliverable:** `lit_quality_results`, severity policy, uniqueness/referential/coverage/range checks, stage gate API, and dashboard contract status.
+- **Completion:** Required-check failure keeps the prior version active, records expected versus observed values, and returns a failed pipeline status.
+- **Evidence:** Persisted Raw/Bronze/Silver/Gold/Embed/Semantic contracts block publication in automated tests; candidate Gold tables are isolated until atomic materialization; the existing pipeline page exposes versions, execution lineage, file changes, and gate outcomes. MySQL transaction and BLOB/JSON behavior still require integration evidence.
 
-### [x] B.4 Validação Empírica de Leis Bibliométricas Clássicas
-- **Status**: Concluído e integrado ao dashboard (`topics.py`, `analytics.py`).
-- **Motivação**: Avaliar se o corpus adere aos princípios fundamentais da cienciometria.
-- **Ação**:
-  - **Lei de Lotka**: Modelada produtividade de autores com teste $\chi^2$.
-  - **Lei de Bradford**: Particionamento em zonas concêntricas ($1 : n : n^2$).
-  - **Lei de Zipf**: Implementada em `analytics.py` (`zipf_law_analysis`) e sub-aba dedicada em `topics.py` com gráfico log-log e coeficientes de regressão ($\gamma \approx -1$, $R^2$).
+### `WP-04` — Gold as the canonical analytical population
 
-### [x] B.5 Modelagem Econométrica de Determinantes de Citação (GLM de Contagem)
-- **Status**: Concluído e integrado ao dashboard (`highlights.py`, `analytics.py`).
-- **Motivação**: Compreender quais atributos de um artigo impulsionam seu impacto científico.
-- **Ação**: Ajustado GLM Poisson para citações com cálculo de Incidência de Razão de Taxas (IRR) para referências, ano, número de autores e prestígio.
+- **Status:** Phase-one selector and visible degraded mode delivered; version-bound readiness remains open.
+- **Objective:** Ensure approved duplicate curation is reflected throughout the dashboard.
+- **Justification:** Gold-first selection now protects approved merges, but readiness is not yet tied to an immutable published dataset version or persisted quality-gate result.
+- **Dependencies:** `WP-03`.
+- **Deliverable:** Gold readiness contract; propagation/join of required quality fields; explicit degraded pre-Gold mode; updated loaders and page coverage captions.
+- **Completion:** Dashboard article counts and DOI sets equal the active Gold version; merge/undo changes appear after the documented rebuild sequence; degraded mode is visibly labeled.
 
----
+### `WP-05` — Identity, PDF matching, and rejection validation
 
-## 🕸️ Trilha C — Ciência de Redes e Grafos Complexos de Colaboração
+- **Objective:** Quantify false merges, missed duplicates, PDF mislinks, and the bias introduced by no-DOI rejection.
+- **Justification:** DOI and fuzzy-title rules are high-impact methodological decisions currently tested mainly for mechanics.
+- **Dependencies:** `WP-01`.
+- **Deliverable:** Reviewed stratified audit sets; comparison of `token_sort_ratio` and `token_set_ratio`; precision/recall with confidence intervals; documented threshold; sampled no-DOI disposition.
+- **Completion:** The canonical matcher/scorer is selected from evidence, its threshold is versioned, and errors/ambiguous cases are retained for review.
 
-Análise estrutural da topologia das redes de coautoria e citação.
+### `WP-06` — Embedding and Semantic compatibility contract
 
-### [x] C.1 Detecção de Comunidades de Pesquisa via Algoritmo de Louvain
-- **Status**: Concluído e integrado ao dashboard (`researchers.py`, `analytics.py`).
-- **Motivação**: A rede de coautoria circular atual não revela colégios invisíveis ou grupos cooperativos independentes.
-- **Ação**: Implementado algoritmo de maximização de modularidade de Louvain em `networkx` com coloração por comunidade.
+- **Objective:** Prevent missing, stale, mixed-model, or dimensionally invalid vectors from feeding semantic outputs.
+- **Justification:** Embed selects JSON-null rows while binary is canonical, and Semantic publishes partial coverage after a warning.
+- **Dependencies:** `WP-01`, `WP-03`.
+- **Deliverable:** Text hash, model revision, dimension/dtype checks, binary-first pending logic, JSON fallback migration, semantic-run metadata, and atomic complete-coverage gate.
+- **Completion:** JSON-only, wrong-length, changed-text, mixed-model, and partial-coverage fixtures all fail or repair deterministically; Semantic never replaces a valid complete run with an incomplete one.
 
-### [x] C.2 Bateria Completa de Centralidades Estruturais
-- **Status**: Concluído e integrado ao dashboard (`researchers.py`, `analytics.py`).
-- **Motivação**: O grau simples (número de conexões) não captura pesquisadores que atuam como pontes interdisciplinares.
-- **Ação**: Calculadas Centralidades de Intermediação (*Betweenness*), Centralidade de Autovetor / PageRank e Centralidade de Proximidade (*Closeness*), exibidas na tabela analítica de pesquisadores.
+### `WP-07` — Enrichment observations and temporal semantics
 
-### [x] C.3 Métricas de Topologia de Rede e Índice de Pequeno Mundo (*Small-World*)
-- **Status**: Concluído e integrado ao dashboard (`researchers.py`, `analytics.py`).
-- **Motivação**: Determinar a eficiência de difusão de ideias na comunidade de planejamento de distribuição de energia.
-- **Ação**: Calculados o Coeficiente Médio de Aglomeração ($C$), Comprimento Médio do Caminho Mais Curto ($L$) e o coeficiente de Pequeno Mundo $\sigma = \frac{C / C_{\text{rand}}}{L / L_{\text{rand}}}$, exibido em card de métrica de destaque.
+- **Objective:** Make citation/reference data reproducible and refreshable.
+- **Justification:** The current cache stores only latest counts and cannot support an as-of analysis.
+- **Dependencies:** `WP-01`.
+- **Deliverable:** Provider observations with `observed_at`, status, identifiers, counts, response hash, retry metadata, and deterministic selection of the analysis snapshot.
+- **Completion:** A refresh appends an observation without rewriting history; the same dataset/as-of selection reproduces the same citation inputs.
 
-### [x] C.4 Distância Cognitiva nas Equipes e Impacto Bibliométrico
-- **Status**: Concluído e integrado ao dashboard (`pages/researchers.py`).
-- **Motivação**: Investigar o benefício da diversidade interdisciplinar em publicações de engenharia.
-- **Ação**: Calculada a distância cosseno par a par entre os perfis semânticos históricos dos coautores de cada artigo, avaliando a correlação de Pearson e Spearman com a taxa de citação e scatter plot interativo.
+### `WP-08` — Concurrency, recovery, and operational security
 
----
+- **Objective:** Make mutation predictable under failure and prevent unsafe overlapping runs.
+- **Justification:** There is no pipeline lock; stage retries are absent; telemetry failure can be swallowed; local Airflow admin mode is unsafe on shared networks.
+- **Dependencies:** `WP-01`.
+- **Deliverable:** Project advisory lock, stage retry/timeout matrix, reliable terminal run status, least-privilege database roles, deployment-mode security guidance, and audited trigger identity.
+- **Completion:** Concurrent-run and injected-failure integration tests prove one active writer, safe retry behavior, visible telemetry failure, and unchanged prior published state.
 
-## 🤖 Trilha D — Machine Learning, Active Learning e Modelagem Preditiva
+## 4. Short to medium term — human ground truth
 
-Aplicação de técnicas modernas de aprendizado de máquina para extrair inteligência do corpus.
+### `WP-09` — Persistent dual-review screening workflow
 
-### [x] D.1 Triagem Assistida por Active Learning (*Uncertainty Sampling*)
-- **Status**: Concluído e integrado ao dashboard (`semantics.py`, `transform/screening_calibration.py`).
-- **Motivação**: A triagem manual de centenas de artigos em uma Revisão Sistemática da Literatura (SLR) é custosa.
-- **Ação**: Implementada amostragem por incerteza baseada na margem de relevância ($|\Delta| \approx 0$) com calibração estratificada.
+- **Status:** Deterministic export/import, validation, consensus/adjudication precedence, and agreement reporting delivered in memory; persistence remains open.
+- **Objective:** Calibrate screening against reproducible human judgments.
+- **Justification:** The dashboard now measures agreement from uploaded decisions, but labels, assignments, and adjudication are not durable or dataset-versioned.
+- **Dependencies:** `WP-01`, `WP-04`, `WP-06`.
+- **Deliverable:** Label/adjudication schema, protocol version, deterministic assignments, independent reviewer exports/imports, disagreement queue, and Cohen's kappa/agreement report.
+- **Completion:** Two reviewers can label the same version independently; adjudication preserves raw labels; agreement and class prevalence are reproducible.
 
-### [x] D.2 Modelagem Dinâmica de Tópicos (c-TF-IDF / DTM)
-- **Status**: Concluído e integrado ao dashboard (`topics.py`, `analytics.py`).
-- **Motivação**: O K-Means define clusters estáticos e não modela a evolução semântica do vocabulário dentro de cada tópico através do tempo.
-- **Ação**: Implementado `dynamic_topic_ctfidf` em `analytics.py` e sub-aba dedicada em `topics.py` permitindo acompanhar termos distintivos por tema em épocas temporais históricas.
+### `WP-10` — Screening threshold validation
 
-### [x] D.3 Previsão Probabilística por Regressão Quantílica e Difusão de Bass
-- **Status**: Concluído e integrado ao dashboard (`trends.py`, `forecasting.py`).
-- **Motivação**: A regressão linear gaussiana assume variância residual constante e simétrica, irrealista para contagens de publicações.
-- **Ação**: Implementada Regressão Quantílica (P10, P50 mediana, P90) para intervalos empíricos de confiança e o Modelo de Difusão de Bass para estimar o ciclo de vida e pico de adoção.
+- **Status:** Candidate selection, 70/30 holdout evaluation, support gates, workload metric, and stratified bootstrap intervals delivered for uploaded labels; durable approval and later-batch validation remain open.
+- **Objective:** Select a workload-aware threshold with uncertainty and out-of-sample evidence.
+- **Justification:** Zero contrastive margin is meaningful geometrically but has no guaranteed recall.
+- **Dependencies:** `WP-09`.
+- **Deliverable:** PR analysis, sensitivity/specificity/precision/F2, bootstrap confidence intervals, calibration/validation split, threshold record, and manual-review workload estimate. ROC is intentionally omitted because it duplicates the screening trade-off under class imbalance.
+- **Completion:** The selected threshold meets the approved sensitivity target on validation data or automatic exclusion remains disabled with the failure documented.
 
-### [x] D.4 Detecção de Anomalias Bibliométricas via *Isolation Forest*
-- **Status**: Concluído e integrado ao dashboard (`quality.py`, `analytics.py`).
-- **Motivação**: Identificar metadados inconsistentes, padrões anômalos de citação ou artigos atípicos.
-- **Ação**: Implementado `detect_bibliometric_anomalies` utilizando `sklearn.ensemble.IsolationForest` treinado em características multidimensionais (ano, citações, referências, autores, score de relevância, status de PDF), com geração de justificativas textuais explícitas e aba de auditoria no dashboard.
+### `WP-11` — Author identity audit and overrides
 
----
+- **Objective:** Bound errors from heuristic author canonicalization.
+- **Justification:** Homonyms can merge and spelling variants can split, invalidating rankings and network structure.
+- **Dependencies:** `WP-04`.
+- **Deliverable:** Ambiguity candidate generation, reviewed audit sample, reversible identity overrides, and error-rate disclosure.
+- **Completion:** Person-level panels use the resolved identity version and show unresolved ambiguity coverage; corpus metrics can be recomputed after undo.
 
-## 💾 Trilha E — Engenharia de Dados, Integração Externa e Escalabilidade
+### `WP-12` — Engineering-taxonomy validation
 
-Modernização da infraestrutura de dados e fontes externas.
+- **Objective:** Treat regex extraction as a measured multi-label classifier.
+- **Justification:** Frequency charts currently lack precision/recall evidence and an explicit unknown class.
+- **Dependencies:** `WP-04`.
+- **Deliverable:** Stratified labeled articles, label guide, per-class precision/recall/F1, ambiguous/unclassified reporting, and refined non-overlapping rules where justified.
+- **Completion:** Each displayed taxonomy reports evaluated coverage and meets a declared minimum precision or is labeled exploratory.
 
-### [x] E.1 Enriquecimento Automatizado de Metadados via APIs Públicas (OpenAlex & Crossref)
-- **Status**: Concluído (`ingest/openalex.py`, `bronze_articles.py`).
-- **Motivação**: A base Elsevier dependia de dados bibliográficos com citações parciais.
-- **Ação**: Implementado cliente OpenAlex com resolução de DOIs, normalização de métricas e cache incremental em `data/enrichment_cache.json`.
+### `WP-13` — Retrieval evaluation corpus
 
-### [x] E.2 Indexação Vetorial de Alta Velocidade (FAISS / HNSW)
-- **Status**: Concluído (`search.py`, `data.py`).
-- **Motivação**: A busca vetorial por produto interno em numpy ($O(N)$) atende bem volumes moderados, mas degrada para grandes acervos textuais.
-- **Ação**: Implementados construtor de índice vetorial (`build_vector_index`) e motor de busca acelerado (`search_vector_index`) com suporte nativo a índices Faiss (IndexFlatIP) e fallback vetorizado contínuo.
+- **Objective:** Choose dense, lexical, or hybrid retrieval from measured relevance and latency.
+- **Justification:** RRF is implemented, but no labeled query set supports a quality claim.
+- **Dependencies:** `WP-04`, `WP-06`.
+- **Deliverable:** Versioned technical queries, pooled judgments, abstract/full-text strata, Recall@k, MRR, nDCG, latency, and failure taxonomy.
+- **Completion:** All retrieval modes run on identical judgments; the default is selected by an explicit metric/latency rule and reproduced in tests.
 
-### E.3 Mecanismo Persistente de Resolução e Fusão de Quase-Duplicatas
-- **Motivação**: 18 pares de quase-duplicatas são identificados em `lit_duplicate_pairs`, mas o dashboard é estritamente read-only.
-- **Ação**: Criar CLI ou interface de aprovação para registrar pares validados em tabela de overrides `lit_duplicate_overrides`.
+## 5. Medium term — statistical and model hardening
 
----
+### `WP-14` — Citation distribution inference
 
-## 🔮 Trilha F — Fronteiras Preditivas, Dinâmica Estrutural e Recuperação Avançada
+- **Objective:** Replace descriptive best-KS selection with defensible tail comparison.
+- **Justification:** Current KS p-values reuse fitted data, force `x_min` to the observed minimum, and omit zeros.
+- **Dependencies:** `WP-07`.
+- **Deliverable:** Documented zero handling, `x_min` selection/sensitivity, MLE comparisons, likelihood ratios, bootstrap goodness-of-fit, and uncertainty for parameters.
+- **Completion:** Simulation tests recover known generating families at acceptable rates; the dashboard presents CCDF/diagnostics once without duplicate histograms.
 
-Planos estratégicos e aprofundamentos metodológicos derivados da revisão global de 2026-09-18.
+### `WP-15` — Citation count-model diagnostics
 
-### [x] F.1 Detecção de Rupturas Estruturais e Changepoints Temporais
-- **Status**: Concluído e integrado ao dashboard (`analytics.py`, `pages/topics.py`).
-- **Motivação**: Séries bibliométricas sofrem quebras estruturais induzidas por eventos exógenos (marcos regulatórios, novas normas IEEE, Acordo de Paris 2015). A regressão contínua mascara essas transições de regime.
-- **Ação**: Implementado algoritmo de detecção de pontos de mudança via minimização de SSE e teste F de Chow (`detect_structural_breaks`), identificando transições de regime estatisticamente significantes com visualização gráfica dedicada.
+- **Objective:** Report robust associations without hiding misspecification or selection effects.
+- **Justification:** The current Poisson/NB choice uses a heuristic dispersion rule and lacks multicollinearity, influence, zero-inflation, and sensitivity diagnostics.
+- **Dependencies:** `WP-07`.
+- **Deliverable:** Missingness profile, VIF/condition number, residual/influence checks, Poisson/NB/zero-inflated comparison when identifiable, alternative age specifications, and coefficient forest with CIs.
+- **Completion:** Synthetic/fixture tests cover convergence and known coefficients; unsupported models are rejected; the UI states association rather than causation.
 
-### [x] F.2 Modelagem Preditiva de Contagem com Incerteza Dinâmica
-- **Status**: Concluído (`forecasting.py`).
-- **Motivação**: A regressão linear gaussiana assume variância homocedástica constante ao longo dos horizontes $h \in \{1, 2\}$, desconsiderando que a incerteza estatística se expande com o tempo.
-- **Ação**: Incorporadas bandas de incerteza preditivas com variância expansiva por horizonte temporal ($\text{margin} = 1.96 \cdot \sigma \cdot \sqrt{h}$).
+### `WP-16` — Multiple testing and temporal trend validity
 
-### [x] F.3 Calibração Não-Linear (NLS) da Difusão Tecnológica de Bass
-- **Status**: Concluído e integrado ao dashboard (`forecasting.py`, `pages/forecasting.py`).
-- **Motivação**: A formulação discreta OLS de Bass frequentemente sofre de multicolinearidade entre $Y_{t-1}$ e $Y_{t-1}^2$, gerando parâmetros não-físicos ($\beta_2 > 0$).
-- **Ação**: Implementado `fit_bass_diffusion_nls` ajustando a curva contínua cumulativa diretamente via `scipy.optimize.curve_fit` com restrições de limites de parâmetros ($p, q > 0, m \ge \max(Y)$).
+- **Objective:** Control false discoveries across keyword/topic trend panels.
+- **Justification:** Many Mann-Kendall and breakpoint tests are interpreted independently.
+- **Dependencies:** `WP-04`.
+- **Deliverable:** Test-family definitions, minimum prevalence, Benjamini-Hochberg adjusted values, effect-size thresholds, serial-dependence sensitivity, and exploratory breakpoint correction/bootstrap.
+- **Completion:** Every ranked trend table shows raw effect, uncertainty, adjusted significance, sample span, and zero-filled years.
 
-### [x] F.4 Busca Híbrida Densa-Esparsa com Reciprocal Rank Fusion (BM25 + BGE-Small RRF)
-- **Status**: Concluído e integrado ao dashboard (`search.py`, `pages/quality.py`).
-- **Motivação**: Embeddings densos capturam proximidade semântica ampla, mas falham em acrônimos técnicos exatos ou especificações numéricas de redes (ex.: "IEEE 33-bus", "SOCP", "MILP", "OPF").
-- **Ação**: Implementado BM25 Okapi puro (`bm25_search`) associado a embeddings densos via Reciprocal Rank Fusion (`hybrid_search_rrf`), com seletor interativo no dashboard de Qualidade & RAG.
+### `WP-17` — Semantic stability and projection diagnostics
 
-### [x] F.5 Análise de Atipicidade Conceitual e Impacto Citacional (Uzzi et al., Science 2013)
-- **Status**: Concluído e integrado ao dashboard (`analytics.py`, `pages/topics.py`).
-- **Motivação**: Investigar se combinações conceituais incomuns de palavras-chave e temas produzem probabilidade desproporcional de artigos altamente citados (top 5% do corpus).
-- **Ação**: Implementado `conceptual_atypicality_analysis` computando o score de atipicidade combinatória para pares de palavras-chave contra modelo nulo randomizado, correlacionando com taxa de sucesso em citações no percentil 95.
+- **Objective:** Separate robust high-dimensional structure from unstable 2D presentation.
+- **Justification:** Silhouette-selected KMeans and t-SNE/UMAP views can change with samples and parameters.
+- **Dependencies:** `WP-06`.
+- **Deliverable:** Bootstrap/subsample ARI, cluster-count sensitivity, projection trustworthiness, neighborhood preservation, seed stability, and drift computed in embedding space before visualization.
+- **Completion:** Theme/novelty panels show stability and coverage; unstable labels remain numbered/exploratory rather than receiving fixed ontological names.
 
+### `WP-18` — Forecast and Bass validation
 
+- **Objective:** Quantify whether projections improve on persistence and whether intervals cover future observations.
+- **Justification:** Short annual series can make model selection and conformal bands unstable.
+- **Dependencies:** `WP-07`, `WP-16`.
+- **Deliverable:** Expanding-window backtests by horizon, MAE/MASE or baseline skill, empirical interval coverage/width, dynamic complete-year cutoff, and Bass parameter bootstrap/sensitivity.
+- **Completion:** Forecasts that do not outperform persistence are labeled accordingly; displayed intervals meet the declared backtest coverage tolerance or carry a warning.
+
+### `WP-19` — Network null models and temporal collaboration
+
+- **Objective:** Distinguish structural collaboration evidence from corpus-size artifacts.
+- **Justification:** Static centralities and a single random comparison do not describe network uncertainty or evolution.
+- **Dependencies:** `WP-11`.
+- **Deliverable:** Component-aware metrics, degree-preserving null models, assortativity/robustness checks, and periodized new-versus-repeated collaboration ties.
+- **Completion:** Network claims include identity coverage, component scope, null distribution, and sensitivity to the selected author subset.
+
+## 6. Medium term — dashboard consolidation
+
+### `WP-20` — Analytical inventory and redundancy removal
+
+- **Status:** Overview deep-dive duplication and duplicate quality-richness charts removed; complete dead-controller inventory remains open.
+- **Objective:** Make every visualization answer one unique question.
+- **Justification:** The repository retains inactive helpers and analytical functions for retired pages, while Overview contains deep-dive diagnostics.
+- **Dependencies:** `WP-04`, validity work packages relevant to each method.
+- **Deliverable:** Machine-readable or documented chart inventory with owner/question/population; removal of dead helpers/tests; relocation or deletion of duplicates; Overview reduced to macro state.
+- **Completion:** A review finds one canonical owner per question; no unreachable analytical controller remains; removed methods are not claimed in docs/tests.
+
+### `WP-21` — Integrate validated analyses into existing pages
+
+- **Status:** First Quality and Screening increment delivered; all other page-specific increments remain open.
+- **Objective:** Add knowledge without adding pages or decorative charts.
+- **Justification:** New methods should extend established workflows and preserve navigation stability.
+- **Dependencies:** `WP-10` through `WP-19`, `WP-20`.
+- **Deliverable:**
+  - **Qualidade e RAG:** missingness pattern and PDF-selection-bias diagnostics; retrieval benchmark.
+  - **Triagem e descoberta:** reviewer agreement, threshold validation, cluster/projection stability.
+  - **Impacto e citações:** tail and count-model diagnostics.
+  - **Pesquisadores e colaboração:** identity audit and temporal tie dynamics.
+  - **Evidências de engenharia:** taxonomy validation coverage.
+  - **Tendências e frentes:** baseline skill and interval coverage.
+  - **Pipeline e proveniência:** active version, freshness, quality gates, and removal reconciliation.
+- **Completion:** Each addition references one `RQ-*`, exposes population/coverage/limitations, and has no equivalent view elsewhere.
+
+### `WP-22` — Streamlit performance, behavior, and accessibility
+
+- **Status:** Dynamic heavy tabs and one headless screening-workflow smoke test delivered; application-wide behavior/accessibility coverage remains open.
+- **Objective:** Keep the 10-page app responsive and testable as analytical depth grows.
+- **Justification:** Some pages still compute hidden tab content, and first-party AppTest coverage does not yet span navigation, filters, and all degraded states.
+- **Dependencies:** `WP-20`, `WP-21`.
+- **Deliverable:** Dynamic heavy tabs, bounded caches, stable loading slots, forms for expensive searches, native responsive layout where practical, stable widget keys, Portuguese sentence-case/accessibility review, and `st.testing.v1.AppTest` smoke tests.
+- **Completion:** Navigation/filter/degraded-state tests pass without MySQL; heavy hidden branches do not execute; no deprecated `use_container_width`; measured rerun targets are met on the reference corpus.
+
+## 7. Long term — conditional evidence expansion
+
+### `WP-23` — Reference-year and citation-history ingestion
+
+- **Objective:** Enable valid literature-age and delayed-recognition analyses.
+- **Justification:** Price's index, citation longevity, and Sleeping Beauty metrics cannot be reconstructed from cumulative counts.
+- **Dependencies:** `WP-01`, `WP-07`.
+- **Deliverable:** Governed cited-reference publication years and annual citation trajectories with coverage/provenance.
+- **Completion:** Coverage and validation gates pass; only then may Price, longevity, or Sleeping Beauty panels enter `WP-21` review.
+
+### `WP-24` — Citation graph and verified access data
+
+- **Objective:** Enable disruption and access-association research with the required observables.
+- **Justification:** CD disruption requires forward/backward citation relations; OACA requires verified access status and confounder control.
+- **Dependencies:** `WP-01`, `WP-07`.
+- **Deliverable:** Versioned citation graph; verified access observations; documented sampling/coverage and model protocol.
+- **Completion:** Graph integrity and access-validation audits pass; CD/OACA remain unavailable if coverage or confounding control is inadequate.
+
+### `WP-25` — Scale-triggered storage and compute evolution
+
+- **Objective:** Adopt external vector/search or distributed compute only when the current design misses SLOs.
+- **Justification:** Current corpus size does not justify additional infrastructure.
+- **Dependencies:** Observability from `WP-03` and benchmark from `WP-13`.
+- **Deliverable:** Benchmark report and ADR comparing in-process linear/Faiss search, MySQL storage, and candidate managed systems on latency, recall, cost, recovery, and operations.
+- **Completion:** Migration occurs only if an agreed corpus-size/latency/memory threshold is exceeded and the selected alternative demonstrates a material benefit.
+
+## 8. Cross-cutting completion gates
+
+Every work package that changes data or analytical behavior must include:
+
+- additive migration and rollback/recovery procedure;
+- SQLite unit coverage plus MySQL integration coverage where database semantics matter;
+- fixtures for missing, degenerate, and failure states;
+- documentation updates across PRD/SDD/ROADMAP/METHODOLOGY as applicable;
+- dashboard coverage and Portuguese UI copy when user-visible;
+- `uv run pytest`, `uv run ruff check`, and `uv run ruff format --check` passing;
+- an evidence note containing measured baseline, result, residual risk, and follow-up decision.
+
+## 9. Requirements traceability
+
+| Requirements | Architecture decisions | Delivery packages |
+|---|---|---|
+| `FR-01`, `FR-02`, `NFR-01`, `NFR-02` | `ADR-03` | `WP-01`, `WP-02`, `WP-03` |
+| `FR-03`, `FR-04`, `FR-08`, `NFR-04` | `ADR-02`, `ADR-05` | `WP-04`, `WP-05` |
+| `FR-05`, `FR-06`, `NFR-03` | `ADR-03`, `ADR-04` | `WP-03`, `WP-06` |
+| `FR-07`, `NFR-01`, `NFR-04` | `ADR-03` | `WP-01`, `WP-07`, `WP-08` |
+| `FR-09` | `ADR-05` | `WP-09`, `WP-10` |
+| `FR-10`, `NFR-05` | `ADR-04` | `WP-13`, `WP-25` |
+| `FR-11`, `NFR-06` | `ADR-01`, `ADR-06` | `WP-08`, `WP-22` |
+| `FR-12`, `NFR-07`, `NFR-08` | `ADR-02`, `ADR-06` | `WP-03`, `WP-20`, `WP-21`, `WP-22` |
+| `RQ-04` through `RQ-07` | `ADR-02`, `ADR-04`, `ADR-05` | `WP-11` through `WP-21` |
+| `RQ-08` | `ADR-02`, `ADR-04` | `WP-06`, `WP-13`, `WP-21`, `WP-25` |
+
+## 10. Deferred ideas
+
+The following are intentionally not scheduled until a decision need and evidence contract exist:
+
+- New standalone dashboard pages.
+- Generative summaries presented as research evidence.
+- Causal ranking of venues, authors, or methods.
+- Deep-learning forecasts on short annual series.
+- A remote vector database solely for architectural novelty.
+- Automatic merging or screening without human-reviewed validation.
+
+Deferral prevents complexity from growing faster than the project's capacity to validate and maintain it.
