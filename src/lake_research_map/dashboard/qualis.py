@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import unicodedata
 import warnings
 from pathlib import Path
 
@@ -38,6 +39,17 @@ NOT_CLASSIFIED = "Not classified"
 # Best to worst; unclassified always last. Shared by every chart/table that
 # ranks or orders by classification, so "A1 first" only needs to be defined once.
 ESTRATO_ORDER = ("A1", "A2", "A3", "A4", "B1", "B2", "B3", "B4", "C", NOT_CLASSIFIED)
+
+
+def _normalise_column_name(value: object) -> str:
+    """Return a comparison key for Portuguese/English workbook headers."""
+    text = unicodedata.normalize("NFKD", str(value))
+    text = "".join(char for char in text if not unicodedata.combining(char))
+    return "".join(char for char in text.casefold() if char.isalnum())
+
+
+def _empty_reference() -> pd.DataFrame:
+    return pd.DataFrame(columns=["issn", "titulo", "estrato"])
 
 
 def _cache_path(xlsx_path: Path) -> Path:
@@ -84,11 +96,35 @@ def load_qualis_reference(path=None) -> pd.DataFrame:
             message="Workbook contains no default style, apply openpyxl's default",
             category=UserWarning,
         )
-        df = pd.read_excel(xlsx_path, sheet_name="RelatorioQualis")
-    df.columns = [c.strip() for c in df.columns]
-    df["Área de Avaliação"] = df["Área de Avaliação"].astype(str).str.strip()
-    df = df[df["Área de Avaliação"] == QUALIS_AREA]
-    reference = df.rename(columns={"ISSN": "issn", "Título": "titulo", "Estrato": "estrato"})[
+        try:
+            df = pd.read_excel(xlsx_path, sheet_name="RelatorioQualis")
+        except ValueError:
+            # CAPES has published the same report with both `RelatorioQualis`
+            # and `Relatorio Qualis` sheet names. The first sheet is the safest
+            # fallback for future exports with another harmless spelling.
+            df = pd.read_excel(xlsx_path, sheet_name=0)
+
+    # The checked-in/reference download is already scoped to the relevant area
+    # and therefore has no `Área de Avaliação` column. Newer full exports do
+    # include it, so filter only when that optional column is present.
+    column_map = {_normalise_column_name(column): column for column in df.columns}
+    area_column = column_map.get("areadeavaliacao")
+    if area_column is not None:
+        df = df[df[area_column].astype(str).str.strip() == QUALIS_AREA]
+
+    required = {
+        "issn": column_map.get("issn"),
+        "titulo": column_map.get("titulo"),
+        "estrato": column_map.get("estrato"),
+    }
+    if any(column is None for column in required.values()):
+        logger.warning(
+            "load_qualis_reference: workbook %s is missing required columns; found %s",
+            xlsx_path,
+            list(df.columns),
+        )
+        return _empty_reference()
+    reference = df.rename(columns={source: target for target, source in required.items()})[
         ["issn", "titulo", "estrato"]
     ].reset_index(drop=True)
 

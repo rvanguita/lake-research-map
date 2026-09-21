@@ -1,6 +1,6 @@
 import pandas as pd
 
-from lake_research_map.dashboard.qualis import match_venues_to_qualis
+from lake_research_map.dashboard.qualis import load_qualis_reference, match_venues_to_qualis
 
 
 def _qualis_df() -> pd.DataFrame:
@@ -54,3 +54,44 @@ def test_match_venues_to_qualis_empty_reference_returns_unclassified():
     empty_ref = pd.DataFrame(columns=["titulo", "estrato"])
     result = match_venues_to_qualis(["Renewable Energy"], empty_ref)
     assert result.iloc[0]["estrato"] is None
+
+
+def test_load_qualis_reference_accepts_prefiltered_export_without_area_column(
+    tmp_path, monkeypatch
+):
+    workbook = tmp_path / "capes.xlsx"
+    workbook.touch()
+    source = pd.DataFrame([{"ISSN": "1234-5678", "Título": "Renewable Energy", "Estrato": "A1"}])
+    monkeypatch.setattr("pandas.read_excel", lambda *args, **kwargs: source)
+
+    result = load_qualis_reference(workbook)
+
+    assert result.to_dict("records") == [
+        {"issn": "1234-5678", "titulo": "Renewable Energy", "estrato": "A1"}
+    ]
+
+
+def test_load_qualis_reference_filters_full_export_by_area(tmp_path, monkeypatch):
+    workbook = tmp_path / "capes.xlsx"
+    workbook.touch()
+    source = pd.DataFrame(
+        [
+            {
+                "ISSN": "1234-5678",
+                "Título": "Renewable Energy",
+                "Estrato": "A1",
+                "Área de Avaliação": "ENGENHARIAS IV",
+            },
+            {
+                "ISSN": "9876-5432",
+                "Título": "Other Journal",
+                "Estrato": "B4",
+                "Área de Avaliação": "MEDICINA II",
+            },
+        ]
+    )
+    monkeypatch.setattr("pandas.read_excel", lambda *args, **kwargs: source)
+
+    result = load_qualis_reference(workbook)
+
+    assert result["issn"].tolist() == ["1234-5678"]
