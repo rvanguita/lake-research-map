@@ -9,6 +9,7 @@ picks up just the new chunks, and running it twice in a row is a no-op.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 
 import numpy as np
@@ -21,7 +22,11 @@ from lake_research_map.db.gold_models import Chunk
 # longer inputs automatically -- consistent with the 1500-char chunking cap
 # in gold_articles.py, which already keeps chunks close to that context size.
 EMBED_MODEL_NAME = "BAAI/bge-small-en-v1.5"
-EMBED_BATCH_SIZE = 256
+# Keep the default deliberately conservative: embedding is CPU and memory
+# intensive, and a killed terminal must not lose an entire in-memory batch.
+# Operators can increase these values for a larger machine.
+EMBED_BATCH_SIZE = max(1, int(os.environ.get("LAKE_RESEARCH_MAP_EMBED_BATCH_SIZE", "64")))
+EMBED_THREADS = max(1, int(os.environ.get("LAKE_RESEARCH_MAP_EMBED_THREADS", "2")))
 
 ProgressCallback = Callable[[int, int], None]
 
@@ -45,7 +50,7 @@ def build_embeddings(gold_session: Session, on_progress: ProgressCallback | None
     # cost or trigger a model-file check for stages that never call this.
     from fastembed import TextEmbedding
 
-    model = TextEmbedding(model_name=EMBED_MODEL_NAME)
+    model = TextEmbedding(model_name=EMBED_MODEL_NAME, threads=EMBED_THREADS)
 
     embedded = 0
     total_pending = len(pending_ids)
@@ -67,6 +72,13 @@ def build_embeddings(gold_session: Session, on_progress: ProgressCallback | None
         embedded += len(ordered_chunks)
         if on_progress:
             on_progress(embedded, total_pending)
+
+        # Make every completed batch restartable.  This is intentionally a
+        # commit (rather than only a flush): a SIGHUP, terminal closure, or
+        # host interruption should leave completed vectors available to the
+        # next invocation instead of forcing the model to start over.
+        gold_session.commit()
+        gold_session.expunge_all()
 
     return {
         "embedded": embedded,

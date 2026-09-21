@@ -20,6 +20,7 @@ import argparse
 import contextlib
 import logging
 import os
+import signal
 import sys
 import uuid
 from datetime import UTC, datetime
@@ -68,6 +69,25 @@ PIPELINE_LOG_ENV = "LAKE_RESEARCH_MAP_LOG"
 
 class PipelineBusyError(RuntimeError):
     """Raised when another process already owns the medallion pipeline lock."""
+
+
+class PipelineInterruptedError(RuntimeError):
+    """Raised for terminal/process signals so stage failure is persisted."""
+
+
+def _install_signal_handlers() -> None:
+    """Turn normal terminal shutdown signals into a recorded pipeline error."""
+
+    def _handle(signum, _frame):
+        name = signal.Signals(signum).name
+        raise PipelineInterruptedError(
+            f"pipeline interrupted by {name}; completed embedding batches are resumable"
+        )
+
+    for name in ("SIGINT", "SIGTERM", "SIGHUP"):
+        signum = getattr(signal, name, None)
+        if signum is not None:
+            signal.signal(signum, _handle)
 
 
 def _configure_logging() -> None:
@@ -936,6 +956,8 @@ def _run_version_command(args: argparse.Namespace) -> None:
 def main(argv: list[str] | None = None) -> None:
     invoked_as_cli = argv is None
     _configure_logging()
+    if invoked_as_cli:
+        _install_signal_handlers()
     parser = argparse.ArgumentParser(description="lake-research-map medallion pipeline")
     parser.add_argument("--stage", choices=STAGES, default="all", help="pipeline stage to run")
     parser.add_argument(
