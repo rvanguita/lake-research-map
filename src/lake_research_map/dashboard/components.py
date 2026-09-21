@@ -458,6 +458,7 @@ def render_chart(
     caption: str | None = None,
     height: int | None = None,
     margin: dict | None = None,
+    key: str | None = None,
 ) -> None:
     """Apply the shared light/dark theme, render the figure, add its caption.
 
@@ -472,7 +473,7 @@ def render_chart(
     """
     polish_figure_layout(fig, height=height, margin=margin)
     _warn_unnamed_axes(fig)
-    st.plotly_chart(fig, theme=None, width="stretch")
+    st.plotly_chart(fig, theme=None, width="stretch", key=key)
     if caption:
         st.caption(caption)
 

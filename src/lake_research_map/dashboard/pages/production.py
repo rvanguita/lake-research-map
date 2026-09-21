@@ -96,8 +96,8 @@ def _volume_by_year(articles_df: pd.DataFrame) -> None:
     render_chart(
         fig,
         caption="Stacked bars show the contribution of each source; the Total line sums both.",
+        key="production_annual_source_volume",
     )
-    _volume_by_year_category(years_df)
 
 
 def _volume_by_year_category(years_df: pd.DataFrame) -> None:
@@ -124,6 +124,7 @@ def _volume_by_year_category(years_df: pd.DataFrame) -> None:
     render_chart(
         fig,
         caption="Bars separate Articles, Conference, Review, and Other; the Total line reconciles all four types.",
+        key="production_annual_category_volume",
     )
 
 
@@ -185,6 +186,7 @@ def _volume_by_year_qualis(articles_df: pd.DataFrame) -> None:
         fig,
         caption=f"Includes only venues classified A1 through B2 in CAPES/Qualis (area {QUALIS_AREA}, "
         "2017–2020 cycle); B3 or lower and unclassified venues are excluded.",
+        key="production_qualis_volume",
     )
 
 
@@ -207,6 +209,7 @@ def _cumulative_production(articles_df: pd.DataFrame) -> None:
             fig,
             caption=f"At the end of the period, the corpus contains {int(cum['total'].iloc[-1]):,} articles "
             f"({int(cum['ieee'].iloc[-1]):,} IEEE, {int(cum['elsevier'].iloc[-1]):,} Elsevier).",
+            key="production_cumulative_source_volume",
         )
 
     scope_label = (
@@ -253,4 +256,5 @@ def _cumulative_production(articles_df: pd.DataFrame) -> None:
             fig,
             caption=f"Top {TOP_VENUES_CUMULATIVE} venues in the selected scope; all remaining venues "
             f"are grouped as '{OTHERS_LABEL}'.",
+            key="production_cumulative_venue_composition",
         )
