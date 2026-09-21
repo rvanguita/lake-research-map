@@ -15,10 +15,10 @@ import unicodedata
 import numpy as np
 import pandas as pd
 
-OTHERS_LABEL = "Outros"
+OTHERS_LABEL = "Others"
 
-# Shared "recent activity" window used by both the Visão Geral and
-# Pesquisadores pages, so "recent" means the same thing (last 5 publication
+# Shared "recent activity" window used by both the Overview and
+# Researchers pages, so "recent" means the same thing (last 5 publication
 # years, inclusive of the latest) everywhere it's shown.
 RECENT_WINDOW_YEARS = 5
 
@@ -637,7 +637,7 @@ def author_productivity_trend(matrix: pd.DataFrame, top_n: int) -> pd.DataFrame:
     Fits `count ~ year` with `numpy.polyfit` (degree 1) per author, over that
     author's own active years only (a career that ended in 2015 shouldn't be
     scored against years it has no data for). Classifies the slope as
-    "crescendo" / "estável" / "caindo" against a small fixed threshold (0.15
+    "growing" / "stable" / "falling" against a small fixed threshold (0.15
     articles/year) rather than a significance test -- most authors here have
     under 15 active years, too short a series for a p-value to be meaningful
     (the same reasoning `forecasting.py` uses to prefer plain regression over
@@ -671,7 +671,7 @@ def author_productivity_trend(matrix: pd.DataFrame, top_n: int) -> pd.DataFrame:
                     "last_year": first_year,
                     "active_years": len(active),
                     "slope": 0.0,
-                    "trend": "dados insuficientes",
+                    "trend": "insufficient data",
                 }
             )
             continue
@@ -684,11 +684,11 @@ def author_productivity_trend(matrix: pd.DataFrame, top_n: int) -> pd.DataFrame:
         full_counts = [active_map.get(y, 0) for y in full_years]
         slope = float(_linear_slope(full_years, full_counts))
         if slope > 0.15:
-            trend = "crescendo"
+            trend = "growing"
         elif slope < -0.15:
-            trend = "caindo"
+            trend = "falling"
         else:
-            trend = "estável"
+            trend = "stable"
         rows.append(
             {
                 "author": row["author"],
@@ -853,10 +853,7 @@ def age_normalized_citations(df: pd.DataFrame, current_year: int = 2026) -> pd.D
 
 
 def mann_kendall_trend(series: np.ndarray | pd.Series) -> dict[str, float | str]:
-    """Compute Mann-Kendall non-parametric monotonic trend test and Sen's slope.
-
-    Returns trend direction ('crescendo', 'estável', 'caindo'), p-value, S statistic, and slope.
-    """
+    """Returns trend direction ('growing', 'stable', 'falling'), p-value, S statistic, and slope."""
     from scipy import stats
 
     y = np.asarray(series, dtype=float)
@@ -864,7 +861,7 @@ def mann_kendall_trend(series: np.ndarray | pd.Series) -> dict[str, float | str]
     n = len(y)
     if n < 4:
         return {
-            "trend": "estável",
+            "trend": "stable",
             "p_value": 1.0,
             "s": 0.0,
             "slope": 0.0,
@@ -899,7 +896,7 @@ def mann_kendall_trend(series: np.ndarray | pd.Series) -> dict[str, float | str]
     elif p_value < 0.05 and sen_slope < 0:
         trend = "caindo"
     else:
-        trend = "estável"
+        trend = "stable"
 
     return {
         "trend": trend,
@@ -1254,7 +1251,7 @@ def citation_determinants_glm(df: pd.DataFrame, *, observation_year: int = 2026)
             "n_total": len(df),
             "n_used": 0,
             "coverage": 0.0,
-            "warning": "Campos necessários ausentes.",
+            "warning": "Absence of required fields.",
         }
 
     valid = df.copy()
@@ -1286,7 +1283,7 @@ def citation_determinants_glm(df: pd.DataFrame, *, observation_year: int = 2026)
             "n_total": n_total,
             "n_used": n_used,
             "coverage": coverage,
-            "warning": "Menos de 20 observações completas.",
+            "warning": "Less than 20 complete observations.",
         }
 
     numeric = valid[["references", "team_size"]].astype(float)
@@ -1312,7 +1309,7 @@ def citation_determinants_glm(df: pd.DataFrame, *, observation_year: int = 2026)
             "n_total": n_total,
             "n_used": n_used,
             "coverage": coverage,
-            "warning": "Os preditores não variam neste recorte.",
+            "warning": "The predictors do not vary in this cut.",
         }
     design = add_constant(design, has_constant="add")
     response = valid["citations"].astype(float)
@@ -1356,7 +1353,9 @@ def citation_determinants_glm(df: pd.DataFrame, *, observation_year: int = 2026)
             "n_used": n_used,
             "coverage": coverage,
             "warning": (
-                "Preditores sem variação foram omitidos: " + ", ".join(omitted) if omitted else None
+                "Predictors without variation were omitted:" + ", ".join(omitted)
+                if omitted
+                else None
             ),
         }
     except (ValueError, np.linalg.LinAlgError):
@@ -1368,7 +1367,7 @@ def citation_determinants_glm(df: pd.DataFrame, *, observation_year: int = 2026)
             "n_total": n_total,
             "n_used": n_used,
             "coverage": coverage,
-            "warning": "O modelo não convergiu para este recorte.",
+            "warning": "The model did not converge to this cut.",
         }
 
 
@@ -1497,11 +1496,11 @@ def zipf_law_analysis(df: pd.DataFrame) -> dict:
 
     top_df = pd.DataFrame(
         {
-            "Posto (r)": ranks[:30].astype(int),
-            "Termo": words[:30],
-            "Frequência Real (f)": freqs[:30].astype(int),
-            "Previsto Zipf Ideal": expected_ideal[:30].round(1),
-            "Ajuste Empírico": (10 ** pred[:30]).round(1),
+            "Rank (r)": ranks[:30].astype(int),
+            "Term": words[:30],
+            "Real Frequency (f)": freqs[:30].astype(int),
+            "Ideal Zipf forecast": expected_ideal[:30].round(1),
+            "Empirical Adjustment": (10 ** pred[:30]).round(1),
         }
     )
 
@@ -1598,10 +1597,10 @@ def dynamic_topic_ctfidf(
                 theme_res[th] = top_kws
                 summary_rows.append(
                     {
-                        "Época": epoch_name,
-                        "Tema": th,
-                        "Termos Característicos (c-TF-IDF)": ", ".join(top_kws),
-                        "Artigos": int((sub["theme_label"] == th).sum()),
+                        "Time": epoch_name,
+                        "Theme": th,
+                        "Characteristic Terms (c-TF-IDF)": ", ".join(top_kws),
+                        "Articles": int((sub["theme_label"] == th).sum()),
                     }
                 )
 
@@ -1685,21 +1684,21 @@ def detect_bibliometric_anomalies(df: pd.DataFrame, contamination: float = 0.03)
 
         for i in range(len(res)):
             if preds[i] != -1:
-                reasons.append("Padrão Típico / Consistente")
+                reasons.append("Typical / Consistent Pattern")
                 continue
             r_list = []
             if cites[i] >= cite_p95 and years[i] >= 2018:
-                r_list.append(f"Hiper-citado recente ({int(cites[i])} citações)")
+                r_list.append(f"Recently hyper-cited ({int(cites[i])} citations)")
             elif cites[i] >= cite_p95:
-                r_list.append(f"Citação extrema ({int(cites[i])} citações)")
+                r_list.append(f"Extreme citation count ({int(cites[i])} citations)")
             if author_counts[i] >= author_p98 and author_counts[i] >= 10:
-                r_list.append(f"Mega-equipe ({int(author_counts[i])} autores)")
+                r_list.append(f"Mega-team ({int(author_counts[i])} authors)")
             if years[i] < 1990:
-                r_list.append(f"Artigo histórico ({int(years[i])})")
+                r_list.append(f"Historical article ({int(years[i])})")
             if rel[i] < 0.25:
-                r_list.append(f"Margem semântica divergente ({rel[i]:.2f})")
+                r_list.append(f"Divergent semantic margin ({rel[i]:.2f})")
             if not r_list:
-                r_list.append("Atipicidade multidimensional conjunta")
+                r_list.append("Joint multidimensional atypicality")
             reasons.append("; ".join(r_list))
 
         res["anomaly_reason"] = reasons
@@ -1810,13 +1809,13 @@ def callon_strategic_diagram(
     def _quadrant(r):
         c, d = r["centrality_centered"], r["density_centered"]
         if c >= 0 and d >= 0:
-            return "Q1: Temas Motores (Motor)"
+            return "Q1: Motor themes"
         elif c < 0 and d >= 0:
-            return "Q2: Temas Especializados / Nicho"
+            return "Q2: Specialized / niche themes"
         elif c < 0 and d < 0:
-            return "Q3: Temas Emergentes ou Marginais"
+            return "Q3: Emerging or marginal themes"
         else:
-            return "Q4: Temas Básicos / Transversais"
+            return "Q4: Basic / Transversal Themes"
 
     res_df["quadrant"] = res_df.apply(_quadrant, axis=1)
 
@@ -1988,13 +1987,10 @@ def thematic_centroids_similarity(
 
 
 def thematic_radar_metrics(df: pd.DataFrame) -> pd.DataFrame:
-    """Compute 5 standardized dimensions (0-100) per theme for radar chart visualization:
+    """Compute five standardized 0–100 dimensions per theme.
 
-    1. Momentum Recente (% docs >= 2021)
-    2. Densidade Teórica (média de referências por artigo)
-    3. Impacto Citatório (média de citações)
-    4. Aderência Temática (margem de relevância média)
-    5. Tamanho de Equipe (média de autores por artigo)
+    The dimensions are recent momentum (documents since 2021), theoretical
+    density, citation impact, thematic alignment, and team size.
     """
     if df.empty or "theme_label" not in df.columns:
         return pd.DataFrame()
@@ -2040,11 +2036,11 @@ def multivariate_correlation_matrix(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
 
     numeric_cols = {
-        "Ano": "year",
-        "Citações": "citation_count",
-        "Referências": "reference_count",
-        "Score Relevância": "relevance_score",
-        "Margem Relevância": "relevance_margin",
+        "Year": "year",
+        "Citations": "citation_count",
+        "References": "reference_count",
+        "Relevance Score": "relevance_score",
+        "Relevance Margin": "relevance_margin",
     }
     corr_df = pd.DataFrame()
     for label, col in numeric_cols.items():
@@ -2054,14 +2050,14 @@ def multivariate_correlation_matrix(df: pd.DataFrame) -> pd.DataFrame:
             corr_df[label] = 0.0
 
     if "abstract" in df.columns:
-        corr_df["Tam. Abstract (carac.)"] = df["abstract"].fillna("").astype(str).apply(len)
+        corr_df["Abstract length (chars)"] = df["abstract"].fillna("").astype(str).apply(len)
     else:
-        corr_df["Tam. Abstract (carac.)"] = 0
+        corr_df["Abstract length (chars)"] = 0
 
     if "authors" in df.columns:
-        corr_df["Nº Autores"] = df["authors"].apply(lambda a: len(a) if isinstance(a, list) else 1)
+        corr_df["Authors"] = df["authors"].apply(lambda a: len(a) if isinstance(a, list) else 1)
     else:
-        corr_df["Nº Autores"] = 1
+        corr_df["Authors"] = 1
 
     corr = corr_df.corr(method="spearman").round(3)
     # Fill diagonal with 1.0 and off-diagonal NaNs with 0.0 for zero-variance attributes
@@ -2185,19 +2181,19 @@ def optimization_methods_taxonomy(df: pd.DataFrame) -> dict:
         return {"summary_df": pd.DataFrame(), "temporal_df": pd.DataFrame()}
 
     opt_patterns = {
-        "Otimização Multi-Objetivo": re.compile(r"multi-objective|pareto"),
-        "Algoritmos Genéticos (GA)": re.compile(r"genetic algorithm|\bga\b"),
-        "Otimização por Enxame (PSO)": re.compile(r"particle swarm|\bpso\b"),
-        "Prog. Linear Inteira Mista (MILP)": re.compile(r"milp|mixed-integer linear"),
-        "Aprendizado de Máquina & IA": re.compile(
+        "Multi-objective Optimization": re.compile(r"multi-objective|pareto"),
+        "Genetic Algorithms (GA)": re.compile(r"genetic algorithm|\bga\b"),
+        "Particle Swarm Optimization (PSO)": re.compile(r"particle swarm|\bpso\b"),
+        "Mixed-Integer Linear Programming (MILP)": re.compile(r"milp|mixed-integer linear"),
+        "Machine Learning & AI": re.compile(
             r"machine learning|deep learning|reinforcement learning|neural network"
         ),
-        "Meta-heurísticas Diversas": re.compile(
+        "Other Metaheuristics": re.compile(
             r"differential evolution|harmony search|simulated annealing|ant colony"
         ),
-        "Prog. Estocástica": re.compile(r"stochastic programming|scenario-based"),
-        "Otimização Robusta": re.compile(r"robust optimization|robust approach"),
-        "Relaxação Cônica / Convexa (SOCP)": re.compile(
+        "Stochastic Programming": re.compile(r"stochastic programming|scenario-based"),
+        "Robust Optimization": re.compile(r"robust optimization|robust approach"),
+        "Conical / Convex Relaxation (SOCP)": re.compile(
             r"second-order cone|conic|convex relaxation|socp"
         ),
     }
@@ -2252,22 +2248,22 @@ def benchmark_feeders_analysis(df: pd.DataFrame) -> dict:
         return {"feeders_df": pd.DataFrame(), "cross_matrix": pd.DataFrame()}
 
     feeder_patterns = {
-        "IEEE 33-Bus (Radial Padrão)": re.compile(r"33-bus|ieee 33|33 bus|33-node"),
+        "IEEE 33-Bus (standard radial)": re.compile(r"33-bus|ieee 33|33 bus|33-node"),
         "IEEE 69-Bus": re.compile(r"69-bus|ieee 69|69 bus|69-node"),
-        "Redes Reais de Concessionárias": re.compile(
+        "Real Utility Networks": re.compile(
             r"real distribution|real-world|practical distribution|actual distribution|utility network"
         ),
-        "Sistemas Regionais (Brasil / Europa)": re.compile(
+        "Regional Systems (Brazil / Europe)": re.compile(
             r"brazilian|european|california|uk distribution|nordic"
         ),
         "IEEE 123-Bus / 119-Bus": re.compile(r"123-bus|ieee 123|119-bus|ieee 119"),
     }
 
     resource_patterns = {
-        "Geração Solar (PV)": re.compile(r"photovoltaic|\bpv\b|solar"),
-        "Armazenamento / Baterias": re.compile(r"energy storage|battery|bess"),
-        "Veículos Elétricos (EV)": re.compile(r"electric vehicle|\bev\b|v2g|charging"),
-        "Reconfiguração de Redes": re.compile(r"reconfiguration|switching|switch"),
+        "Solar Generation (PV)": re.compile(r"photovoltaic|\bpv\b|solar"),
+        "Storage / Batteries": re.compile(r"energy storage|battery|bess"),
+        "Electric Vehicles (EV)": re.compile(r"electric vehicle|\bev\b|v2g|charging"),
+        "Network reconfiguration": re.compile(r"reconfiguration|switching|switch"),
     }
 
     if "_cached_titles_abs" not in df.columns:
@@ -2530,22 +2526,7 @@ def citation_longevity_and_decay(df: pd.DataFrame) -> dict:
 
 
 def objective_functions_taxonomy(df: pd.DataFrame) -> dict:
-    """Analyze mathematical objective functions and multi-criteria formulations.
-
-    Mapeia os critérios e objetivos otimizados na literatura:
-    - Custos Econômicos (CAPEX/OPEX de ativos)
-    - Confiabilidade & Índices de Interrupção (SAIDI/SAIFI/ENS)
-    - Perdas Técnicas de Energia (I^2R)
-    - Perfil de Tensão & Estabilidade
-    - Emissões & Descarbonização (CO2)
-    - Resiliência a Eventos Extremos (Blackouts/Clima)
-
-    Calcula:
-    - summary_df: [objective, articles, pct_recent, mean_citations]
-    - co_matrix: DataFrame simétrico de co-ocorrência dos objetivos
-    - multi_obj_ratio: percentual de artigos com >= 2 objetivos
-    - temporal_multiobj: série temporal de artigos mono-objetivo vs. multi-objetivo
-    """
+    """Analyze optimized objectives and multi-criteria formulations."""
     if df.empty:
         return {
             "summary_df": pd.DataFrame(),
@@ -2555,12 +2536,12 @@ def objective_functions_taxonomy(df: pd.DataFrame) -> dict:
         }
 
     objs = {
-        "Custos Econômicos": r"cost|capex|opex|investment|economic|capital expenditure",
-        "Confiabilidade (SAIDI/SAIFI/ENS)": r"reliability|saidi|saifi|ens|energy not supplied|interruption|outage|unserved",
-        "Perdas Técnicas": r"power loss|energy loss|technical loss|transmission loss|loss reduction",
-        "Perfil de Tensão": r"voltage profile|voltage deviation|voltage stability|power quality|voltage drop|voltage regulation",
-        "Descarbonização / Emissões": r"emission|carbon|decarboniz|greenhouse|environmental|co2",
-        "Resiliência": r"resilience|extreme weather|disaster|blackout|hardening|restoration",
+        "Economic Costs": r"cost|capex|opex|investment|economic|capital expenditure",
+        "Reliability (SAIDI/SAIFI/ENS)": r"reliability|saidi|saifi|ens|energy not supplied|interruption|outage|unserved",
+        "Technical losses": r"power loss|energy loss|technical loss|transmission loss|loss reduction",
+        "Voltage Profile": r"voltage profile|voltage deviation|voltage stability|power quality|voltage drop|voltage regulation",
+        "Decarbonization / Emissions": r"emission|carbon|decarboniz|greenhouse|environmental|co2",
+        "Resilience": r"resilience|extreme weather|disaster|blackout|hardening|restoration",
     }
 
     titles_abs = (
@@ -2632,15 +2613,7 @@ def objective_functions_taxonomy(df: pd.DataFrame) -> dict:
 
 
 def uncertainty_paradigms_analysis(df: pd.DataFrame) -> dict:
-    """Analyze mathematical paradigms for handling uncertainty in distribution systems.
-
-    - Programação Estocástica (Monte Carlo / Cenários)
-    - Otimização Robusta (Min-Max / Uncertainty Sets)
-    - Lógica Nebulosa (Fuzzy)
-    - Restrições Probabilísticas (Chance-Constrained)
-    - Otimização Distribucionalmente Robusta (DRO / Wasserstein)
-    - Abordagem Determinística
-    """
+    """Analyze mathematical paradigms for handling uncertainty in distribution systems."""
     if df.empty:
         return {
             "paradigms_df": pd.DataFrame(),
@@ -2649,19 +2622,19 @@ def uncertainty_paradigms_analysis(df: pd.DataFrame) -> dict:
         }
 
     paradigms = {
-        "Estocástico (Cenários / Monte Carlo)": r"stochastic|scenario-based|monte carlo|sample average",
-        "Otimização Robusta (Min-Max)": r"robust optimization|robust approach|uncertainty set|worst-case",
-        "Lógica Nebulosa (Fuzzy)": r"fuzzy",
-        "Distribucionalmente Robusta (DRO)": r"distributionally robust|wasserstein|ambiguity set",
-        "Restrição de Chance (Probabilística)": r"chance-constrained|chance constraint|probabilistic constraint",
-        "Determinístico (Caso Fixo)": r"deterministic",
+        "Stochastic (Scenarios / Monte Carlo)": r"stochastic|scenario-based|monte carlo|sample average",
+        "Robust Optimization (Min-Max)": r"robust optimization|robust approach|uncertainty set|worst-case",
+        "Fuzzy Logic": r"fuzzy",
+        "Distributionally Robust Optimization (DRO)": r"distributionally robust|wasserstein|ambiguity set",
+        "Chance Constraint (Probabilistic)": r"chance-constrained|chance constraint|probabilistic constraint",
+        "Deterministic (Fixed Case)": r"deterministic",
     }
 
     resources = {
-        "Geração Solar (PV)": r"photovoltaic|\bpv\b|solar",
-        "Baterias / Armazenamento (BESS)": r"energy storage|battery|bess",
-        "Veículos Elétricos (EV)": r"electric vehicle|\bev\b|v2g|charging",
-        "Incerteza de Demanda / Carga": r"load uncertainty|demand uncertainty|forecast error|load variation",
+        "Solar Generation (PV)": r"photovoltaic|\bpv\b|solar",
+        "Batteries / Storage (BESS)": r"energy storage|battery|bess",
+        "Electric Vehicles (EV)": r"electric vehicle|\bev\b|v2g|charging",
+        "Demand / Load Uncertainty": r"load uncertainty|demand uncertainty|forecast error|load variation",
     }
 
     titles_abs = (
@@ -2724,9 +2697,9 @@ def planning_time_horizons_analysis(df: pd.DataFrame) -> dict:
         return {"horizons_df": pd.DataFrame()}
 
     horizons = {
-        "Expansão Dinâmica Multi-Estágio": r"multi-stage|multistage|multi-year|sequential expansion|expansion planning|dynamic planning",
-        "Co-Otimização Planejamento + Operação": r"co-optimi|planning and operation|representative days|representative periods|operational constraints|chronological",
-        "Planejamento Estático (Ano-Alvo)": r"static planning|single-stage|target year|snapshot",
+        "Multistage Dynamic Expansion": r"multi-stage|multistage|multi-year|sequential expansion|expansion planning|dynamic planning",
+        "Co-Optimization Planning + Operation": r"co-optimi|planning and operation|representative days|representative periods|operational constraints|chronological",
+        "Static Planning (Target Year)": r"static planning|single-stage|target year|snapshot",
     }
 
     titles_abs = (
@@ -2763,14 +2736,14 @@ def computational_solvers_analysis(df: pd.DataFrame) -> dict:
         return {"solvers_df": pd.DataFrame(), "ecosystem_df": pd.DataFrame()}
 
     solvers = {
-        "GAMS / AMPL (Modeladores Algébricos)": (r"gams|ampl", "Modelador Algébrico"),
-        "MATLAB / Simulink": (r"matlab|simulink", "Scripting & Simulação"),
-        "CPLEX (IBM)": (r"cplex", "Solver Exato Comercial"),
-        "DIgSILENT PowerFactory": (r"digsilent|powerfactory", "Simulador Elétrico Especializado"),
-        "Gurobi Optimizer": (r"gurobi", "Solver Exato Comercial"),
-        "OpenDSS (EPRI)": (r"opendss|open dss", "Simulador de Distribuição"),
-        "Python (Pyomo / Pandapower)": (r"python|pyomo|pandapower", "Scripting & Open-Source"),
-        "PSCAD / EMTP": (r"pscad|emtp", "Simulador de Transitórios"),
+        "GAMS / AMPL (Algebraic Modelers)": (r"gams|ampl", "Algebraic Modeler"),
+        "MATLAB / Simulink": (r"matlab|simulink", "Scripting & Simulation"),
+        "CPLEX (IBM)": (r"cplex", "Commercial Exact Solver"),
+        "DIgSILENT PowerFactory": (r"digsilent|powerfactory", "Specialized Electric Simulator"),
+        "Gurobi Optimizer": (r"gurobi", "Commercial Exact Solver"),
+        "OpenDSS (EPRI)": (r"opendss|open dss", "Distribution Simulator"),
+        "Python (Pyomo / Pandapower)": (r"python|pyomo|pandapower", "Scripting & Open Source"),
+        "PSCAD / EMTP": (r"pscad|emtp", "Transient Simulator"),
     }
 
     titles_abs = (
@@ -2818,11 +2791,11 @@ def mathematical_complexity_spectrum(df: pd.DataFrame) -> dict:
         return {"spectrum_df": pd.DataFrame(), "temporal_spectrum": pd.DataFrame()}
 
     classes = {
-        "Prog. Linear / MILP (Exato)": r"milp|mixed-integer linear|\blp\b|linear programming",
-        "Relaxação Convexa / Cônica (SOCP/SDP)": r"second-order cone|socp|semidefinite|convex relaxation|conic",
-        "Prog. Não-Linear (NLP / MINLP)": r"minlp|mixed-integer nonlinear|nonlinear programming|\bnlp\b|non-convex",
-        "Meta-heurísticas (GA, PSO, DE, ACO)": r"genetic algorithm|particle swarm|\bpso\b|\bga\b|differential evolution|ant colony|harmony search|simulated annealing",
-        "IA & Aprendizado por Reforço": r"machine learning|deep learning|reinforcement learning|neural network|q-learning",
+        "Linear Programming / MILP (Exact)": r"milp|mixed-integer linear|\blp\b|linear programming",
+        "Convex / Conical Relaxation (SOCP/SDP)": r"second-order cone|socp|semidefinite|convex relaxation|conic",
+        "Non-Linear Prog (NLP / MINLP)": r"minlp|mixed-integer nonlinear|nonlinear programming|\bnlp\b|non-convex",
+        "Metaheuristics (GA, PSO, DE, ACO)": r"genetic algorithm|particle swarm|\bpso\b|\bga\b|differential evolution|ant colony|harmony search|simulated annealing",
+        "AI & Reinforcement Learning": r"machine learning|deep learning|reinforcement learning|neural network|q-learning",
     }
 
     titles_abs = (
@@ -3089,7 +3062,7 @@ def sleeping_beauties_detection(df: pd.DataFrame, min_age: int = 7) -> dict:
         pub = int(r["pub_year"])
         tot_c = float(r["cites"])
         lag = int(r["awakening_lag"])
-        title_val = str(r.get("title") or "Artigo")
+        title_val = str(r.get("title") or "Article")
         short_title = (title_val[:38] + "...") if len(title_val) > 40 else title_val
 
         for yr in range(pub, current_year + 1):
@@ -3105,7 +3078,7 @@ def sleeping_beauties_detection(df: pd.DataFrame, min_age: int = 7) -> dict:
                     "paper": short_title,
                     "year": yr,
                     "cum_citations": round(cum, 1),
-                    "phase": "Dormência" if elapsed <= lag else "Despertar",
+                    "phase": "Dormancy" if elapsed <= lag else "Awakening",
                 }
             )
 
@@ -3261,7 +3234,7 @@ def open_access_impact_analysis(df: pd.DataFrame) -> dict:
         res["is_oa"] = res["doi"].apply(lambda d: hash(str(d)) % 5 == 0)
 
     res["access_type"] = res["is_oa"].map(
-        {True: "Acesso Aberto (OA)", False: "Acesso Fechado / Assinatura"}
+        {True: "Open Access (OA)", False: "Closed Access / Subscription"}
     )
 
     oa_share = float((res["is_oa"].sum() / len(res)) * 100) if len(res) > 0 else 0.0
@@ -3275,20 +3248,22 @@ def open_access_impact_analysis(df: pd.DataFrame) -> dict:
 
     comp_rows = [
         {
-            "Modalidade de Acesso": "Acesso Aberto (OA)",
-            "Artigos": int(len(oa_stats)),
-            "Citações Médias": round(mean_oa, 1),
-            "Mediana Citações": round(float(oa_stats.median()) if len(oa_stats) > 0 else 0.0, 1),
-            "Percentil 75": round(float(oa_stats.quantile(0.75)) if len(oa_stats) > 0 else 0.0, 1),
+            "Access mode": "Open Access (OA)",
+            "Articles": int(len(oa_stats)),
+            "Average citations": round(mean_oa, 1),
+            "Median citations": round(float(oa_stats.median()) if len(oa_stats) > 0 else 0.0, 1),
+            "75th percentile": round(
+                float(oa_stats.quantile(0.75)) if len(oa_stats) > 0 else 0.0, 1
+            ),
         },
         {
-            "Modalidade de Acesso": "Acesso Fechado (Paywall)",
-            "Artigos": int(len(closed_stats)),
-            "Citações Médias": round(mean_closed, 1),
-            "Mediana Citações": round(
+            "Access mode": "Closed Access (Paywall)",
+            "Articles": int(len(closed_stats)),
+            "Average citations": round(mean_closed, 1),
+            "Median citations": round(
                 float(closed_stats.median()) if len(closed_stats) > 0 else 0.0, 1
             ),
-            "Percentil 75": round(
+            "75th percentile": round(
                 float(closed_stats.quantile(0.75)) if len(closed_stats) > 0 else 0.0, 1
             ),
         },
@@ -3323,13 +3298,11 @@ def open_access_impact_analysis(df: pd.DataFrame) -> dict:
 
     # License distribution
     if "license" in res.columns:
-        lic_s = (
-            res["license"].fillna("Não especificado / Fechado").value_counts().head(8).reset_index()
-        )
-        lic_s.columns = ["Licença", "Quantidade"]
+        lic_s = res["license"].fillna("Not specified / Closed").value_counts().head(8).reset_index()
+        lic_s.columns = ["License", "Quantity"]
     else:
         lic_s = pd.DataFrame(
-            {"Licença": ["Fechado", "Aberto"], "Quantidade": [len(closed_stats), len(oa_stats)]}
+            {"License": ["Closed", "Open"], "Quantity": [len(closed_stats), len(oa_stats)]}
         )
 
     return {
@@ -3457,22 +3430,22 @@ def technological_burst_detection(
             is_active = end_index == len(states) - 1
             burst_rows.append(
                 {
-                    "Tecnologia / Conceito": label,
-                    "Início do Burst": int(all_years[index]),
-                    "Ano de Pico": int(all_years[peak_index]),
-                    "Fim do Burst": int(all_years[end_index]),
-                    "Duração (Anos)": int(end_index - index + 1),
-                    "Intensidade": round(float(max(strength, 0.0)), 2),
-                    "Status": "Ativo" if is_active else "Encerrado",
-                    "Artigos": int(interval_counts.sum()),
+                    "Technology / Concept": label,
+                    "Burst's Beginning": int(all_years[index]),
+                    "Peak year": int(all_years[peak_index]),
+                    "Burst end": int(all_years[end_index]),
+                    "Duration (Years)": int(end_index - index + 1),
+                    "Intensity": round(float(max(strength, 0.0)), 2),
+                    "Status": "Active" if is_active else "Ended",
+                    "Articles": int(interval_counts.sum()),
                 }
             )
             index = end_index + 1
 
     burst_df = pd.DataFrame(burst_rows)
     if not burst_df.empty:
-        burst_df = burst_df.sort_values("Intensidade", ascending=False).head(top_n)
-        active_df = burst_df[burst_df["Status"] == "Ativo"].copy()
+        burst_df = burst_df.sort_values("Intensity", ascending=False).head(top_n)
+        active_df = burst_df[burst_df["Status"] == "Active"].copy()
     else:
         active_df = pd.DataFrame()
 
@@ -3637,15 +3610,15 @@ def conceptual_atypicality_analysis(df: pd.DataFrame, top_n_keywords: int = 50) 
         if z < 0:
             pair_rows.append(
                 {
-                    "Termo 1": k1,
-                    "Termo 2": k2,
-                    "Coocorrência Real": count,
-                    "Esperada": round(expected, 1),
-                    "Z-Score (Atipicidade)": round(z, 2),
+                    "Term 1": k1,
+                    "Term 2": k2,
+                    "Real Co-occurrence": count,
+                    "Expected": round(expected, 1),
+                    "Z-score (atypicality)": round(z, 2),
                 }
             )
 
-    pair_rows.sort(key=lambda x: x["Z-Score (Atipicidade)"])
+    pair_rows.sort(key=lambda x: x["Z-score (atypicality)"])
     atypical_pairs_df = pd.DataFrame(pair_rows).head(20)
 
     # Score each article
@@ -3753,10 +3726,10 @@ def venue_semantic_clusters(
     kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10).fit(X)
 
     cluster_labels = {
-        0: "Redes Elétricas & Operação",
-        1: "Transição Energética & Renováveis",
-        2: "Sistemas Computacionais & IA",
-        3: "Engenharia de Potência & Confiabilidade",
+        0: "Electric Networks & Operation",
+        1: "Energy Transition & Renewables",
+        2: "Computational Systems & AI",
+        3: "Power Engineering & Reliability",
     }
 
     rows = []

@@ -107,10 +107,10 @@ def test_stacked_area_keeps_the_express_defaults_when_no_title_is_given() -> Non
 
 def test_lorenz_chart_names_both_axes_without_being_asked() -> None:
     curve = pd.DataFrame({"share_of_authors": [0.0, 0.5, 1.0], "share_of_output": [0.0, 0.2, 1.0]})
-    fig = lorenz_chart({"total": curve}, entity_label="periódicos")
+    fig = lorenz_chart({"total": curve}, entity_label="journals")
     assert _axis_titles(fig) == (
-        "Parcela acumulada de periódicos",
-        "Parcela acumulada de artigos",
+        "Cumulative share of journals",
+        "Cumulative share of articles",
     )
 
 
@@ -133,8 +133,8 @@ def test_warn_unnamed_axes_heatmaps_fallback(caplog) -> None:
     with caplog.at_level("WARNING"):
         _warn_unnamed_axes(fig)
     assert not any("chart axis without a title" in r.message for r in caplog.records)
-    assert fig.layout.xaxis.title.text == "Dimensão X"
-    assert fig.layout.yaxis.title.text == "Dimensão Y"
+    assert fig.layout.xaxis.title.text == "Dimension X"
+    assert fig.layout.yaxis.title.text == "Dimension Y"
 
 
 def test_metric_row_accepts_both_2_and_3_tuples() -> None:

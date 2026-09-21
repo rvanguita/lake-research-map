@@ -24,6 +24,7 @@ def _gold_frame() -> pd.DataFrame:
             "reference_count": [10, 12],
             "has_pdf": [True, False],
             "is_non_article": [False, False],
+            "publication_category": ["journal", "journal"],
         }
     )
 

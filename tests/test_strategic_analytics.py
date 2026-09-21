@@ -185,9 +185,9 @@ def test_multivariate_correlation_matrix():
 
     assert not corr.empty
     assert corr.shape[0] == corr.shape[1]
-    assert "Ano" in corr.columns
-    assert "Citações" in corr.columns
-    assert "Score Relevância" in corr.columns
+    assert "Year" in corr.columns
+    assert "Citations" in corr.columns
+    assert "Relevance Score" in corr.columns
 
     # Diagonals must be 1.0
     for i in range(len(corr)):

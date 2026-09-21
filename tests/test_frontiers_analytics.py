@@ -154,8 +154,8 @@ def test_technological_burst_detection() -> None:
     assert "burst_timeline" in res
     assert "total_bursts" in res
     assert res["total_bursts"] >= 1
-    assert "Tecnologia / Conceito" in res["burst_timeline"].columns
-    assert "Início do Burst" in res["burst_timeline"].columns
+    assert "Technology / Concept" in res["burst_timeline"].columns
+    assert "Burst's Beginning" in res["burst_timeline"].columns
 
     # Test empty dataframe
     empty_res = technological_burst_detection(pd.DataFrame())

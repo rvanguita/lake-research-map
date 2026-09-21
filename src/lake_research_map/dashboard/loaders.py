@@ -104,6 +104,7 @@ def filter_signature() -> tuple:
         tuple(st.session_state.get("global_sources", ())),
         tuple(st.session_state.get("global_venues", ())),
         st.session_state.get("global_min_margin"),
+        tuple(st.session_state.get("global_publication_categories", ())),
     )
 
 
@@ -277,6 +278,7 @@ def filter_articles(
     sources: tuple[str, ...] = (),
     venues: tuple[str, ...] = (),
     min_margin: float | None = None,
+    publication_categories: tuple[str, ...] = (),
 ) -> pd.DataFrame:
     """Apply the dashboard-wide filters to the best article layer.
 
@@ -313,6 +315,8 @@ def filter_articles(
         filtered = filtered[filtered["source"].isin(sources)]
     if venues and "venue" in filtered.columns:
         filtered = filtered[filtered["venue"].isin(venues)]
+    if publication_categories and "publication_category" in filtered.columns:
+        filtered = filtered[filtered["publication_category"].isin(publication_categories)]
     return filtered.reset_index(drop=True)
 
 
@@ -397,7 +401,7 @@ def keyword_forecasts(min_occurrences: int = 20):
                 "keyword": keyword,
                 "2025 (real)": observed,
                 f"{final_year} (previsto)": forecast,
-                "variação": forecast - observed,
+                "variation": forecast - observed,
                 "modelo": result.chosen_model,
             }
         )
@@ -427,23 +431,23 @@ def require_articles() -> pd.DataFrame:
     _, all_articles = articles()
     if all_articles.empty:
         st.warning(
-            "Nenhum dado encontrado nas camadas `lit_bronze`, `lit_silver` ou `lit_gold` ainda.\n\n"
-            "Execute o pipeline (botões na barra lateral ou "
-            "`uv run lake-research-map --stage all`) e recarregue esta página."
+            "No data found in the `lit_bronze`, `lit_silver`, or `lit_gold` layers yet.\n\n"
+            "Perform the pipeline (handbar or sidebar buttons)"
+            "`uv run lake-research-map --stage all`) and reload this page."
         )
         st.stop()
     status = article_population_status()
     if not status["is_canonical"]:
         reasons = " ".join(status["fallback_reasons"])
         st.warning(
-            f"Modo degradado: análises baseadas na camada `{status['layer']}`, não na população "
+            f"Degraded mode: analyses use the `{status['layer']}` layer instead of the curated "
             f"curada Gold. {reasons}"
         )
     _, df = filtered_articles()
     if df.empty:
         st.warning(
-            "Nenhum artigo corresponde aos filtros globais. "
-            "Amplie o ano, a fonte ou o periódico na barra lateral."
+            "No article corresponds to global filters."
+            "Expand the year, the source or the journal in the sidebar."
         )
         st.stop()
     return df

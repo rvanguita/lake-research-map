@@ -1,13 +1,13 @@
 """CAPES/Qualis journal-classification lookup for the corpus's venues.
 
 The reference data (`config.CAPES_QUALIS_XLSX`) is the official CAPES export for the
-2017-2020 quadriênio -- the last journal-level Qualis grading (CAPES moves to an
+2017–2020 evaluation cycle — the last journal-level Qualis grading (CAPES moves to an
 article-level evaluation for 2025-2028). A journal's stratum is evaluation-area
 specific; this corpus is electric-power/distribution-planning, so it's matched
-against `ENGENHARIAS IV` only -- a different área can grade the same journal
+against `ENGENHARIAS IV` only — a different evaluation area can grade the same journal
 differently.
 
-Venue strings in the corpus don't match the reference títulos exactly (e.g. this
+Venue strings in the corpus do not exactly match the reference titles (e.g. this
 corpus has "Renewable and Sustainable Energy Reviews", the reference has "RENEWABLE
 & SUSTAINABLE ENERGY REVIEWS"; ScienceDirect/IEEE Xplore titles also carry "(Print)"/
 "(Online)" suffixes the reference sometimes does and sometimes doesn't), so venues are
@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 QUALIS_AREA = "ENGENHARIAS IV"
 MATCH_THRESHOLD = 85.0
 
-NOT_CLASSIFIED = "Não classificado"
+NOT_CLASSIFIED = "Not classified"
 
 # Best to worst; unclassified always last. Shared by every chart/table that
 # ranks or orders by classification, so "A1 first" only needs to be defined once.
@@ -106,7 +106,7 @@ def load_qualis_reference(path=None) -> pd.DataFrame:
 def match_venues_to_qualis(
     venues: list[str], qualis_df: pd.DataFrame, threshold: float = MATCH_THRESHOLD
 ) -> pd.DataFrame:
-    """Fuzzy-match each distinct venue to a Qualis título, or leave it unclassified.
+    """Fuzzy-match each distinct venue to a Qualis title, or leave it unclassified.
 
     Pure function (no file I/O) -- `qualis_df` must have a `titulo` column (as
     returned by `load_qualis_reference`) and, when matched, an `estrato` column.

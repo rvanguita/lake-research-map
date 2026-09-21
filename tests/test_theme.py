@@ -14,36 +14,14 @@ from pathlib import Path
 
 import pandas as pd
 import plotly.express as px
-import pytest
 import streamlit as st
 
 from lake_research_map.dashboard.theme import (
     _DARK_TOKENS,
-    _LIGHT_TOKENS,
-    _THEME_STATE_KEY,
     CHART_PAPER_BG,
+    _active_theme_type,
     polish_figure_layout,
 )
-
-
-@pytest.fixture
-def theme_mode():
-    """Switch the dashboard's dark/light mode for one test, then restore it.
-
-    `st.session_state` works outside `streamlit run` (it only warns), which is
-    what lets the theme be exercised without a running app.
-    """
-    original = st.session_state.get(_THEME_STATE_KEY)
-
-    def _set(mode: str) -> None:
-        st.session_state[_THEME_STATE_KEY] = mode
-
-    yield _set
-
-    if original is None:
-        del st.session_state[_THEME_STATE_KEY]
-    else:
-        st.session_state[_THEME_STATE_KEY] = original
 
 
 def _polished_layout() -> dict:
@@ -52,8 +30,7 @@ def _polished_layout() -> dict:
     return fig.to_dict()["layout"]
 
 
-def test_background_lands_on_the_figure_not_only_the_template(theme_mode) -> None:
-    theme_mode("dark")
+def test_background_lands_on_the_figure_not_only_the_template() -> None:
     layout = _polished_layout()
     # Straight off the figure: `layout["template"]` having the color is exactly
     # the case Streamlit ignores.
@@ -61,26 +38,17 @@ def test_background_lands_on_the_figure_not_only_the_template(theme_mode) -> Non
     assert layout["plot_bgcolor"] == CHART_PAPER_BG
 
 
-def test_figure_font_follows_the_dashboard_theme(theme_mode) -> None:
-    theme_mode("dark")
+def test_figure_font_uses_the_fixed_dark_theme() -> None:
     assert _polished_layout()["font"]["color"] == _DARK_TOKENS["chart_text"]
-    theme_mode("light")
-    assert _polished_layout()["font"]["color"] == _LIGHT_TOKENS["chart_text"]
+    assert _active_theme_type() == "dark"
 
 
-def test_hover_box_keeps_a_solid_themed_fill(theme_mode) -> None:
+def test_hover_box_keeps_a_solid_themed_fill() -> None:
     # With a transparent canvas, an unnamed hoverlabel background resolves to a
     # transparent box -- unreadable, most visibly on the `hovermode="x unified"`
     # charts.
-    theme_mode("light")
     template = _polished_layout()["template"]
-    assert template["layout"]["hoverlabel"]["bgcolor"] == _LIGHT_TOKENS["chart_bg"]
-
-
-def test_both_themes_define_the_same_tokens() -> None:
-    # A token added to one dict only is a color that silently comes out wrong
-    # in the other theme.
-    assert set(_DARK_TOKENS) == set(_LIGHT_TOKENS)
+    assert template["layout"]["hoverlabel"]["bgcolor"] == _DARK_TOKENS["chart_bg"]
 
 
 def test_polish_figure_layout_custom_margin() -> None:
@@ -112,14 +80,14 @@ def test_page_header_accepts_two_and_three_args(monkeypatch) -> None:
     monkeypatch.setattr(st, "caption", lambda text: recorded.append(("caption", text)))
 
     # 3-arg call
-    page_header("🏷️", "Tópicos", "Descrição longa")
-    assert recorded[-2] == ("title", "Tópicos")
-    assert recorded[-1] == ("caption", "Descrição longa")
+    page_header("🏷️", "Topics", "Long description")
+    assert recorded[-2] == ("title", "Topics")
+    assert recorded[-1] == ("caption", "Long description")
 
     # 2-arg call
-    page_header("🏷️ Tópicos", "Descrição longa")
-    assert recorded[-2] == ("title", "🏷️ Tópicos")
-    assert recorded[-1] == ("caption", "Descrição longa")
+    page_header("🏷️ Topics", "Long description")
+    assert recorded[-2] == ("title", "🏷️ Topics")
+    assert recorded[-1] == ("caption", "Long description")
 
 
 def test_all_dashboard_pages_importable_and_render_callable() -> None:

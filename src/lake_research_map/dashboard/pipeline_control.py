@@ -10,12 +10,12 @@ from __future__ import annotations
 from lake_research_map.dashboard import airflow_client
 
 STAGE_LABELS = {
-    "raw": "Dados Brutos (Raw)",
+    "raw": "Gross Data (Raw)",
     "bronze": "Bronze (Padronizado)",
     "silver": "Silver (Limpo e Deduplicado)",
     "gold": "Gold (RAG)",
     "embed": "Embeddings (RAG)",
-    "semantic": "Semântica (Relevância e Temas)",
+    "semantic": "Semantics (Relevance and Themes)",
     "all": "Todas as Etapas",
 }
 
