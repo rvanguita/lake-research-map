@@ -340,6 +340,22 @@ def semantic_contract(session: Session, version_id: str) -> list[CheckResult]:
     ]
 
 
+def publication_contract(session: Session, version_id: str) -> list[CheckResult]:
+    """Return the blocking contracts required before Gold materialization.
+
+    The pipeline records stage-specific results before calling the publisher,
+    but `materialize_version()` is also a public service boundary used by the
+    CLI reactivation command and recovery tooling. Re-evaluating the candidate
+    here prevents a caller from bypassing the publication gate by invoking the
+    materializer directly.
+    """
+    return [
+        *gold_contract(session, version_id),
+        *embed_contract(session, version_id),
+        *semantic_contract(session, version_id),
+    ]
+
+
 def persist_results(
     session: Session,
     *,

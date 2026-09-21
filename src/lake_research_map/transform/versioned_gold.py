@@ -372,9 +372,12 @@ def adopt_legacy_publication(session: Session) -> str | None:
 
 def materialize_version(session: Session, version_id: str, execution_id: str) -> None:
     """Atomically replace live Gold projections with a validated snapshot."""
+    from lake_research_map.quality import assert_contract, publication_contract
+
     version = session.get(DatasetVersion, version_id)
     if version is None:
         raise ValueError(f"unknown dataset version {version_id}")
+    assert_contract("publication", publication_contract(session, version_id))
     articles = session.scalars(
         select(DatasetArticle).where(DatasetArticle.dataset_version_id == version_id)
     ).all()
