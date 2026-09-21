@@ -4,7 +4,7 @@
 
 **Evidence cutoff:** 2026-09-21
 
-**Implementation baseline:** the active 2026-09-21 Gold audit contains 3,115 articles and 7,552 chunks; the application has 10 registered dashboard pages and 229 automated tests.
+**Implementation baseline:** the active 2026-09-21 Gold version `2974743a…` contains 3,115 articles and 7,552 chunks, all carrying complete embedding metadata; the application has 10 registered dashboard pages and 229 automated tests.
 
 **Related documents:** [SDD.md](SDD.md), [ROADMAP.md](ROADMAP.md), [METHODOLOGY.md](METHODOLOGY.md)
 

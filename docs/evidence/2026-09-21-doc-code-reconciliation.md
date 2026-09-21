@@ -137,6 +137,11 @@ and the legacy embedding transform is binary-first.
 | JSON vector mirrors written by the new run | **0** |
 | Retrieval after the binary-only reader | 7,552 chunks load in 2.27 s; hybrid RRF 1.80 s, component scores intact |
 | Stability panel cost | 6.2 s cold and cached, down from 62 s uncached per render |
+| Published version | `2974743a…` replaced `31a2270b…`; 3,115 articles, 7,552 chunks, 3,115 semantic rows |
+| Embedding metadata on the active version | **7,552 of 7,552** carry all seven fields (was 0 of 7,552) |
+| JSON mirrors on the active version | **0 of 7,552** (was 7,552 of 7,552) |
+| `gold.lit_semantic_runs` | **1 row** (was 0) |
+| Persisted quality checks | **30, zero failures** — including `embed.text_hash`, which was absent from the previous version's 29 |
 
 Analytical values now surfaced that were previously computed and discarded, or not computed at all:
 citation tail α 2.11 over 577 tail articles selected by AIC; GLM condition number 3.0, 11 influential
@@ -154,7 +159,10 @@ trustworthiness 0.96 with bootstrap ARI mean 0.73 and a worst resample of **0.39
   stay unreconstructible and Price's index remains unavailable even after a credentialed refresh.
 - `WP-08` role provisioning: `db/roles.py` works but is reachable only as `python -m`, not a CLI
   subcommand, and needs four `MYSQL_*` passwords absent from `.env`.
-- `WP-15`: no zero-inflated model is fitted; family choice is still the dispersion > 1.5 heuristic.
+- `WP-15`: no zero-inflated model is fitted; family choice is still the dispersion > 1.5 heuristic. The
+  observed zero-inflation gap on the active corpus is +9.8%, so this is not a hypothetical concern.
+- `WP-17`: the stability figures are computed on demand and cached for five minutes, not persisted to a
+  table, so they are not part of the published version's evidence.
 - `WP-18`: every backtest fold is one-step, so the two-year horizon remains unvalidated; no MASE; the
   Bass fit discards its covariance.
 - `WP-22`: 7 `st.tabs` call sites remain ungated, `pages/researchers.py:161` being the expensive one.
