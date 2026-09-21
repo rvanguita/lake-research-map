@@ -15,6 +15,8 @@ import unicodedata
 import numpy as np
 import pandas as pd
 
+from lake_research_map.transform.publication_categories import PUBLICATION_CATEGORIES
+
 OTHERS_LABEL = "Others"
 
 # Shared "recent activity" window used by both the Overview and
@@ -230,6 +232,47 @@ def source_counts_by(df: pd.DataFrame, index_col: str) -> pd.DataFrame:
 
     pivot["total"] = df.groupby(index_col).size().reindex(pivot.index, fill_value=0)
     return pivot.reset_index().rename(columns={"index": index_col})
+
+
+def publication_category_totals(df: pd.DataFrame) -> pd.Series:
+    """Return mutually exclusive publication-category totals in stable order.
+
+    Unknown or missing values are treated as ``other`` so the displayed
+    category cards always reconcile to the corpus total.
+    """
+    counts = pd.Series(0, index=PUBLICATION_CATEGORIES, dtype="int64")
+    if df.empty:
+        return counts
+    values = df.get("publication_category", pd.Series(index=df.index, dtype="object"))
+    normalized = values.where(values.isin(PUBLICATION_CATEGORIES), "other").fillna("other")
+    return counts.add(normalized.value_counts().reindex(PUBLICATION_CATEGORIES, fill_value=0))
+
+
+def publication_category_counts_by_year(df: pd.DataFrame) -> pd.DataFrame:
+    """Count publication categories by valid year, including a reconciled total."""
+    columns = ["year", *PUBLICATION_CATEGORIES, "total"]
+    if df.empty or "year" not in df.columns:
+        return pd.DataFrame(columns=columns)
+
+    working = df.copy()
+    working["year"] = valid_years(working)
+    working = working.dropna(subset=["year"]).copy()
+    if working.empty:
+        return pd.DataFrame(columns=columns)
+    working["year"] = working["year"].astype(int)
+    values = working.get("publication_category", pd.Series(index=working.index, dtype="object"))
+    working["publication_category"] = values.where(
+        values.isin(PUBLICATION_CATEGORIES), "other"
+    ).fillna("other")
+    grouped = (
+        working.groupby(["year", "publication_category"], observed=True)
+        .size()
+        .unstack(fill_value=0)
+        .reindex(columns=PUBLICATION_CATEGORIES, fill_value=0)
+        .sort_index()
+    )
+    grouped["total"] = grouped[list(PUBLICATION_CATEGORIES)].sum(axis=1)
+    return grouped.reset_index()[columns]
 
 
 def cumulative_by_source(df: pd.DataFrame) -> pd.DataFrame:
