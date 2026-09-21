@@ -37,5 +37,5 @@ def load_pdf_inventory(session) -> int:
             existing.size_bytes = stat.st_size
             written += 1
 
-    session.commit()
+    session.flush()
     return written

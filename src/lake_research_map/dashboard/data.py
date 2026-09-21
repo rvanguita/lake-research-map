@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 
 import pandas as pd
-from sqlalchemy import MetaData, Table, inspect, select, text
+from sqlalchemy import MetaData, Table, and_, exists, inspect, or_, select, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from lake_research_map.db.engines import get_engine
@@ -28,8 +28,31 @@ LAYER_TABLES = {
     ],
     "bronze": ["lit_articles"],
     "silver": ["lit_articles"],
-    "gold": ["lit_articles", "lit_chunks", "lit_semantics", "lit_duplicate_pairs"],
+    "gold": [
+        "lit_articles",
+        "lit_chunks",
+        "lit_semantics",
+        "lit_duplicate_pairs",
+        "lit_duplicate_overrides",
+    ],
 }
+
+GOLD_ANALYTICAL_COLUMNS = frozenset(
+    {
+        "doi",
+        "sources",
+        "title",
+        "authors",
+        "year",
+        "venue",
+        "keywords",
+        "abstract",
+        "citation_count",
+        "reference_count",
+        "has_pdf",
+        "is_non_article",
+    }
+)
 
 
 def table_exists(layer: str, table: str) -> bool:
@@ -80,13 +103,66 @@ def load_search_configs() -> pd.DataFrame:
     return pd.read_sql_table("lit_config", engine)
 
 
-def pick_best_articles_layer() -> tuple[str, pd.DataFrame]:
-    """Prefer silver (cleanest + quality flags), then bronze, then gold."""
-    for layer in ("silver", "bronze", "gold"):
+def assess_gold_articles(df: pd.DataFrame) -> tuple[str, ...]:
+    """Return reasons why a Gold frame is not safe as the analytical population."""
+    if df.empty:
+        return ("A camada Gold está vazia ou indisponível.",)
+
+    reasons: list[str] = []
+    missing_columns = sorted(GOLD_ANALYTICAL_COLUMNS.difference(df.columns))
+    if missing_columns:
+        reasons.append("Gold não possui campos obrigatórios: " + ", ".join(missing_columns))
+    if "doi" in df.columns:
+        dois = df["doi"].fillna("").astype(str).str.strip().str.lower()
+        if dois.eq("").any():
+            reasons.append("Gold contém DOI vazio.")
+        if dois[dois.ne("")].duplicated().any():
+            reasons.append("Gold contém DOI duplicado.")
+    return tuple(reasons)
+
+
+def select_articles_layer() -> tuple[str, pd.DataFrame, dict[str, object]]:
+    """Select Gold when its minimum contract passes, otherwise degrade explicitly."""
+    gold_df = load_articles("gold")
+    gold_issues = assess_gold_articles(gold_df)
+    if not gold_issues:
+        return (
+            "gold",
+            gold_df,
+            {
+                "layer": "gold",
+                "is_canonical": True,
+                "fallback_reasons": (),
+            },
+        )
+
+    for layer in ("silver", "bronze"):
         df = load_articles(layer)
         if not df.empty:
-            return layer, df
-    return "none", pd.DataFrame()
+            return (
+                layer,
+                df,
+                {
+                    "layer": layer,
+                    "is_canonical": False,
+                    "fallback_reasons": gold_issues,
+                },
+            )
+    return (
+        "none",
+        pd.DataFrame(),
+        {
+            "layer": "none",
+            "is_canonical": False,
+            "fallback_reasons": gold_issues,
+        },
+    )
+
+
+def pick_best_articles_layer() -> tuple[str, pd.DataFrame]:
+    """Backward-compatible wrapper around the canonical layer selector."""
+    layer, df, _ = select_articles_layer()
+    return layer, df
 
 
 def load_articles_all_layers() -> dict[str, pd.DataFrame]:
@@ -129,10 +205,101 @@ def load_semantics() -> pd.DataFrame:
 
 
 def load_duplicate_pairs() -> pd.DataFrame:
-    """Near-duplicate abstract pairs flagged by `--stage semantic`."""
+    """Unresolved near-duplicate pairs, excluding persistent review decisions."""
     if not table_exists("gold", "lit_duplicate_pairs"):
         return pd.DataFrame()
-    return pd.read_sql_table("lit_duplicate_pairs", get_engine("gold"))
+    engine = get_engine("gold")
+    if not inspect(engine).has_table("lit_duplicate_overrides"):
+        return pd.read_sql_table("lit_duplicate_pairs", engine)
+
+    metadata = MetaData()
+    pairs = Table("lit_duplicate_pairs", metadata, autoload_with=engine)
+    overrides = Table("lit_duplicate_overrides", metadata, autoload_with=engine)
+    reviewed = exists(
+        select(1)
+        .select_from(overrides)
+        .where(
+            or_(
+                and_(
+                    overrides.c.doi_a == pairs.c.doi_a,
+                    overrides.c.doi_b == pairs.c.doi_b,
+                ),
+                and_(
+                    overrides.c.doi_a == pairs.c.doi_b,
+                    overrides.c.doi_b == pairs.c.doi_a,
+                ),
+            )
+        )
+    )
+    return pd.read_sql_query(select(pairs).where(~reviewed), engine)
+
+
+def load_duplicate_overrides() -> pd.DataFrame:
+    """Persistent human decisions for cross-DOI near-duplicate pairs."""
+    if not table_exists("gold", "lit_duplicate_overrides"):
+        return pd.DataFrame()
+    return pd.read_sql_table("lit_duplicate_overrides", get_engine("gold"))
+
+
+def load_pipeline_runs(limit: int = 50) -> pd.DataFrame:
+    """Return recent pipeline audit rows, or an empty frame before bootstrap."""
+    if not table_exists("gold", "lit_pipeline_runs"):
+        return pd.DataFrame()
+    table = Table("lit_pipeline_runs", MetaData(), autoload_with=get_engine("gold"))
+    query = select(table).order_by(table.c.finished_at.desc()).limit(limit)
+    return pd.read_sql_query(query, get_engine("gold"))
+
+
+def load_pipeline_executions(limit: int = 25) -> pd.DataFrame:
+    """Return parent executions that correlate individual stage attempts."""
+    if not table_exists("gold", "lit_pipeline_executions"):
+        return pd.DataFrame()
+    table = Table("lit_pipeline_executions", MetaData(), autoload_with=get_engine("gold"))
+    return pd.read_sql_query(
+        select(table).order_by(table.c.started_at.desc()).limit(limit), get_engine("gold")
+    )
+
+
+def load_dataset_versions(limit: int = 25) -> pd.DataFrame:
+    if not table_exists("gold", "lit_dataset_versions"):
+        return pd.DataFrame()
+    table = Table("lit_dataset_versions", MetaData(), autoload_with=get_engine("gold"))
+    return pd.read_sql_query(
+        select(table).order_by(table.c.created_at.desc()).limit(limit), get_engine("gold")
+    )
+
+
+def load_publication_state() -> pd.DataFrame:
+    if not table_exists("gold", "lit_publication_state"):
+        return pd.DataFrame()
+    return pd.read_sql_table("lit_publication_state", get_engine("gold"))
+
+
+def load_quality_results(limit: int = 500) -> pd.DataFrame:
+    if not table_exists("gold", "lit_quality_results"):
+        return pd.DataFrame()
+    table = Table("lit_quality_results", MetaData(), autoload_with=get_engine("gold"))
+    return pd.read_sql_query(
+        select(table).order_by(table.c.checked_at.desc()).limit(limit), get_engine("gold")
+    )
+
+
+def load_source_changes(limit: int = 500) -> pd.DataFrame:
+    if not table_exists("raw", "lit_source_changes"):
+        return pd.DataFrame()
+    table = Table("lit_source_changes", MetaData(), autoload_with=get_engine("raw"))
+    return pd.read_sql_query(
+        select(table).order_by(table.c.recorded_at.desc()).limit(limit), get_engine("raw")
+    )
+
+
+def load_rejected_records() -> pd.DataFrame:
+    """Return the silver rejection audit without assuming the table exists."""
+    if not table_exists("silver", "lit_rejected"):
+        return pd.DataFrame()
+    table = Table("lit_rejected", MetaData(), autoload_with=get_engine("silver"))
+    query = select(table).order_by(table.c.rejected_at.desc())
+    return pd.read_sql_query(query, get_engine("silver"))
 
 
 def load_chunk_search_data() -> pd.DataFrame:

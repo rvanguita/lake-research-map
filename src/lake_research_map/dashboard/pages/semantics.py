@@ -22,6 +22,13 @@ from lake_research_map.dashboard.theme import (
     TREND_DOWN_COLOR,
     theme_tokens,
 )
+from lake_research_map.transform.screening_calibration import (
+    calibrate_screening_threshold,
+    generate_stratified_screening_sample,
+    resolve_review_consensus,
+    reviewer_agreement,
+    validate_review_labels,
+)
 
 LOW_RELEVANCE_PERCENTILE = 10
 TOP_REVIEW_ROWS = 40
@@ -41,7 +48,7 @@ MAP_COLOR_OPTIONS = {
 def render() -> None:
     page_header(
         "🧭",
-        "Semântica & Relevância",
+        "Triagem e descoberta",
         "Triagem de relevância, temas descobertos automaticamente e quase-duplicatas — tudo "
         "derivado dos embeddings dos resumos.",
     )
@@ -69,26 +76,30 @@ def render() -> None:
         "sistemática, não um detalhe de implementação.",
     )
 
-    tab_triagem, tab_mapa, tab_temas, tab_novidade, tab_dupes = st.tabs(
+    tab_triagem, tab_space, tab_isolation, tab_dupes = st.tabs(
         [
-            "🎯 Triagem de Relevância",
-            "🗺️ Mapa Semântico",
-            "🧵 Temas Descobertos",
-            "💡 Novidade Semântica",
-            "👯 Quase-Duplicatas",
-        ]
+            "Triagem de relevância",
+            "Espaço semântico e temas",
+            "Isolamento semântico",
+            "Quase-duplicatas",
+        ],
+        on_change="rerun",
+        key="semantics_primary_tab",
     )
 
-    with tab_triagem:
-        _relevance_screening(scored)
-    with tab_mapa:
-        _semantic_map(scored)
-    with tab_temas:
-        _themes(scored)
-    with tab_novidade:
-        _semantic_novelty_panel(scored)
-    with tab_dupes:
-        _duplicates()
+    if tab_triagem.open:
+        with tab_triagem:
+            _relevance_screening(scored)
+    elif tab_space.open:
+        with tab_space:
+            _semantic_map(scored)
+            _themes(scored)
+    elif tab_isolation.open:
+        with tab_isolation:
+            _semantic_novelty_panel(scored)
+    elif tab_dupes.open:
+        with tab_dupes:
+            _duplicates()
 
 
 def _relevance_screening(scored: pd.DataFrame) -> None:
@@ -209,6 +220,149 @@ def _relevance_screening(scored: pd.DataFrame) -> None:
         download_key="active_learning_incerteza",
     )
 
+    _screening_calibration_panel(scored)
+
+
+def _screening_calibration_panel(scored: pd.DataFrame) -> None:
+    """Collect reviewed CSVs in memory and report held-out threshold evidence."""
+    st.divider()
+    st.subheader("Calibração com revisão humana")
+    st.caption(
+        "A fila por incerteza prioriza leitura; a amostra estratificada abaixo serve a outra "
+        "pergunta: estimar o desempenho do limiar em toda a faixa de margens. O dashboard não "
+        "grava rótulos nem aplica exclusões automaticamente."
+    )
+
+    sample = generate_stratified_screening_sample(scored, n_samples=100, seed=42)
+    st.download_button(
+        "Baixar amostra estratificada para revisão",
+        data=sample.to_csv(index=False).encode("utf-8"),
+        file_name="screening_review_sample.csv",
+        mime="text/csv",
+        key="screening_review_sample",
+        width="stretch",
+    )
+    uploaded = st.file_uploader(
+        "Enviar decisões revisadas (CSV long-form)",
+        type=["csv"],
+        accept_multiple_files=True,
+        key="screening_review_files",
+        help=(
+            "Campos obrigatórios: doi e manual_label. Use include/1, exclude/0 ou uncertain; "
+            "reviewer e protocol_version são recomendados."
+        ),
+    )
+    if not uploaded:
+        st.info(
+            "Envie decisões independentes dos revisores para calcular concordância e validar "
+            "um limiar candidato."
+        )
+        return
+
+    frames: list[pd.DataFrame] = []
+    for file in uploaded:
+        try:
+            frames.append(pd.read_csv(file))
+        except (pd.errors.ParserError, UnicodeDecodeError, ValueError) as exc:
+            st.error(f"Não foi possível ler `{file.name}`: {exc}")
+    if not frames:
+        return
+
+    labels, issues = validate_review_labels(
+        pd.concat(frames, ignore_index=True),
+        known_dois=set(scored["doi"].dropna().astype(str)),
+    )
+    if not issues.empty:
+        n_errors = int(issues["severity"].eq("error").sum())
+        n_warnings = int(issues["severity"].eq("warning").sum())
+        message = f"Auditoria do arquivo: {n_errors} erro(s) e {n_warnings} aviso(s)."
+        st.error(message) if n_errors else st.warning(message)
+        st.dataframe(issues, hide_index=True, width="stretch")
+    if labels.empty:
+        return
+
+    agreement = reviewer_agreement(labels)
+    if not agreement.empty:
+        st.markdown("**Concordância entre revisores**")
+        st.dataframe(agreement.round(3), hide_index=True, width="stretch")
+        if agreement["status"].ne("ok").any():
+            st.caption(
+                "κ só é reportado com pelo menos 20 decisões binárias compartilhadas e presença "
+                "das duas classes; os demais pares permanecem como suporte insuficiente."
+            )
+
+    resolved = resolve_review_consensus(labels)
+    n_resolved = int(resolved["resolved"].sum())
+    n_disagreement = int(resolved["resolution"].eq("disagreement").sum())
+    n_single = int(resolved["resolution"].eq("single_reviewer").sum())
+    metric_row(
+        [
+            ("Decisões resolvidas", f"{n_resolved:,}", None),
+            ("Divergências pendentes", f"{n_disagreement:,}", None),
+            ("Rótulos de um revisor", f"{n_single:,}", "evidência provisória"),
+        ]
+    )
+
+    calibration = calibrate_screening_threshold(resolved, scored, seed=42)
+    if not calibration["valid"]:
+        st.warning(
+            "Ainda não há suporte para validação holdout. São necessárias ao menos 40 decisões "
+            "resolvidas, com 10 inclusões e 10 exclusões. Nenhum limiar é recomendado."
+        )
+        return
+
+    threshold = float(calibration["threshold"])
+    metrics = calibration["metrics"]
+    intervals = calibration["confidence_intervals"]
+
+    def _metric_with_ci(name: str) -> str:
+        low_ci, high_ci = intervals[name]
+        return f"{metrics[name]:.1%} (IC95% {low_ci:.1%}–{high_ci:.1%})"
+
+    st.success(
+        f"Limiar candidato: margem ≥ {threshold:+.3f}. Ajustado em "
+        f"{calibration['n_calibration']} decisões e avaliado uma vez em "
+        f"{calibration['n_holdout']} decisões holdout."
+    )
+    metric_row(
+        [
+            ("Sensibilidade", _metric_with_ci("recall"), f"FN: {metrics['fn']}"),
+            ("Especificidade", _metric_with_ci("specificity"), None),
+            ("Precisão", _metric_with_ci("precision"), None),
+            ("F2", _metric_with_ci("f2"), "prioriza sensibilidade"),
+            ("Redução de carga", _metric_with_ci("workload_reduction"), None),
+        ]
+    )
+
+    curve = calibration["curve"]
+    fig = px.line(
+        curve.sort_values("recall"),
+        x="recall",
+        y="precision",
+        markers=True,
+        hover_data={"threshold": ":+.3f", "specificity": ":.1%"},
+        labels={
+            "recall": "Sensibilidade",
+            "precision": "Precisão",
+            "threshold": "Limiar",
+            "specificity": "Especificidade",
+        },
+        title="Precisão e sensibilidade no conjunto holdout",
+    )
+    fig.add_scatter(
+        x=[metrics["recall"]],
+        y=[metrics["precision"]],
+        mode="markers",
+        marker={"size": 13, "symbol": "diamond", "color": TREND_DOWN_COLOR},
+        name="Limiar candidato",
+    )
+    fig.update_layout(xaxis_tickformat=".0%", yaxis_tickformat=".0%")
+    render_chart(
+        fig,
+        caption="O ponto destacado é evidência de validação, não autorização para exclusão "
+        "automática. Intervalos amplos indicam necessidade de ampliar a revisão humana.",
+    )
+
 
 def _legacy_relevance_screening(scored: pd.DataFrame) -> None:
     """The percentile view, for a database that predates the contrastive anchor."""
@@ -315,10 +469,12 @@ def _semantic_map(scored: pd.DataFrame) -> None:
 
     ctrl_col0, ctrl_col1, ctrl_col2, ctrl_col3 = st.columns([2.3, 2.5, 2.5, 2.7])
     with ctrl_col0:
+        alternative_projections = loaders.alternative_projections()
+        projection_options = ["t-SNE", *alternative_projections]
         proj_choice = (
             st.segmented_control(
                 "Projeção",
-                options=["t-SNE", "PCA 2D", "UMAP"],
+                options=projection_options,
                 default="t-SNE",
                 key="sem_proj_choice",
                 help="Alterna a técnica de redução dimensional dos vetores 384D.",
@@ -365,9 +521,11 @@ def _semantic_map(scored: pd.DataFrame) -> None:
             )
 
     if proj_choice in ("PCA 2D", "UMAP"):
-        alts = loaders.alternative_projections()
-        if proj_choice in alts and not alts[proj_choice].empty:
-            alt_df = alts[proj_choice]
+        if (
+            proj_choice in alternative_projections
+            and not alternative_projections[proj_choice].empty
+        ):
+            alt_df = alternative_projections[proj_choice]
             plot_df = (
                 plot_df.drop(columns=["map_x", "map_y"], errors="ignore")
                 .merge(alt_df[["doi", "map_x", "map_y"]], on="doi", how="left")
@@ -542,11 +700,11 @@ def _add_theme_labels(fig, plot_df: pd.DataFrame) -> None:
 
 
 def _semantic_novelty_panel(scored: pd.DataFrame) -> None:
-    st.subheader("💡 Novidade Semântica e Interdisciplinaridade (Cosine Outlier Factor)")
+    st.subheader("Isolamento semântico no espaço de embeddings")
     st.caption(
         "Mede a distância média aos $k$-vizinhos mais próximos no espaço vetorial 384D. "
-        "Artigos com alto score de novidade situam-se em regiões de fronteira conceitual ou combinam tópicos "
-        "distintos (interdisciplinaridade), revelando publicações pioneiras ou atípicas no corpus."
+        "Valores altos indicam documentos isolados dos vizinhos do corpus. O indicador não mede, por si "
+        "só, inovação ou interdisciplinaridade."
     )
 
     nov_df = loaders.semantic_novelty_scores()
@@ -564,10 +722,10 @@ def _semantic_novelty_panel(scored: pd.DataFrame) -> None:
 
     metric_row(
         [
-            ("💡 Novidade Mediana", f"{nov.median():.3f}", None),
-            ("🌟 Limiar Top 10% (P90)", f"{p90:.3f}", "Artigos mais singulares"),
-            ("🚀 Artigo Mais Inovador", f"{nov.max():.3f}", None),
-            ("📚 Total Avaliado", f"{len(merged):,}", "Embeddings 384D"),
+            ("Isolamento mediano", f"{nov.median():.3f}", None),
+            ("Limiar P90", f"{p90:.3f}", "10% mais isolados"),
+            ("Maior isolamento", f"{nov.max():.3f}", None),
+            ("Total avaliado", f"{len(merged):,}", "Embeddings 384D"),
         ]
     )
 
@@ -578,21 +736,21 @@ def _semantic_novelty_panel(scored: pd.DataFrame) -> None:
         color="theme_label" if "theme_label" in merged.columns else None,
         hover_data=["title", "year", "venue"],
         labels={
-            "novelty_score": "Score de Novidade Semântica (Distância k-NN)",
+            "novelty_score": "Isolamento semântico (distância k-NN)",
             "relevance_score": "Relevância Temática",
             "theme_label": "Tema",
         },
         color_discrete_sequence=CATEGORICAL_PALETTE,
-        title="Dispersão: Novidade Semântica vs. Relevância no Corpus",
+        title="Isolamento semântico e relevância no corpus",
     )
-    fig.add_vline(x=p90, line_dash="dash", line_color="#eb6834", annotation_text="P90 Novidade")
+    fig.add_vline(x=p90, line_dash="dash", line_color="#eb6834", annotation_text="P90")
     fig.update_layout(height=480)
     render_chart(
         fig,
-        caption="O quadrante superior direito reúne artigos de alta relevância com formulações conceituais singulares ou interdisciplinares.",
+        caption="Pontos à direita estão mais distantes de seus vizinhos semânticos e merecem inspeção.",
     )
 
-    st.markdown("##### 🏆 Top 20 Artigos Mais Singulares / Inovadores")
+    st.markdown("##### Artigos semanticamente mais isolados")
     top_novel = merged.sort_values("novelty_score", ascending=False).head(20).copy()
     top_novel["novelty_score"] = top_novel["novelty_score"].round(3)
     if "relevance_score" in top_novel.columns:
@@ -909,9 +1067,7 @@ def _themes(scored: pd.DataFrame) -> None:
 def _duplicates() -> None:
     st.subheader("Quase-duplicatas que a deduplicação por DOI não pegou")
     pairs = loaders.duplicate_pairs()
-    if pairs.empty:
-        st.success("Nenhum par de resumos quase idênticos com DOIs distintos.")
-        return
+    overrides = loaders.duplicate_overrides()
 
     _, articles_df = loaders.articles()
     titles = (
@@ -919,21 +1075,57 @@ def _duplicates() -> None:
         if "doi" in articles_df.columns and "title" in articles_df.columns
         else pd.Series(dtype="object")
     )
-    table = pairs.copy()
-    table["Título A"] = table["doi_a"].map(titles)
-    table["Título B"] = table["doi_b"].map(titles)
-    table["Similaridade"] = table["similarity"].round(4)
-
     st.caption(
         "O DOI é a única chave confiável de deduplicação deste corpus (ver `CLAUDE.md`), então o "
-        "mesmo trabalho publicado sob dois DOIs sobrevive como dois registros. Estes pares foram "
-        "detectados pela similaridade do resumo — **nada é mesclado automaticamente**, é uma lista "
-        "para revisão."
+        "mesmo trabalho publicado sob dois DOIs pode sobreviver como dois registros. Estes pares "
+        "foram detectados pela similaridade do resumo e aguardam uma decisão humana. O dashboard "
+        "permanece somente leitura; registre a decisão com `lake-research-map duplicates`."
     )
+
+    st.markdown("##### Pendentes de revisão")
+    if pairs.empty:
+        st.success("Nenhum par de resumos quase idênticos aguarda revisão.")
+    else:
+        table = pairs.copy()
+        table["Título A"] = table["doi_a"].map(titles)
+        table["Título B"] = table["doi_b"].map(titles)
+        table["Similaridade"] = table["similarity"].round(4)
+        st.dataframe(
+            table[["Similaridade", "Título A", "Título B", "doi_a", "doi_b"]].sort_values(
+                "Similaridade", ascending=False
+            ),
+            hide_index=True,
+            width="stretch",
+        )
+        st.code(
+            "uv run lake-research-map duplicates merge --canonical-doi DOI --duplicate-doi DOI "
+            '--reason "justificativa"\n'
+            "uv run lake-research-map duplicates keep --doi-a DOI --doi-b DOI "
+            '--reason "justificativa"',
+            language="bash",
+        )
+
+    st.markdown("##### Histórico de decisões")
+    if overrides.empty:
+        st.info("Nenhuma decisão de quase-duplicata foi registrada.")
+        return
+
+    history = overrides.copy()
+    history["Decisão"] = history["decision"].map({"merge": "Mesclar", "keep": "Manter separados"})
+    history["DOI canônico"] = history["canonical_doi"].fillna("—")
+    history["Justificativa"] = history["reason"]
+    history["Atualizado em"] = history["updated_at"]
     st.dataframe(
-        table[["Similaridade", "Título A", "Título B", "doi_a", "doi_b"]].sort_values(
-            "Similaridade", ascending=False
-        ),
+        history[
+            [
+                "Decisão",
+                "DOI canônico",
+                "doi_a",
+                "doi_b",
+                "Justificativa",
+                "Atualizado em",
+            ]
+        ].sort_values("Atualizado em", ascending=False),
         hide_index=True,
         width="stretch",
     )

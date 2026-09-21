@@ -80,5 +80,5 @@ def load_configs(session: Session) -> int:
         existing.search_url = parsed["search_url"]
         written += 1
 
-    session.commit()
+    session.flush()
     return written

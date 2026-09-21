@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Sequence
 
 import pandas as pd
@@ -16,7 +17,7 @@ from lake_research_map.dashboard.pipeline_control import (
     poll_run,
     trigger_stage,
 )
-from lake_research_map.dashboard.theme import SOURCE_LABELS, polish_figure_layout, theme_tokens
+from lake_research_map.dashboard.theme import SOURCE_LABELS, polish_figure_layout
 
 logger = logging.getLogger(__name__)
 
@@ -231,26 +232,36 @@ def render_global_filters(articles_df: pd.DataFrame) -> None:
 
 
 def render_sidebar() -> None:
-    """Pipeline status + Airflow controls; rendered on every page."""
-    st.session_state.setdefault("pipeline_runs", {})
-    _refresh_runs()
-
+    """Render compact global filters; operational controls live on the pipeline page."""
     layer, articles_df = loaders.articles()
 
     with st.sidebar:
         if not articles_df.empty:
-            render_global_filters(articles_df)
-            st.divider()
-        with st.expander("📋 Contagem detalhada de linhas por tabela"):
-            st.dataframe(loaders.row_counts(), hide_index=True, width="stretch")
+            with st.expander("Filtros globais", expanded=True, icon=":material/filter_alt:"):
+                render_global_filters(articles_df)
+        if layer != "none" and not articles_df.empty:
+            _, filtered_df = loaders.filtered_articles()
+            st.caption(f"{len(filtered_df):,}/{len(articles_df):,} artigos · camada **{layer}**")
 
-        st.divider()
-        st.subheader("⚙️ Executar pipeline (via Airflow)")
 
-        for stage in ("raw", "bronze", "silver", "gold", "embed", "semantic"):
-            if st.button(f"▶ Executar {STAGE_LABELS[stage]}", key=f"run_{stage}"):
-                with st.spinner(f"Disparando {STAGE_LABELS[stage]} no Airflow..."):
-                    _trigger(stage)
+def render_pipeline_controls() -> None:
+    """Render Airflow controls in the operational page instead of every page."""
+    st.session_state.setdefault("pipeline_runs", {})
+    _refresh_runs()
+    st.subheader("Executar pipeline via Airflow")
+
+    with st.container(border=True):
+        columns = st.columns(3)
+        for index, stage in enumerate(("raw", "bronze", "silver", "gold", "embed", "semantic")):
+            with columns[index % len(columns)]:
+                if st.button(
+                    f"Executar {STAGE_LABELS[stage]}",
+                    key=f"run_{stage}",
+                    icon=":material/play_arrow:",
+                    width="stretch",
+                ):
+                    with st.spinner(f"Disparando {STAGE_LABELS[stage]} no Airflow..."):
+                        _trigger(stage)
 
         if st.button("⏩ Executar tudo (raw→bronze→silver→gold→embed→semantic)", key="run_all"):
             with st.spinner("Disparando o pipeline completo no Airflow..."):
@@ -279,13 +290,9 @@ def render_sidebar() -> None:
                     else:
                         st.info(f"{label}: {state} (execução `{run_id}`)")
 
-        st.divider()
-        if st.button("🔄 Atualizar dados"):
-            st.cache_data.clear()
-            st.rerun()
-        if layer != "none" and not articles_df.empty:
-            _, filtered_df = loaders.filtered_articles()
-            st.caption(f"{len(filtered_df):,}/{len(articles_df):,} artigos · camada **{layer}**")
+    if st.button("Atualizar dados", icon=":material/refresh:"):
+        st.cache_data.clear()
+        st.rerun()
 
 
 def page_header(
@@ -293,12 +300,12 @@ def page_header(
     title_or_desc: str,
     description: str | None = None,
 ) -> None:
-    """Consistent page title block. Supports (icon, title, desc) or (title, desc)."""
+    """Consistent native title block. Legacy icon arguments are ignored."""
     if description is None:
         st.title(icon_or_title)
         st.caption(title_or_desc)
     else:
-        st.title(f"{icon_or_title} {title_or_desc}")
+        st.title(title_or_desc)
         st.caption(description)
 
 
@@ -315,28 +322,30 @@ def metric_row(metrics: Sequence[tuple[str, str] | tuple[str, str, str | None]])
             col.metric(label, value, delta)
 
 
+def summary_card_row(cards: Sequence[tuple[str, str] | tuple[str, str, str | None]]) -> None:
+    """Render wrapping summary cards for categorical values that do not fit in ``st.metric``."""
+    columns = st.columns(len(cards))
+    for column, item in zip(columns, cards, strict=True):
+        label, value = item[:2]
+        detail = item[2] if len(item) == 3 else None
+        with column:
+            with st.container(border=True):
+                st.caption(label)
+                st.markdown(f"### {value}")
+                if detail:
+                    st.caption(detail)
+
+
 def hero_banner(title: str, body_html: str) -> None:
-    """Gradient executive-summary banner used at the top of a few pages."""
-    t = theme_tokens()
-    st.markdown(
-        f"""
-        <div style="
-            background: {t["metric_bg"]};
-            border: 1px solid {t["metric_border"]};
-            border-radius: 0.9rem;
-            padding: 1.1rem 1.4rem;
-            margin-bottom: 1rem;
-        ">
-            <div style="font-size: 1.05rem; font-weight: 700; color: {t["metric_value"]}; margin-bottom: .35rem;">
-                {title}
-            </div>
-            <div style="color: {t["muted"]}; font-size: .92rem; line-height: 1.5;">
-                {body_html}
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    """Native bordered summary block shared by analytical pages."""
+    markdown = body_html
+    for source, target in (("<b>", "**"), ("</b>", "**"), ("<i>", "*"), ("</i>", "*")):
+        markdown = markdown.replace(source, target)
+    markdown = markdown.replace("<code>", "`").replace("</code>", "`")
+    markdown = re.sub(r"<[^>]+>", "", markdown)
+    with st.container(border=True):
+        st.markdown(f"**{title}**")
+        st.markdown(markdown)
 
 
 def require_columns(df: pd.DataFrame, cols: list[str], message: str | None = None) -> bool:

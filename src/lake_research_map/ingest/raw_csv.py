@@ -54,5 +54,5 @@ def load_ieee_csv(session: Session) -> int:
             )
             written += 1
 
-    session.commit()
+    session.flush()
     return written

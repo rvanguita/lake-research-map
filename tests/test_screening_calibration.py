@@ -6,9 +6,13 @@ import numpy as np
 import pandas as pd
 
 from lake_research_map.transform.screening_calibration import (
+    calibrate_screening_threshold,
     evaluate_screening_threshold,
     find_optimal_screening_threshold,
     generate_stratified_screening_sample,
+    resolve_review_consensus,
+    reviewer_agreement,
+    validate_review_labels,
 )
 
 
@@ -27,7 +31,7 @@ def test_generate_stratified_screening_sample_creates_balanced_strata():
     )
 
     sample = generate_stratified_screening_sample(df, n_samples=20, seed=42)
-    assert len(sample) <= 20
+    assert len(sample) == 20
     assert "manual_label" in sample.columns
     assert "stratum" in sample.columns
     # Check that multiple strata are populated
@@ -64,3 +68,88 @@ def test_find_optimal_screening_threshold_guarantees_min_recall():
     assert opt["optimal_threshold"] <= 0.1
     # Specificity should still be positive (excluding the negative ones)
     assert opt["metrics_at_optimal"]["specificity"] > 0.5
+
+
+def test_sample_redistributes_quota_from_empty_stratum():
+    df = pd.DataFrame(
+        {
+            "doi": [f"10.1000/{i}" for i in range(12)],
+            "relevance_margin": [-0.2] + list(np.linspace(-0.08, 0.08, 11)),
+        }
+    )
+
+    sample = generate_stratified_screening_sample(df, n_samples=10, seed=7)
+
+    assert len(sample) == 10
+    assert sample["doi"].is_unique
+    assert {"reviewer", "protocol_version"}.issubset(sample.columns)
+
+
+def test_review_validation_consensus_and_adjudication():
+    labels = pd.DataFrame(
+        {
+            "doi": [
+                "https://doi.org/10.1000/A",
+                "10.1000/a",
+                "10.1000/b",
+                "10.1000/b",
+                "10.1000/b",
+                "10.1000/unknown",
+            ],
+            "reviewer": ["r1", "r2", "r1", "r2", "adjudicated", "r1"],
+            "manual_label": ["1", "include", "include", "exclude", "exclude", "1"],
+        }
+    )
+
+    valid, issues = validate_review_labels(labels, known_dois={"10.1000/a", "10.1000/b"})
+    resolved = resolve_review_consensus(valid)
+
+    assert "unknown_doi" in issues["code"].tolist()
+    assert resolved.set_index("doi").loc["10.1000/a", "resolution"] == "consensus"
+    assert resolved.set_index("doi").loc["10.1000/b", "resolution"] == "adjudicated"
+    assert not bool(resolved.set_index("doi").loc["10.1000/b", "y_true"])
+
+
+def test_reviewer_agreement_requires_support_and_reports_kappa():
+    labels = pd.DataFrame(
+        [
+            {
+                "doi": f"10.1000/{index}",
+                "reviewer": reviewer,
+                "manual_label": "include" if index % 2 else "exclude",
+            }
+            for index in range(24)
+            for reviewer in ("r1", "r2")
+        ]
+    )
+
+    agreement = reviewer_agreement(labels)
+
+    assert agreement.iloc[0]["status"] == "ok"
+    assert agreement.iloc[0]["raw_agreement"] == 1.0
+    assert agreement.iloc[0]["kappa"] == 1.0
+
+
+def test_calibration_uses_holdout_and_is_reproducible():
+    n = 60
+    labels = pd.DataFrame(
+        {
+            "doi": [f"10.1000/{index}" for index in range(n)],
+            "y_true": [index >= n // 2 for index in range(n)],
+            "resolved": True,
+        }
+    )
+    scored = pd.DataFrame(
+        {
+            "doi": labels["doi"],
+            "relevance_margin": np.r_[np.linspace(-0.5, -0.01, 30), np.linspace(0.01, 0.5, 30)],
+        }
+    )
+
+    first = calibrate_screening_threshold(labels, scored, n_bootstrap=50, seed=9)
+    second = calibrate_screening_threshold(labels, scored, n_bootstrap=50, seed=9)
+
+    assert first["valid"] is True
+    assert first["n_calibration"] + first["n_holdout"] == n
+    assert first["metrics"]["recall"] == 1.0
+    assert first["confidence_intervals"] == second["confidence_intervals"]

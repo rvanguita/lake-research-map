@@ -9,12 +9,11 @@ import streamlit as st
 
 from lake_research_map.dashboard import loaders
 from lake_research_map.dashboard.analytics import (
-    author_count_series,
     source_counts_by,
     source_means,
     valid_years,
 )
-from lake_research_map.dashboard.charts import source_lines, topn_hbar
+from lake_research_map.dashboard.charts import source_lines
 from lake_research_map.dashboard.components import (
     article_table,
     metric_row,
@@ -30,7 +29,7 @@ MIN_CITED_ARTICLES = 3
 def render() -> None:
     page_header(
         "🏆",
-        "Destaques e Impacto",
+        "Impacto e citações",
         "Análise bibliométrica: embasamento em referências, dinâmica de citações, distribuições de cauda pesada e determinantes GLM.",
     )
 
@@ -295,54 +294,6 @@ def _top_referenced(articles_df: pd.DataFrame) -> None:
     )
 
 
-def _collaboration_team_size(articles_df: pd.DataFrame) -> None:
-    st.subheader("👥 Colaboração e tamanho das equipes de autores")
-    if not require_columns(articles_df, ["authors"]):
-        return
-
-    collab_df = articles_df.assign(author_count=author_count_series(articles_df))
-    collab_df = collab_df[collab_df["author_count"] > 0]
-    means = source_means(collab_df, "author_count")
-    solo_pct = float((collab_df["author_count"] == 1).mean())
-
-    metric_row(
-        [
-            (
-                "📘 Média de Autores (IEEE)",
-                f"{means['ieee']:.1f}" if means["ieee"] is not None else "N/D",
-                None,
-            ),
-            (
-                "📙 Média de Autores (Elsevier)",
-                f"{means['elsevier']:.1f}" if means["elsevier"] is not None else "N/D",
-                None,
-            ),
-            ("📊 Média de Autores (Total)", f"{means['total']:.1f}", None),
-            ("👤 Artigos com autor único", f"{solo_pct:.1%}", f"{len(collab_df):,} artigos"),
-        ]
-    )
-
-    fig = px.histogram(
-        collab_df,
-        x="author_count",
-        color="source" if "source" in collab_df.columns else None,
-        barmode="group",
-        color_discrete_map=SOURCE_COLORS,
-        labels={"author_count": "Quantidade de autores", "source": "Base"},
-    )
-    fig.update_traces(hovertemplate="%{x} autores: %{y:,} artigos (%{data.name})<extra></extra>")
-    fig.update_layout(
-        xaxis_title="Quantidade de autores por artigo",
-        yaxis_title="Quantidade de artigos",
-        hovermode="x unified",
-    )
-    render_chart(
-        fig,
-        caption="Comparativo do tamanho das equipes de autores entre IEEE e Elsevier — veja os cartões "
-        "acima para as médias por base e no total.",
-    )
-
-
 def _top_cited(articles_df: pd.DataFrame) -> None:
     st.subheader("🏆 Artigos mais citados")
     if (
@@ -512,17 +463,16 @@ def _age_normalized_rankings(articles_df: pd.DataFrame) -> None:
 
 
 def _citation_determinants_glm_view(articles_df: pd.DataFrame) -> None:
-    st.subheader("🔬 Determinantes Estatísticos do Impacto (GLM Poisson)")
+    st.subheader("Determinantes associados à taxa de citações")
     st.caption(
-        "Regressão de contagem de Poisson modelando quais características do artigo aumentam "
-        "sua taxa esperada de citações. O IRR (Incidence Rate Ratio) indica o fator multiplicativo "
-        "no número de citações para cada unidade adicional da variável explicativa."
+        "GLM de contagem com exposição pela idade do artigo, diagnóstico de sobredispersão e "
+        "incerteza robusta. O IRR dos campos numéricos representa uma variação de um desvio padrão."
     )
     from lake_research_map.dashboard.analytics import citation_determinants_glm
 
     glm_res = citation_determinants_glm(articles_df)
     if not glm_res.get("valid"):
-        st.info("Amostra insuficiente de artigos com citações para regressão econométrica.")
+        st.info(glm_res.get("warning") or "Amostra insuficiente para o modelo de contagem.")
         return
 
     features = glm_res["features"]
@@ -541,102 +491,16 @@ def _citation_determinants_glm_view(articles_df: pd.DataFrame) -> None:
             "Variável Explicativa": [feat_labels.get(f, f) for f in features],
             "Coeficiente (β)": [round(c, 4) for c in coefs],
             "IRR (Multiplicador de Citações)": [round(i, 4) for i in irrs],
+            "IC 95% inferior": [round(i, 4) for i in glm_res["irr_lower"]],
+            "IC 95% superior": [round(i, 4) for i in glm_res["irr_upper"]],
+            "p-valor robusto": [round(i, 4) for i in glm_res["p_values"]],
         }
     )
     st.dataframe(glm_df, hide_index=True, width="stretch")
     st.caption(
-        f"Pseudo R² do modelo: {glm_res.get('score', 0):.3f}. Um IRR > 1,0 indica efeito positivo na atração de citações."
+        f"Família: {glm_res['family'].replace('_', ' ')} · dispersão Poisson: "
+        f"{glm_res['dispersion']:.2f} · cobertura: {glm_res['n_used']}/{glm_res['n_total']} "
+        f"({glm_res['coverage']:.1%}) · pseudo R²: {glm_res.get('score', 0):.3f}."
     )
-
-
-def _modal_source(rows: pd.DataFrame, key: str, keys_shown) -> pd.Series | None:
-    """Most frequent `source` per entity, for the entities actually plotted.
-
-    Scoped to `keys_shown` first: the previous
-    `groupby(key)["source"].agg(lambda s: s.mode().iat[0])` ran a per-group
-    mode over every author/venue in the corpus (thousands of groups) just to
-    colour 15 bars. Ties resolve to the alphabetically first source, matching
-    `Series.mode()`, because the groupby output is sorted and the sort below
-    is stable.
-    """
-    if "source" not in rows.columns:
-        return None
-    scoped = rows[rows[key].isin(keys_shown)]
-    if scoped.empty:
-        return None
-    counts = scoped.groupby([key, "source"], observed=True).size()
-    return (
-        counts.sort_values(ascending=False)
-        .reset_index()
-        .drop_duplicates(key)
-        .set_index(key)["source"]
-    )
-
-
-def _top_authors(articles_df: pd.DataFrame) -> None:
-    st.subheader("✍️ Autores mais prolíficos")
-    if not require_columns(articles_df, ["authors"]):
-        return
-    authors_series = articles_df["authors"].apply(lambda a: a if isinstance(a, list) else [])
-    author_rows = (
-        articles_df.assign(author=authors_series).explode("author").dropna(subset=["author"])
-    )
-    author_rows = author_rows[author_rows["author"].astype(str).str.strip() != ""]
-
-    if author_rows.empty:
-        st.info("Coluna 'authors' vazia nesta camada.")
-        return
-
-    top_authors = author_rows["author"].value_counts().head(15)
-    modal_source = _modal_source(author_rows, "author", top_authors.index)
-
-    fig = topn_hbar(
-        top_authors,
-        color_by=modal_source,
-        x_title="Quantidade de artigos publicados",
-        y_title="Autor",
-    )
-    fig.update_traces(hovertemplate="<b>%{y}</b><br>%{x:,} artigos publicados<extra></extra>")
-    render_chart(
-        fig,
-        caption="⚠️ Os nomes não estão padronizados entre as fontes: o IEEE exporta iniciais (`J. Liu`) "
-        "enquanto a Elsevier exporta nomes completos (`Junyong Liu`), de modo que o mesmo pesquisador pode "
-        "aparecer em registros separados aqui. Veja a página Pesquisadores para uma visão com nomes "
-        "canonicalizados (e suas limitações).",
-    )
-
-
-def _venue_impact(articles_df: pd.DataFrame) -> None:
-    st.subheader("📈 Impacto médio por periódico")
-    if not require_columns(articles_df, ["citation_count", "venue"]):
-        return
-
-    cited_venues = articles_df.dropna(subset=["citation_count", "venue"])
-    venue_impact = (
-        cited_venues.groupby("venue")["citation_count"]
-        .agg(articles="size", mean="mean")
-        .query("articles >= @MIN_CITED_ARTICLES")
-        .sort_values("mean", ascending=False)
-        .head(15)
-    )
-    if venue_impact.empty:
-        st.info("Nenhum periódico com artigos suficientes com contagem de citações nesta camada.")
-        return
-
-    modal_source = _modal_source(cited_venues, "venue", venue_impact.index)
-
-    article_counts = venue_impact["articles"]
-    fig = topn_hbar(
-        venue_impact["mean"],
-        color_by=modal_source,
-        x_title="Média de citações por artigo",
-        y_title="Periódico / Evento",
-    )
-    for trace in fig.data:
-        trace.customdata = article_counts.reindex(trace.y).to_numpy().reshape(-1, 1)
-        trace.hovertemplate = "<b>%{y}</b><br>%{x:.1f} citações/artigo (%{customdata[0]:,} artigos analisados)<extra></extra>"
-    render_chart(
-        fig,
-        caption=f"Média de citações por artigo, restrita a periódicos com pelo menos "
-        f"{MIN_CITED_ARTICLES} artigos com citações no corpus.",
-    )
+    if glm_res.get("warning"):
+        st.warning(glm_res["warning"])

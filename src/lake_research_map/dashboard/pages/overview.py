@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 import plotly.express as px
 import streamlit as st
@@ -10,30 +9,21 @@ import streamlit as st
 from lake_research_map.dashboard import loaders
 from lake_research_map.dashboard.analytics import (
     RECENT_WINDOW_YEARS,
-    author_count_series,
-    keyword_count_series,
-    lorenz_curve,
     valid_years,
 )
-from lake_research_map.dashboard.charts import lorenz_chart
 from lake_research_map.dashboard.components import (
     hero_banner,
     metric_row,
     page_header,
     render_chart,
 )
-from lake_research_map.dashboard.theme import (
-    SOURCE_COLORS,
-    TREND_DOWN_COLOR,
-    TREND_UP_COLOR,
-    theme_tokens,
-)
+from lake_research_map.dashboard.theme import SOURCE_COLORS
 
 
 def render() -> None:
     page_header(
         "📊",
-        "Visão Geral",
+        "Visão geral",
         'Pipeline de revisão sistemática de literatura sobre "planejamento de redes de distribuição de energia" — '
         "IEEE Xplore e ScienceDirect/Elsevier consolidados através das "
         "camadas raw → bronze → silver → gold.",
@@ -63,7 +53,7 @@ def render() -> None:
     )
 
     st.divider()
-    _charts_grid(articles_df, years_df)
+    _charts_grid(articles_df)
 
     if not years_df.empty:
         st.divider()
@@ -94,22 +84,8 @@ def render() -> None:
     _numbers_summary(articles_df, years_df, chunks_df)
 
 
-def _charts_grid(articles_df: pd.DataFrame, years_df: pd.DataFrame) -> None:
-    tab_fontes, tab_ano, tab_correlacao, tab_concentracao = st.tabs(
-        ["🥧 Fontes", "📐 Ano", "🔗 Correlação", "📉 Concentração"]
-    )
-
-    with tab_fontes:
-        _source_distribution_pie(articles_df)
-
-    with tab_ano:
-        _year_distribution_by_source(years_df)
-
-    with tab_correlacao:
-        _correlation_heatmap(articles_df)
-
-    with tab_concentracao:
-        _venue_concentration(articles_df)
+def _charts_grid(articles_df: pd.DataFrame) -> None:
+    _source_distribution_pie(articles_df)
 
 
 def _source_distribution_pie(articles_df: pd.DataFrame) -> None:
@@ -134,99 +110,6 @@ def _source_distribution_pie(articles_df: pd.DataFrame) -> None:
         fig,
         caption="As duas bases não possuem sobreposição: nenhum DOI se repete entre elas, de modo "
         "que cada artigo pertence exclusivamente a uma editora.",
-    )
-
-
-def _year_distribution_by_source(years_df: pd.DataFrame) -> None:
-    st.subheader("Distribuição do Ano de Publicação por Base")
-    if years_df.empty or "source" not in years_df.columns:
-        st.info("Dados insuficientes (ano/base) nesta camada.")
-        return
-
-    fig = px.box(
-        years_df,
-        x="source",
-        y="year",
-        color="source",
-        color_discrete_map=SOURCE_COLORS,
-        points="outliers",
-        labels={"year": "Ano de publicação", "source": "Base"},
-    )
-    fig.update_layout(xaxis_title="Base", yaxis_title="Ano de publicação", showlegend=False)
-    render_chart(
-        fig,
-        caption="Mediana, quartis e dispersão do ano de publicação por base — mostra se uma base tende a "
-        "contribuir com literatura mais recente ou mais antiga, ao invés da contagem ano a ano (veja a "
-        "página Produção para essa série).",
-    )
-
-
-def _correlation_heatmap(articles_df: pd.DataFrame) -> None:
-    st.subheader("Correlação entre Métricas Bibliométricas")
-    working = articles_df.copy()
-    working["year"] = valid_years(working)
-
-    metrics: dict[str, pd.Series] = {"Ano": working["year"]}
-    if "citation_count" in working.columns:
-        metrics["Citações"] = working["citation_count"]
-    if "reference_count" in working.columns:
-        metrics["Referências"] = working["reference_count"]
-    metrics["Autores"] = author_count_series(working)
-    metrics["Keywords"] = keyword_count_series(working)
-
-    numeric_df = pd.DataFrame(metrics).apply(pd.to_numeric, errors="coerce")
-    numeric_df = numeric_df.dropna(axis=1, how="all")
-    if numeric_df.shape[1] < 2 or len(numeric_df) < 3:
-        st.info("Dados insuficientes para calcular correlações nesta camada.")
-        return
-
-    corr = numeric_df.corr(numeric_only=True)
-    t = theme_tokens()
-    mid_color = t.get("heatmap_mid", "#0b1725")
-    fig = px.imshow(
-        corr,
-        zmin=-1,
-        zmax=1,
-        color_continuous_scale=[[0, TREND_DOWN_COLOR], [0.5, mid_color], [1, TREND_UP_COLOR]],
-        text_auto=".2f",
-        aspect="auto",
-        labels={"x": "Métrica", "y": "Métrica", "color": "Correlação (Pearson)"},
-    )
-    fig.update_layout(xaxis_title="Métrica", yaxis_title="Métrica")
-    # Plotly auto-thins tick labels that would collide, which silently drops
-    # columns from a small 5x5 grid like this one -- force every label to
-    # show since there's no crowding risk at this size.
-    fig.update_xaxes(
-        tickmode="array", tickvals=list(range(len(corr.columns))), ticktext=list(corr.columns)
-    )
-    fig.update_yaxes(
-        tickmode="array", tickvals=list(range(len(corr.index))), ticktext=list(corr.index)
-    )
-    render_chart(
-        fig,
-        caption="Correlação de Pearson entre métricas numéricas do corpus: +1 indica relação linear "
-        "positiva forte, -1 negativa forte, 0 nenhuma relação linear aparente.",
-    )
-
-
-def _venue_concentration(articles_df: pd.DataFrame) -> None:
-    st.subheader("Concentração Editorial (Curva de Lorenz)")
-    if "venue" not in articles_df.columns or not articles_df["venue"].notna().any():
-        st.info("Coluna 'venue' não disponível nesta camada.")
-        return
-
-    counts = articles_df["venue"].dropna().value_counts()
-    lorenz_df = lorenz_curve(counts)
-    x = lorenz_df["share_of_authors"].to_numpy()
-    y = lorenz_df["share_of_output"].to_numpy()
-    gini = 1 - 2 * np.trapezoid(y, x)
-
-    fig = lorenz_chart({"total": lorenz_df}, entity_label="periódicos")
-    render_chart(
-        fig,
-        caption=f"Índice de Gini de concentração editorial: {gini:.2f} (0 = produção igualmente distribuída "
-        "entre periódicos; 1 = toda a produção concentrada em um único periódico). Veja a página Tópicos e "
-        "Periódicos para o ranking completo.",
     )
 
 

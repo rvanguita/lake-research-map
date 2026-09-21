@@ -14,15 +14,11 @@ from lake_research_map.dashboard.analytics import (
     RECENT_WINDOW_YEARS,
     analyze_coauthorship_partners,
     author_count_series,
-    author_display_name,
     author_impact_advanced_indices,
     author_m_quotient_analysis,
     author_productivity_trend,
-    author_year_matrix,
-    canonical_author,
     coauthorship_community_detection,
     cumulative_researchers,
-    explode_authors_with_position,
     explode_keywords,
     gini_coefficient,
     graph_advanced_metrics,
@@ -53,39 +49,15 @@ MIN_PAPERS_FOR_NETWORK = 4
 TOP_NETWORK_AUTHORS = 18
 
 
-# Both helpers take `loaders.filter_signature()` rather than the frame itself:
-# hashing the frame meant serializing ~3.5MB to JSON on every cache lookup,
-# which cost more than the work being cached. They re-read the filtered frame
-# internally, so the signature fully determines the result.
-@st.cache_data(ttl=60)
-def _author_table(filter_sig: tuple) -> pd.DataFrame:
-    """Explode authors (with byline position), canonicalize identity, keep one display name per key."""
-    _, articles_df = loaders.filtered_articles()
-    exploded = explode_authors_with_position(articles_df)
-    if exploded.empty:
-        return exploded
-    exploded["author_key"] = exploded["author"].apply(canonical_author)
-    exploded = exploded[exploded["author_key"] != ""]
-    display_names = exploded.groupby("author_key")["author"].apply(author_display_name)
-    exploded["author_display"] = exploded["author_key"].map(display_names)
-    return exploded
-
-
-@st.cache_data(ttl=60)
-def _author_year_matrix_cached(filter_sig: tuple) -> pd.DataFrame:
-    _, articles_df = loaders.filtered_articles()
-    return author_year_matrix(articles_df)
-
-
 def render() -> None:
     page_header(
         "👥",
-        "Pesquisadores",
+        "Pesquisadores e colaboração",
         "Produção, colaboração e linhas de pesquisa dos autores do corpus.",
     )
 
     articles_df = loaders.require_articles()
-    author_rows = _author_table(loaders.filter_signature())
+    author_rows = loaders.author_table(loaders.filter_signature())
 
     if author_rows.empty:
         st.info("Coluna 'authors' não disponível ou vazia nesta camada.")
@@ -122,28 +94,29 @@ def render() -> None:
     )
 
     st.divider()
-    tab_ranking, tab_leadership, tab_production, tab_collab, tab_explore, tab_stats = st.tabs(
+    section = st.selectbox(
+        "Área de análise",
         [
-            "🏅 Produtividade & Ranking",
-            "🎖️ Liderança Científica (h, g, e, m)",
-            "🗓️ Trajetória Temporal",
-            "🕸️ Colaboração & Redes",
-            "🔎 Linhas de Pesquisa",
-            "📐 Leis Bibliométricas",
-        ]
+            "Produtividade e ranking",
+            "Impacto no corpus",
+            "Trajetória temporal",
+            "Colaboração e redes",
+            "Linhas de pesquisa",
+            "Leis bibliométricas",
+        ],
     )
 
-    with tab_ranking:
+    if section == "Produtividade e ranking":
         sub_prolific, sub_lead = st.tabs(["✍️ Mais Prolíficos", "🥇 1º/2º Autor"])
         with sub_prolific:
             _top_authors(author_rows)
         with sub_lead:
             _lead_authors_ranking(author_rows)
 
-    with tab_leadership:
+    elif section == "Impacto no corpus":
         _render_scientific_leadership_tab(articles_df)
 
-    with tab_production:
+    elif section == "Trajetória temporal":
         (
             sub_active,
             sub_heatmap,
@@ -184,7 +157,7 @@ def render() -> None:
         with sub_emerging:
             _emerging_vs_established(author_rows)
 
-    with tab_collab:
+    elif section == "Colaboração e redes":
         sub_teams, sub_network, sub_cognitive = st.tabs(
             [
                 "👥 Equipes & Tamanho",
@@ -199,7 +172,7 @@ def render() -> None:
         with sub_cognitive:
             _cognitive_distance_analysis(articles_df, author_rows)
 
-    with tab_explore:
+    elif section == "Linhas de pesquisa":
         (
             sub_leaders,
             sub_trend,
@@ -247,7 +220,7 @@ def render() -> None:
             if working_kw is not None:
                 _author_keyword_shift(working_kw)
 
-    with tab_stats:
+    elif section == "Leis bibliométricas":
         sub_table, sub_concentration, sub_trend_table, sub_vs_impact = st.tabs(
             [
                 "📋 Tabela Completa",
@@ -267,13 +240,14 @@ def render() -> None:
 
 
 def _render_scientific_leadership_tab(articles_df: pd.DataFrame) -> None:
-    st.markdown("### 🎖️ Índices Avançados de Liderança Científica & Carreira")
+    st.markdown("### Indicadores de impacto no corpus")
     st.caption(
-        "Avalia a liderança acadêmica dos principais pesquisadores do corpus cruzando três métricas "
+        "Compara pesquisadores somente pelos artigos presentes neste corpus. Os indicadores não representam "
+        "a carreira completa. A leitura cruza três métricas "
         "bibliométricas canônicas: o **$h$-index** (consistência de produção e citação), o **$g$-index de Egghe** "
         "(que pontua artigos de impacto desproporcional ou 'blockbusters'), o **$e$-index de Zhang** "
         "(que mede o excesso citacional acumulado além do núcleo $h$), e o "
-        "**$m$-quotient de Hirsch** ($m = h / \\text{anos de carreira}$), que mede a velocidade de impacto por ano ativo."
+        "**$m$-quotient de Hirsch** ($m = h / \\text{anos observados no corpus}$)."
     )
 
     auth_df = author_impact_advanced_indices(articles_df, min_papers=2)
@@ -851,7 +825,7 @@ def _volume_vs_impact(author_rows: pd.DataFrame) -> None:
 
 def _full_output_table(articles_df: pd.DataFrame) -> pd.DataFrame:
     st.subheader("📋 Produção completa por autor e ano")
-    matrix = _author_year_matrix_cached(loaders.filter_signature())
+    matrix = loaders.author_year_matrix_cached(loaders.filter_signature())
     if matrix.empty:
         st.info("Sem anos válidos para montar a tabela.")
         return matrix

@@ -4,8 +4,7 @@ Mapeia a taxonomia dos métodos matemáticos de otimização e espectro de compl
 as funções-objetivo e formulações multi-critério (Pareto), os paradigmas de modelagem da incerteza (estocástica,
 robusta, fuzzy, DRO), os horizontes temporais (expansão dinâmica vs. dias representativos), a validação em sistemas
 elétricos de teste (IEEE 33, 69, 123-bus e redes reais), o ferramental de solvers computacionais (GAMS, CPLEX,
-MATLAB, OpenDSS), a dinâmica de liderança científica (h-index, g-index, e-index, m-quotient de Hirsch),
-a estilometria textual (Flesch-Kincaid / TTR) e a longevidade citacional (meia-vida e artigos evergreen).
+MATLAB e OpenDSS.
 """
 
 from __future__ import annotations
@@ -17,77 +16,56 @@ import streamlit as st
 
 from lake_research_map.dashboard import loaders
 from lake_research_map.dashboard.analytics import (
-    author_impact_advanced_indices,
-    author_m_quotient_analysis,
     benchmark_feeders_analysis,
-    citation_longevity_and_decay,
     computational_solvers_analysis,
     mathematical_complexity_spectrum,
     objective_functions_taxonomy,
     optimization_methods_taxonomy,
     planning_time_horizons_analysis,
-    text_readability_and_stylometrics,
     uncertainty_paradigms_analysis,
 )
 from lake_research_map.dashboard.components import (
-    article_table,
-    metric_row,
     page_header,
     render_chart,
+    summary_card_row,
 )
-from lake_research_map.dashboard.theme import CATEGORICAL_PALETTE, theme_tokens
+from lake_research_map.dashboard.theme import CATEGORICAL_PALETTE
 
 
 def render() -> None:
     page_header(
         "🔬",
-        "Evidências Metodológicas",
-        "Formulação matemática, funções-objetivo, incerteza, horizontes temporais, validação IEEE, solvers e longevidade citacional.",
+        "Evidências de engenharia",
+        "Formulação matemática, funções-objetivo, incerteza, horizontes temporais, validação IEEE e solvers.",
     )
 
     articles_df = loaders.require_articles()
     df = loaders.with_semantics(articles_df)
 
-    (
-        tab_methods,
-        tab_objectives,
-        tab_uncertainty,
-        tab_horizons,
-        tab_feeders,
-        tab_solvers,
-        tab_longevity,
-    ) = st.tabs(
+    section = st.selectbox(
+        "Dimensão da evidência",
         [
-            "⚙️ Métodos & Complexidade",
-            "🎯 Funções-Objetivo",
-            "🎲 Modelagem da Incerteza",
-            "⏱️ Horizontes Temporais",
-            "⚡ Benchmarks IEEE & Redes",
-            "💻 Ferramental & Solvers",
-            "⏳ Longevidade & Estilometria",
-        ]
+            "Métodos e complexidade",
+            "Funções-objetivo",
+            "Modelagem da incerteza",
+            "Horizontes temporais",
+            "Benchmarks IEEE e redes",
+            "Ferramental e solvers",
+        ],
     )
 
-    with tab_methods:
+    if section == "Métodos e complexidade":
         _render_methods_tab(df)
-
-    with tab_objectives:
+    elif section == "Funções-objetivo":
         _render_objectives_tab(df)
-
-    with tab_uncertainty:
+    elif section == "Modelagem da incerteza":
         _render_uncertainty_tab(df)
-
-    with tab_horizons:
+    elif section == "Horizontes temporais":
         _render_horizons_tab(df)
-
-    with tab_feeders:
+    elif section == "Benchmarks IEEE e redes":
         _render_feeders_tab(df)
-
-    with tab_solvers:
+    elif section == "Ferramental e solvers":
         _render_solvers_tab(df)
-
-    with tab_longevity:
-        _render_longevity_and_text_tab(df)
 
 
 # ---------------------------------------------------------------------------
@@ -121,7 +99,7 @@ def _render_methods_tab(df: pd.DataFrame) -> None:
     ]
     top_recent_method = summary_df.sort_values(by="pct_recent", ascending=False).iloc[0]["method"]
 
-    metric_row(
+    summary_card_row(
         [
             ("🏆 Método Mais Frequente", top_method, f"{summary_df.iloc[0]['articles']} artigos"),
             ("🚀 Maior Momentum Recente", top_recent_method, "Maior proporção ≥ 2021"),
@@ -268,7 +246,7 @@ def _render_objectives_tab(df: pd.DataFrame) -> None:
     top_obj = summary_df.iloc[0]["objective"]
     top_cites = summary_df.sort_values(by="mean_citations", ascending=False).iloc[0]["objective"]
 
-    metric_row(
+    summary_card_row(
         [
             ("🏆 Objetivo Mais Frequente", top_obj, f"{summary_df.iloc[0]['articles']} artigos"),
             ("🌐 Taxa Multi-Objetivo", f"{multi_ratio:.1f}%", "Estudos com ≥ 2 objetivos"),
@@ -407,7 +385,7 @@ def _render_uncertainty_tab(df: pd.DataFrame) -> None:
     top_paradigm = paradigms_df.iloc[0]["paradigm"]
     top_cites = paradigms_df.sort_values(by="mean_citations", ascending=False).iloc[0]["paradigm"]
 
-    metric_row(
+    summary_card_row(
         [
             (
                 "🎲 Paradigma Predominante",
@@ -529,7 +507,7 @@ def _render_horizons_tab(df: pd.DataFrame) -> None:
     top_h = horizons_df.iloc[0]["horizon"]
     total_art = horizons_df["articles"].sum()
 
-    metric_row(
+    summary_card_row(
         [
             ("⏱️ Estrutura Mais Adotada", top_h, f"{horizons_df.iloc[0]['articles']} artigos"),
             (
@@ -635,7 +613,7 @@ def _render_feeders_tab(df: pd.DataFrame) -> None:
     top_feeder = feeders_df.iloc[0]["feeder"]
     real_nets = feeders_df[feeders_df["feeder"].str.contains("Reais")]["articles"].sum()
 
-    metric_row(
+    summary_card_row(
         [
             (
                 "🔌 Benchmark Mais Utilizado",
@@ -725,7 +703,7 @@ def _render_solvers_tab(df: pd.DataFrame) -> None:
     top_tool = solvers_df.iloc[0]["tool"]
     top_cat = ecosystem_df.iloc[0]["category"]
 
-    metric_row(
+    summary_card_row(
         [
             ("💻 Ferramenta Mais Citada", top_tool, f"{solvers_df.iloc[0]['articles']} artigos"),
             (
@@ -790,319 +768,3 @@ def _render_solvers_tab(df: pd.DataFrame) -> None:
         "Citações Médias",
     ]
     st.dataframe(disp_s, hide_index=True, width="stretch")
-
-
-# ---------------------------------------------------------------------------
-# Tab 7: Liderança Científica & Carreira
-# ---------------------------------------------------------------------------
-
-
-def _render_authors_tab(df: pd.DataFrame) -> None:
-    st.markdown("### 🎖️ Índices Avançados de Liderança Científica & Velocidade de Carreira")
-    st.caption(
-        "Avaliação formal do impacto individual com indicadores da cienciometria moderna: "
-        "**h-index**, **g-index de Egghe (2006)**, **e-index de Zhang (2009)** e o "
-        "**$m$-quotient de Hirsch** ($m = h / \\text{anos de carreira}$), que mede a velocidade de impacto por ano ativo."
-    )
-
-    auth_df = author_impact_advanced_indices(df, min_papers=2)
-    m_df = author_m_quotient_analysis(df, min_papers=2)
-
-    if auth_df.empty:
-        st.info("Autores com produção mínima de 2 artigos não encontrados.")
-        return
-
-    top_g = auth_df.iloc[0]
-    top_m = m_df.iloc[0] if not m_df.empty else None
-
-    metric_row(
-        [
-            (
-                "🥇 Maior g-index",
-                f"{top_g['author']} (g={top_g['g_index']})",
-                f"h-index: {top_g['h_index']}",
-            ),
-            (
-                "🔥 Maior Excesso Citacional (e)",
-                f"{auth_df.sort_values(by='e_index', ascending=False).iloc[0]['author']}",
-                f"e={auth_df.sort_values(by='e_index', ascending=False).iloc[0]['e_index']:.1f}",
-            ),
-            (
-                "⚡ Maior Velocidade (m-quotient)",
-                f"{top_m['author']} (m={top_m['m_quotient']})" if top_m is not None else "N/A",
-                "h-index por ano de carreira",
-            ),
-            ("👥 Pesquisadores Analisados", str(len(auth_df)), "≥ 2 artigos no corpus"),
-        ]
-    )
-
-    col_scatter, col_ebar = st.columns([1.1, 0.9])
-
-    with col_scatter:
-        st.markdown("#### 🎯 Dispersão h-index vs. g-index (Egghe)")
-        max_val = max(auth_df["g_index"].max(), auth_df["h_index"].max()) + 2
-
-        t = theme_tokens()
-        ref_line = t.get("reference_line_subtle", "rgba(180, 180, 180, 0.6)")
-        border_color = t.get("point_border", "#FFFFFF")
-
-        fig_hg = go.Figure()
-        # 45-degree line (g = h)
-        fig_hg.add_trace(
-            go.Scatter(
-                x=[0, max_val],
-                y=[0, max_val],
-                mode="lines",
-                name="g = h (Produção Uniforme)",
-                line={"dash": "dash", "color": ref_line, "width": 1.5},
-            )
-        )
-        # Scatter points
-        hover_hg = [
-            f"<b>{r['author']}</b><br>• g-index: {r['g_index']}<br>• h-index: {r['h_index']}<br>• Artigos: {r['papers']}<br>• Citações: {r['total_citations']:,}<br>• e-index: {r['e_index']}"
-            for _, r in auth_df.iterrows()
-        ]
-        fig_hg.add_trace(
-            go.Scatter(
-                x=auth_df["h_index"],
-                y=auth_df["g_index"],
-                mode="markers",
-                marker={
-                    "size": auth_df["papers"].clip(lower=6, upper=24),
-                    "color": auth_df["g_h_diff"],
-                    "colorscale": "Plasma",
-                    "colorbar": {"title": "g - h"},
-                    "opacity": 0.85,
-                    "line": {"color": border_color, "width": 1},
-                },
-                hoverinfo="text",
-                hovertext=hover_hg,
-                name="Pesquisadores",
-            )
-        )
-        fig_hg.update_layout(
-            xaxis_title="h-index (Consistência)",
-            yaxis_title="g-index de Egghe (Impacto com Blockbusters)",
-            height=480,
-            margin={"l": 20, "r": 20, "t": 30, "b": 30},
-        )
-        render_chart(fig_hg)
-
-    with col_ebar:
-        st.markdown("#### 🚀 Top 12 por Excesso Citacional (e-index de Zhang)")
-        top_e = auth_df.sort_values(by="e_index", ascending=True).tail(12)
-        fig_e = px.bar(
-            top_e,
-            x="e_index",
-            y="author",
-            orientation="h",
-            color="total_citations",
-            color_continuous_scale="Magma",
-            labels={
-                "e_index": "e-index de Zhang",
-                "author": "Pesquisador",
-                "total_citations": "Total Citações",
-            },
-        )
-        fig_e.update_layout(
-            xaxis_title="e-index de Zhang",
-            yaxis_title="Pesquisador",
-            height=480,
-            margin={"l": 20, "r": 20, "t": 30, "b": 30},
-        )
-        render_chart(fig_e)
-
-    if not m_df.empty:
-        st.markdown(
-            "#### ⚡ Top 12 em Velocidade Citacional por Ano de Carreira (m-quotient de Hirsch)"
-        )
-        top_m_plot = m_df.head(12).sort_values(by="m_quotient", ascending=True)
-        fig_m = px.bar(
-            top_m_plot,
-            x="m_quotient",
-            y="author",
-            orientation="h",
-            color="papers",
-            color_continuous_scale="Tealgrn",
-            labels={
-                "m_quotient": "m-quotient (h-index / Anos de Carreira)",
-                "author": "Pesquisador",
-                "papers": "Artigos no Corpus",
-            },
-        )
-        fig_m.update_layout(
-            xaxis_title="m-quotient (h / Anos de Carreira)",
-            yaxis_title="Pesquisador",
-            height=420,
-            margin={"l": 20, "r": 20, "t": 30, "b": 30},
-        )
-        render_chart(fig_m)
-
-    st.markdown("#### 📋 Ranking Completo de Liderança Científica")
-    disp_auth = auth_df.copy()
-    if not m_df.empty:
-        disp_auth = disp_auth.merge(
-            m_df[["author", "first_year", "career_span_years", "m_quotient"]],
-            on="author",
-            how="left",
-        )
-        disp_auth.columns = [
-            "Pesquisador",
-            "Artigos",
-            "Total Citações",
-            "Média Citações",
-            "h-index",
-            "g-index (Egghe)",
-            "e-index (Zhang)",
-            "i10-index",
-            "Diferença (g - h)",
-            "1º Ano",
-            "Anos de Carreira",
-            "m-quotient",
-        ]
-    else:
-        disp_auth.columns = [
-            "Pesquisador",
-            "Artigos",
-            "Total Citações",
-            "Média Citações",
-            "h-index",
-            "g-index (Egghe)",
-            "e-index (Zhang)",
-            "i10-index",
-            "Diferença (g - h)",
-        ]
-    st.dataframe(disp_auth.head(30), hide_index=True, width="stretch")
-
-
-# ---------------------------------------------------------------------------
-# Tab 8: Longevidade & Estilometria Textual
-# ---------------------------------------------------------------------------
-
-
-def _render_longevity_and_text_tab(df: pd.DataFrame) -> None:
-    st.markdown("### ⏳ Longevidade do Conhecimento, Artigos Evergreen & Estilometria")
-    st.caption(
-        "Mapeia a taxa de sobrevivência do impacto científico no tempo, quantifica a **Meia-Vida Citacional**, "
-        "destaca os **Artigos Evergreen** e investiga as propriedades linguísticas e estilométricas dos resumos "
-        "(Flesch-Kincaid e Riqueza Vocabular TTR)."
-    )
-
-    res_long = citation_longevity_and_decay(df)
-    decay_curve = res_long["decay_curve"]
-    evergreen_df = res_long["evergreen_df"]
-
-    res_text = text_readability_and_stylometrics(df)
-    temp_text = res_text["temporal_df"]
-    sample_text = res_text["sample_df"]
-
-    metric_row(
-        [
-            (
-                "⌛ Meia-Vida Citacional",
-                f"{res_long['half_life_years']:.1f} anos",
-                "Tempo p/ 50% das citações",
-            ),
-            (
-                "🌲 Artigos Evergreen",
-                str(len(evergreen_df)),
-                "Idade ≥ 10 anos & Citações ≥ 40",
-            ),
-            (
-                "📚 Nível Flesch-Kincaid",
-                f"{res_text['mean_fkgl']:.1f} anos",
-                "Complexidade acadêmica",
-            ),
-            (
-                "🧬 Riqueza Vocabular (TTR)",
-                f"{res_text['mean_ttr']:.3f}",
-                "Diversidade lexical média",
-            ),
-        ]
-    )
-
-    col_curv, col_fkgl = st.columns([1, 1])
-
-    with col_curv:
-        st.markdown("#### 📉 Curva Acumulada de Meia-Vida Citacional")
-        if not decay_curve.empty:
-            fig_decay = go.Figure()
-            fig_decay.add_trace(
-                go.Scatter(
-                    x=decay_curve["age"],
-                    y=decay_curve["cum_pct"],
-                    mode="lines+markers",
-                    name="Citações Acumuladas (%)",
-                    line={"color": "#636EFA", "width": 2.5},
-                )
-            )
-            fig_decay.add_hline(
-                y=50,
-                line_dash="dash",
-                line_color="#EF553B",
-                annotation_text=f"Meia-Vida = {res_long['half_life_years']:.0f} anos",
-                annotation_position="bottom right",
-            )
-            fig_decay.update_layout(
-                xaxis_title="Idade do Artigo (Anos decorridos desde publicação)",
-                yaxis_title="Percentual Acumulado de Citações (%)",
-                height=420,
-                margin={"l": 20, "r": 20, "t": 30, "b": 30},
-            )
-            render_chart(fig_decay)
-
-    with col_fkgl:
-        st.markdown("#### 📈 Complexidade Textual Flesch-Kincaid por Ano")
-        if not temp_text.empty:
-            fig_f = px.line(
-                temp_text,
-                x="year",
-                y="mean_fkgl",
-                markers=True,
-                labels={
-                    "year": "Ano de Publicação",
-                    "mean_fkgl": "Nível Flesch-Kincaid (Anos de Estudo)",
-                },
-                color_discrete_sequence=["#EF553B"],
-            )
-            fig_f.update_layout(
-                xaxis_title="Ano de Publicação",
-                yaxis_title="Nível Flesch-Kincaid (Anos de Estudo)",
-                height=420,
-                margin={"l": 20, "r": 20, "t": 30, "b": 30},
-            )
-            render_chart(fig_f)
-
-    if not sample_text.empty:
-        st.markdown("#### 🎯 Riqueza Vocabular (TTR) vs. Citações Recebidas")
-        fig_s = px.scatter(
-            sample_text.sample(min(400, len(sample_text)), random_state=42),
-            x="ttr",
-            y="citation_count",
-            color="fre",
-            color_continuous_scale="Blues",
-            labels={
-                "ttr": "Type-Token Ratio (Diversidade Lexical)",
-                "citation_count": "Citações",
-                "fre": "Flesch Ease",
-            },
-            opacity=0.75,
-        )
-        fig_s.update_layout(
-            xaxis_title="Type-Token Ratio (Diversidade Lexical)",
-            yaxis_title="Citações Recebidas",
-            height=380,
-            margin={"l": 20, "r": 20, "t": 30, "b": 30},
-        )
-        render_chart(fig_s)
-
-    st.markdown("#### 🌲 Top Artigos Evergreen no Planejamento de Distribuição")
-    if not evergreen_df.empty:
-        display_cols = ["title", "year", "venue", "citation_count", "age", "annual_velocity"]
-        article_table(
-            evergreen_df.head(10),
-            [c for c in display_cols if c in evergreen_df.columns],
-            download_key="evergreen_articles_download",
-        )
-    else:
-        st.info("Sem artigos evergreen suficientes para exibição.")

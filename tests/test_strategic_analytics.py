@@ -118,16 +118,9 @@ def test_callon_strategic_diagram():
     res = callon_strategic_diagram(df, embs, dois)
     themes_df = res["themes_df"]
 
-    assert not themes_df.empty
-    assert len(themes_df) == 3
-    assert "density" in themes_df.columns
-    assert "centrality" in themes_df.columns
-    assert "quadrant" in themes_df.columns
-
-    # Callon quadrants must be non-empty strings
-    assert all(isinstance(q, str) and q.startswith("Q") for q in themes_df["quadrant"])
-    assert res["median_density"] > 0
-    assert res["median_centrality"] > -1.0
+    assert res["available"] is False
+    assert "keyword equivalence" in res["reason"].lower()
+    assert themes_df.empty
 
 
 def test_keyword_cooccurrence_graph():

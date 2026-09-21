@@ -101,7 +101,7 @@ def test_fit_and_forecast_band_brackets_the_point_forecast():
 def test_fit_and_forecast_compares_every_candidate():
     result = fit_and_forecast(_linear_series())
 
-    assert set(result.model_comparison["model"]) == {"linear", "polynomial", "log_linear"}
+    assert set(result.model_comparison["model"]) == {"baseline", "linear", "log_linear"}
     assert result.chosen_model in set(result.model_comparison["model"])
 
 

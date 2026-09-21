@@ -23,12 +23,57 @@ from lake_research_map.dashboard.data import (
     load_articles_all_layers,
     load_chunk_search_data,
     load_chunks,
+    load_dataset_versions,
+    load_duplicate_overrides,
     load_duplicate_pairs,
+    load_pipeline_executions,
+    load_pipeline_runs,
+    load_publication_state,
+    load_quality_results,
+    load_rejected_records,
     load_search_configs,
     load_semantics,
-    pick_best_articles_layer,
+    load_source_changes,
     raw_funnel_counts,
+    select_articles_layer,
 )
+
+
+@st.cache_data(ttl=60)
+def pipeline_runs() -> pd.DataFrame:
+    """Recent pipeline executions for the operational dashboard page."""
+    return load_pipeline_runs()
+
+
+@st.cache_data(ttl=30)
+def pipeline_executions() -> pd.DataFrame:
+    return load_pipeline_executions()
+
+
+@st.cache_data(ttl=30)
+def dataset_versions() -> pd.DataFrame:
+    return load_dataset_versions()
+
+
+@st.cache_data(ttl=10)
+def publication_state() -> pd.DataFrame:
+    return load_publication_state()
+
+
+@st.cache_data(ttl=30)
+def quality_results() -> pd.DataFrame:
+    return load_quality_results()
+
+
+@st.cache_data(ttl=30)
+def source_changes() -> pd.DataFrame:
+    return load_source_changes()
+
+
+@st.cache_data(ttl=60)
+def rejected_records() -> pd.DataFrame:
+    """Silver rejection audit rows."""
+    return load_rejected_records()
 
 
 def _to_list(value):
@@ -90,9 +135,8 @@ def search_configs() -> pd.DataFrame:
 def semantics() -> pd.DataFrame:
     """Per-article semantic signals, keyed by DOI.
 
-    Lives in gold while the rest of the dashboard usually reads silver (see
-    `pick_best_articles_layer`), so callers join it on `doi` rather than
-    expecting it as a column of the active layer.
+    Callers join it on `doi` rather than expecting semantic signals to be
+    embedded in the active article table.
     """
     return load_semantics()
 
@@ -100,6 +144,11 @@ def semantics() -> pd.DataFrame:
 @st.cache_data(ttl=60)
 def duplicate_pairs() -> pd.DataFrame:
     return load_duplicate_pairs()
+
+
+@st.cache_data(ttl=60)
+def duplicate_overrides() -> pd.DataFrame:
+    return load_duplicate_overrides()
 
 
 def with_semantics(df: pd.DataFrame) -> pd.DataFrame:
@@ -133,6 +182,11 @@ def _normalize_article_frame(df: pd.DataFrame) -> pd.DataFrame:
             df[col] = df[col].apply(_to_list)
     if "source" not in df.columns and "sources" in df.columns:
         df["source"] = df["sources"].apply(lambda s: s[0] if s else "unknown")
+    if "has_abstract" not in df.columns:
+        if "abstract" in df.columns:
+            df["has_abstract"] = df["abstract"].fillna("").astype(str).str.strip().ne("")
+        else:
+            df["has_abstract"] = False
     return df
 
 
@@ -200,25 +254,21 @@ def layer_funnel() -> pd.DataFrame:
 
 
 @st.cache_data(ttl=60)
+def _article_bundle() -> tuple[str, pd.DataFrame, dict[str, object]]:
+    layer, df, status = select_articles_layer()
+    return layer, _normalize_article_frame(df), status
+
+
 def articles() -> tuple[str, pd.DataFrame]:
-    """Best available articles layer, with the normalization every page needs."""
-    layer, df = pick_best_articles_layer()
-    if df.empty:
-        return layer, df
-
-    df = df.copy()
-    for col in ("authors", "keywords", "sources"):
-        if col in df.columns:
-            df[col] = df[col].apply(_to_list)
-
-    # Charts that break down by source need a single scalar `source` column
-    # regardless of which layer is active -- bronze has it already, silver only
-    # has the plural `sources` list (there's no cross-source overlap in this
-    # corpus, so the first entry is always the article's one true source).
-    if "source" not in df.columns and "sources" in df.columns:
-        df["source"] = df["sources"].apply(lambda s: s[0] if s else "unknown")
-
+    """Canonical Gold articles, or an explicitly reported degraded fallback."""
+    layer, df, _ = _article_bundle()
     return layer, df
+
+
+def article_population_status() -> dict[str, object]:
+    """Describe the selected layer without changing the established article API."""
+    _, _, status = _article_bundle()
+    return status
 
 
 @st.cache_data(ttl=60)
@@ -275,6 +325,86 @@ def filtered_articles() -> tuple[str, pd.DataFrame]:
 
 
 @st.cache_data(ttl=60)
+def author_table(filter_sig: tuple) -> pd.DataFrame:
+    """Canonicalized author rows for the active global-filter signature."""
+    from lake_research_map.dashboard.analytics import (
+        author_display_name,
+        canonical_author,
+        explode_authors_with_position,
+    )
+
+    _, articles_df = filtered_articles()
+    exploded = explode_authors_with_position(articles_df)
+    if exploded.empty:
+        return exploded
+    exploded["author_key"] = exploded["author"].apply(canonical_author)
+    exploded = exploded[exploded["author_key"] != ""]
+    display_names = exploded.groupby("author_key")["author"].apply(author_display_name)
+    exploded["author_display"] = exploded["author_key"].map(display_names)
+    return exploded
+
+
+@st.cache_data(ttl=60)
+def author_year_matrix_cached(filter_sig: tuple) -> pd.DataFrame:
+    """Author-by-year output matrix for the active global-filter signature."""
+    from lake_research_map.dashboard.analytics import author_year_matrix
+
+    _, articles_df = filtered_articles()
+    return author_year_matrix(articles_df)
+
+
+@st.cache_data(ttl=60)
+def volume_forecast(source: str | None):
+    """Cached publication-volume forecast for one source or the full corpus."""
+    from lake_research_map.dashboard.forecasting import fit_and_forecast, yearly_counts
+
+    _, articles_df = articles()
+    return fit_and_forecast(yearly_counts(articles_df, source=source))
+
+
+@st.cache_data(ttl=60)
+def keyword_forecasts(min_occurrences: int = 20):
+    """Fit and cache temporal models for sufficiently frequent keywords."""
+    from lake_research_map.dashboard.analytics import explode_keywords
+    from lake_research_map.dashboard.forecasting import fit_and_forecast
+
+    _, articles_df = articles()
+    exploded = explode_keywords(articles_df)
+    if exploded.empty or "year" not in exploded.columns:
+        return "no_keywords", [], {}, None
+
+    counts = exploded["keyword"].value_counts()
+    eligible = counts[counts >= min_occurrences].index.tolist()
+    if not eligible:
+        return "none_eligible", [], {}, None
+
+    rows = []
+    results = {}
+    final_year = None
+    for keyword in eligible:
+        keyword_df = exploded[exploded["keyword"] == keyword]
+        series = keyword_df.groupby(keyword_df["year"].astype("Int64")).size()
+        series.index = series.index.astype(int)
+        result = fit_and_forecast(series)
+        if result.insufficient_data:
+            continue
+        results[keyword] = result
+        final_year = result.forecast_years[-1]
+        observed = float(series.get(2025, series.tail(1).iloc[0] if len(series) else 0))
+        forecast = float(result.forecast_values[-1])
+        rows.append(
+            {
+                "keyword": keyword,
+                "2025 (real)": observed,
+                f"{final_year} (previsto)": forecast,
+                "variação": forecast - observed,
+                "modelo": result.chosen_model,
+            }
+        )
+    return "ok", rows, results, final_year
+
+
+@st.cache_data(ttl=60)
 def filter_chunks(dois: tuple[str, ...]) -> pd.DataFrame:
     """Keep RAG chunks belonging to the currently filtered article set."""
     chunks_df = chunks()
@@ -302,6 +432,13 @@ def require_articles() -> pd.DataFrame:
             "`uv run lake-research-map --stage all`) e recarregue esta página."
         )
         st.stop()
+    status = article_population_status()
+    if not status["is_canonical"]:
+        reasons = " ".join(status["fallback_reasons"])
+        st.warning(
+            f"Modo degradado: análises baseadas na camada `{status['layer']}`, não na população "
+            f"curada Gold. {reasons}"
+        )
     _, df = filtered_articles()
     if df.empty:
         st.warning(
@@ -378,7 +515,7 @@ def abstract_embeddings() -> tuple[list[str], np.ndarray] | None:
 
 @st.cache_data(ttl=300)
 def alternative_projections() -> dict[str, pd.DataFrame]:
-    """Compute PCA 2D and UMAP projections on the abstract embedding matrix."""
+    """Compute available named projections without relabeling fallback algorithms."""
     from lake_research_map.transform.semantics import project_pca_2d, project_umap
 
     embs = abstract_embeddings()
@@ -389,17 +526,23 @@ def alternative_projections() -> dict[str, pd.DataFrame]:
         return {}
 
     pca_coords = project_pca_2d(matrix)
-    umap_coords = project_umap(matrix)
-
-    return {
+    projections = {
         "PCA 2D": pd.DataFrame({"doi": dois, "map_x": pca_coords[:, 0], "map_y": pca_coords[:, 1]}),
-        "UMAP": pd.DataFrame({"doi": dois, "map_x": umap_coords[:, 0], "map_y": umap_coords[:, 1]}),
     }
+    try:
+        umap_coords = project_umap(matrix)
+    except ImportError:
+        pass
+    else:
+        projections["UMAP"] = pd.DataFrame(
+            {"doi": dois, "map_x": umap_coords[:, 0], "map_y": umap_coords[:, 1]}
+        )
+    return projections
 
 
 @st.cache_data(ttl=300)
 def semantic_novelty_scores() -> pd.DataFrame:
-    """Compute semantic novelty (k-NN distance in embedding space) for all articles."""
+    """Compute semantic isolation (k-NN distance) for all articles."""
     from lake_research_map.transform.semantics import compute_semantic_novelty
 
     embs = abstract_embeddings()

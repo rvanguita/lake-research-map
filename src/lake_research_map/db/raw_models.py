@@ -10,6 +10,8 @@ import datetime as dt
 from sqlalchemy import JSON, DateTime, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+from lake_research_map.db.time import naive_utc_now
+
 
 class Base(DeclarativeBase):
     pass
@@ -29,7 +31,65 @@ class SourceFile(Base):
     sha256: Mapped[str] = mapped_column(String(64))
     size_bytes: Mapped[int] = mapped_column(Integer)
     mtime: Mapped[dt.datetime] = mapped_column(DateTime)
-    ingested_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
+    ingested_at: Mapped[dt.datetime] = mapped_column(DateTime, default=naive_utc_now)
+    dataset_version_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    source_revision_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+
+
+class SourceBlob(Base):
+    """One immutable, content-addressed input object."""
+
+    __tablename__ = "lit_source_blobs"
+
+    sha256: Mapped[str] = mapped_column(String(64), primary_key=True)
+    archive_path: Mapped[str] = mapped_column(String(512), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=naive_utc_now)
+
+
+class SourceRevision(Base):
+    """Immutable identity of one logical path at one content revision."""
+
+    __tablename__ = "lit_source_revisions"
+    __table_args__ = (UniqueConstraint("path", "sha256", name="uq_source_revision_path_hash"),)
+
+    revision_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    path: Mapped[str] = mapped_column(String(512), index=True)
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    mtime: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False)
+    first_seen_at: Mapped[dt.datetime] = mapped_column(DateTime, default=naive_utc_now)
+
+
+class DatasetSourceFile(Base):
+    """One present source path in an immutable dataset-version manifest."""
+
+    __tablename__ = "lit_dataset_source_files"
+    __table_args__ = (
+        UniqueConstraint("dataset_version_id", "path", name="uq_dataset_source_path"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    dataset_version_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    path: Mapped[str] = mapped_column(String(512), nullable=False)
+    source_revision_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+
+
+class SourceChange(Base):
+    """Per-file reconciliation event retained for audit and provenance."""
+
+    __tablename__ = "lit_source_changes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    execution_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    dataset_version_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    path: Mapped[str] = mapped_column(String(512), nullable=False)
+    change_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    previous_revision_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    current_revision_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    recorded_at: Mapped[dt.datetime] = mapped_column(DateTime, default=naive_utc_now)
 
 
 class Config(Base):
@@ -45,6 +105,8 @@ class Config(Base):
     search_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     raw_text: Mapped[str] = mapped_column(Text)
     source_file: Mapped[str] = mapped_column(String(512))
+    dataset_version_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    source_revision_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
 
 
 class IeeeCsvRow(Base):
@@ -58,6 +120,8 @@ class IeeeCsvRow(Base):
     source_file: Mapped[str] = mapped_column(String(512))
     fields: Mapped[dict] = mapped_column(JSON)  # {csv column name: value}
     doi: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)
+    dataset_version_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    source_revision_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
 
     __table_args__ = (UniqueConstraint("source_file", "row_index"),)
 
@@ -75,6 +139,8 @@ class BibEntry(Base):
     source_file: Mapped[str] = mapped_column(String(255))
     fields: Mapped[dict] = mapped_column(JSON)  # {bibtex field name: value}
     doi: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)
+    dataset_version_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    source_revision_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
 
     __table_args__ = (UniqueConstraint("source", "bib_key", "source_file"),)
 
@@ -89,3 +155,6 @@ class PdfFile(Base):
     path: Mapped[str] = mapped_column(String(512))
     sha256: Mapped[str] = mapped_column(String(64))
     size_bytes: Mapped[int] = mapped_column(Integer)
+    archive_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    dataset_version_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    source_revision_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)

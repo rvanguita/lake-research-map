@@ -106,12 +106,15 @@ def _link_pdfs(
         if row.pdf_match_score is not None and row.pdf_match_score >= score:
             continue
         row.has_pdf = True
-        row.pdf_path = pdf.path
+        row.pdf_path = pdf.archive_path or pdf.path
         row.pdf_match_score = score
 
 
 def build_silver_articles(
-    bronze_session: Session, silver_session: Session, raw_session: Session
+    bronze_session: Session,
+    silver_session: Session,
+    raw_session: Session,
+    dataset_version_id: str | None = None,
 ) -> dict:
     bronze_articles = bronze_session.scalars(select(BronzeArticle)).all()
 
@@ -122,6 +125,7 @@ def build_silver_articles(
         if not article.doi:
             rejected_rows.append(
                 RejectedArticle(
+                    dataset_version_id=dataset_version_id,
                     bronze_id=article.id,
                     source=article.source,
                     source_id=article.source_id,
@@ -143,7 +147,7 @@ def build_silver_articles(
         merged["is_non_article"] = _is_non_article(
             merged.get("record_type"), merged.get("abstract")
         )
-        row = SilverArticle(**merged)
+        row = SilverArticle(dataset_version_id=dataset_version_id, **merged)
         silver_session.add(row)
         silver_rows.append(row)
     silver_session.add_all(rejected_rows)
@@ -152,7 +156,7 @@ def build_silver_articles(
     pdf_files = raw_session.scalars(select(PdfFile)).all()
     _link_pdfs(silver_session, silver_rows, pdf_files)
 
-    silver_session.commit()
+    silver_session.flush()
 
     return {
         "written": len(silver_rows),

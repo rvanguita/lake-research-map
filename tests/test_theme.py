@@ -10,6 +10,8 @@ dashboard's navy page. These assert the keys reach the serialized figure, where
 Streamlit looks for them.
 """
 
+from pathlib import Path
+
 import pandas as pd
 import plotly.express as px
 import pytest
@@ -111,7 +113,7 @@ def test_page_header_accepts_two_and_three_args(monkeypatch) -> None:
 
     # 3-arg call
     page_header("🏷️", "Tópicos", "Descrição longa")
-    assert recorded[-2] == ("title", "🏷️ Tópicos")
+    assert recorded[-2] == ("title", "Tópicos")
     assert recorded[-1] == ("caption", "Descrição longa")
 
     # 2-arg call
@@ -123,12 +125,25 @@ def test_page_header_accepts_two_and_three_args(monkeypatch) -> None:
 def test_all_dashboard_pages_importable_and_render_callable() -> None:
     from lake_research_map.dashboard.app import PAGES
 
-    assert len(PAGES) == 13
+    assert len(PAGES) == 10
     for render_fn, title, icon, url_path in PAGES:
         assert callable(render_fn), f"Page {title} render function is not callable"
         assert title and isinstance(title, str)
         assert icon and isinstance(icon, str)
         assert url_path and isinstance(url_path, str)
+
+
+def test_retired_dashboard_controllers_are_not_registered() -> None:
+    from lake_research_map.dashboard.app import PAGES
+
+    slugs = {url_path for _, _, _, url_path in PAGES}
+    assert slugs.isdisjoint({"frontiers", "strategic", "search-config"})
+    pages_dir = Path(__file__).parents[1] / "src/lake_research_map/dashboard/pages"
+    for page in pages_dir.glob("*.py"):
+        source = page.read_text(encoding="utf-8")
+        assert "@st.cache_data" not in source, page.name
+        assert "read_sql" not in source, page.name
+        assert "get_engine" not in source, page.name
 
 
 def test_polar_figure_gets_transparent_background() -> None:

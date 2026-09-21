@@ -14,9 +14,10 @@ DOI never appears in the CSV -- see CLAUDE.md "counts don't line up".
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import re
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from lake_research_map.db.bronze_models import Article as BronzeArticle
@@ -123,6 +124,10 @@ def _upsert(session: Session, source: str, source_id: str, **fields) -> None:
             setattr(existing, key, value)
 
 
+def _source_token(path: str) -> str:
+    return hashlib.sha256(path.encode("utf-8")).hexdigest()[:12]
+
+
 def _build_ieee_records(raw_session: Session, bronze_session: Session) -> int:
     csv_rows = raw_session.scalars(select(IeeeCsvRow)).all()
     bib_entries = raw_session.scalars(select(BibEntry).where(BibEntry.source == "ieee")).all()
@@ -163,7 +168,7 @@ def _build_ieee_records(raw_session: Session, bronze_session: Session) -> int:
         _upsert(
             bronze_session,
             source="ieee",
-            source_id=f"csv:{row.row_index}",
+            source_id=f"csv:{_source_token(row.source_file)}:{row.row_index}",
             record_type="article",
             doi=doi,
             title=f.get("Document Title"),
@@ -198,7 +203,7 @@ def _build_ieee_records(raw_session: Session, bronze_session: Session) -> int:
         _upsert(
             bronze_session,
             source="ieee",
-            source_id=f"bib:{entry.bib_key}",
+            source_id=f"bib:{_source_token(entry.source_file)}:{entry.bib_key}",
             record_type=entry.entry_type.lower(),
             doi=doi,
             title=f.get("title"),
@@ -232,7 +237,7 @@ def _build_elsevier_records(raw_session: Session, bronze_session: Session) -> in
         _upsert(
             bronze_session,
             source="elsevier",
-            source_id=f"bib:{entry.bib_key}",
+            source_id=f"bib:{_source_token(entry.source_file)}:{entry.bib_key}",
             record_type=entry.entry_type.lower(),
             doi=doi,
             title=f.get("title"),
@@ -288,10 +293,20 @@ def _enrich_citation_counts(bronze_session: Session) -> int:
     return enriched
 
 
-def build_bronze_articles(raw_session: Session, bronze_session: Session) -> dict[str, int]:
+def build_bronze_articles(
+    raw_session: Session, bronze_session: Session, dataset_version_id: str | None = None
+) -> dict[str, int]:
+    # Bronze is a working projection of the active Raw snapshot. Rebuilding it
+    # is the simplest deterministic way to propagate removals and avoids stale
+    # rows from the historical upsert-only implementation.
+    bronze_session.execute(delete(BronzeArticle))
     written = _build_ieee_records(raw_session, bronze_session)
     written += _build_elsevier_records(raw_session, bronze_session)
     bronze_session.flush()
+    if dataset_version_id is not None:
+        bronze_session.execute(
+            BronzeArticle.__table__.update().values(dataset_version_id=dataset_version_id)
+        )
     enriched = _enrich_citation_counts(bronze_session)
-    bronze_session.commit()
+    bronze_session.flush()
     return {"written": written, "enriched": enriched}

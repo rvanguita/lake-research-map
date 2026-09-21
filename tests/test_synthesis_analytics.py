@@ -144,18 +144,10 @@ def test_citation_longevity_and_decay():
     df = _make_dummy_synthesis_data()
     res = citation_longevity_and_decay(df)
 
-    assert "half_life_years" in res
-    assert "decay_curve" in res
-    assert "evergreen_df" in res
-
-    assert res["half_life_years"] >= 0.0
-    assert not res["decay_curve"].empty
-    assert "cum_pct" in res["decay_curve"].columns
-
-    # Evergreen papers should exist for older highly cited papers (e.g. 2011 paper with 250 cites)
-    evergreen = res["evergreen_df"]
-    assert not evergreen.empty
-    assert (evergreen["citation_count"] >= 40).all()
+    assert res["available"] is False
+    assert "citing year" in res["reason"].lower()
+    assert res["decay_curve"].empty
+    assert res["evergreen_df"].empty
 
 
 def test_objective_functions_taxonomy():
@@ -266,5 +258,15 @@ def test_synthesis_page_import():
     assert hasattr(synthesis, "_render_horizons_tab")
     assert hasattr(synthesis, "_render_feeders_tab")
     assert hasattr(synthesis, "_render_solvers_tab")
-    assert hasattr(synthesis, "_render_authors_tab")
-    assert hasattr(synthesis, "_render_longevity_and_text_tab")
+    assert not hasattr(synthesis, "_render_authors_tab")
+    assert not hasattr(synthesis, "_render_longevity_and_text_tab")
+
+
+def test_retired_page_controllers_are_removed():
+    from lake_research_map.dashboard.pages import highlights, production
+
+    assert not hasattr(production, "_venue_comparison")
+    assert not hasattr(production, "_collaboration")
+    assert not hasattr(highlights, "_collaboration_team_size")
+    assert not hasattr(highlights, "_top_authors")
+    assert not hasattr(highlights, "_venue_impact")
