@@ -346,6 +346,83 @@ def test_versions_cli_dispatches_without_starting_pipeline(monkeypatch):
     assert called[0].version_action == "list"
 
 
+def test_pipeline_lock_rejects_another_mysql_process(monkeypatch):
+    class Dialect:
+        name = "mysql"
+
+    class Bind:
+        dialect = Dialect()
+
+    class Result:
+        def scalar(self):
+            return 0
+
+    class FakeSession:
+        def __init__(self):
+            self.closed = False
+
+        def get_bind(self):
+            return Bind()
+
+        def execute(self, *_args, **_kwargs):
+            return Result()
+
+        def close(self):
+            self.closed = True
+
+    session = FakeSession()
+    monkeypatch.setattr(pipeline, "get_session", lambda layer: session)
+
+    with pytest.raises(pipeline.PipelineBusyError, match="another pipeline execution"):
+        with pipeline._pipeline_lock("execution-2"):
+            raise AssertionError("the lock must reject the second process")
+
+    assert session.closed is True
+
+
+def test_pipeline_lock_releases_mysql_advisory_lock(monkeypatch):
+    class Dialect:
+        name = "mysql"
+
+    class Bind:
+        dialect = Dialect()
+
+    class Result:
+        def __init__(self, value):
+            self.value = value
+
+        def scalar(self):
+            return self.value
+
+    class FakeSession:
+        def __init__(self):
+            self.calls = []
+            self.closed = False
+
+        def get_bind(self):
+            return Bind()
+
+        def execute(self, statement, *_args, **_kwargs):
+            self.calls.append(str(statement))
+            return Result(1)
+
+        def rollback(self):
+            self.calls.append("rollback")
+
+        def close(self):
+            self.closed = True
+
+    session = FakeSession()
+    monkeypatch.setattr(pipeline, "get_session", lambda layer: session)
+
+    with pipeline._pipeline_lock("execution-1"):
+        pass
+
+    assert any("GET_LOCK" in call for call in session.calls)
+    assert any("RELEASE_LOCK" in call for call in session.calls)
+    assert session.closed is True
+
+
 def test_full_pipeline_correlates_stages_and_publishes_only_after_gates(monkeypatch):
     factories = {}
     for layer, module in {
