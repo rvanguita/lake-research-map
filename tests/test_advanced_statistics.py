@@ -112,9 +112,18 @@ def test_citation_determinants_glm():
     )
     res = citation_determinants_glm(df)
     assert res["valid"] is True
-    assert len(res["features"]) == 4
-    assert len(res["coefficients"]) == 4
-    assert len(res["irr"]) == 4
+    assert res["family"] in {"poisson", "binomial_negativa"}
+    assert res["n_used"] == n
+    assert res["coverage"] == 1.0
+    assert len(res["features"]) == len(res["coefficients"]) == len(res["irr"])
+    assert len(res["irr_lower"]) == len(res["irr_upper"]) == len(res["features"])
+    assert "tamanho_equipe" not in res["features"]  # constant predictor is not identifiable
+
+    with_missing = df.copy()
+    with_missing.loc[:4, "reference_count"] = np.nan
+    incomplete = citation_determinants_glm(with_missing)
+    assert incomplete["n_used"] == n - 5
+    assert incomplete["coverage"] == (n - 5) / n
 
 
 def test_zipf_law_analysis():

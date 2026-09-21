@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import logging
 import re
+from dataclasses import dataclass
+from typing import Any
 
 from pypdf import PdfReader
 from sqlalchemy import delete, func, null, select, update
@@ -27,6 +29,7 @@ from lake_research_map.config import absolute_path
 from lake_research_map.db.gold_models import Article as GoldArticle
 from lake_research_map.db.gold_models import Chunk
 from lake_research_map.db.silver_models import Article as SilverArticle
+from lake_research_map.transform.duplicate_resolution import active_merge_plan
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +114,86 @@ def _desired_chunks(row: SilverArticle) -> list[dict]:
     return chunks
 
 
+def _union_values(rows: list[SilverArticle], field: str) -> list:
+    """Union list metadata while preserving canonical-first display order."""
+    values = []
+    for row in rows:
+        for value in getattr(row, field, None) or []:
+            if value not in values:
+                values.append(value)
+    return values
+
+
+@dataclass(frozen=True, slots=True)
+class _GoldArticleSource:
+    id: int | None
+    doi: str
+    sources: list
+    title: str | None
+    authors: list
+    year: int | None
+    venue: str | None
+    keywords: list
+    abstract: str | None
+    citation_count: int | None
+    reference_count: int | None
+    countries: list
+    online_date: Any
+    document_type: str | None
+    license: str | None
+    url: str | None
+    has_pdf: bool
+    pdf_path: str | None
+    is_non_article: bool
+
+
+def _merge_silver_group(
+    primary: SilverArticle, duplicates: list[SilverArticle]
+) -> _GoldArticleSource:
+    """Build the conservative Gold representation of an approved merge.
+
+    Identity and populated scalar values stay with the reviewer-selected
+    canonical row. Duplicate records only fill gaps, contribute list members,
+    and raise observed citation/reference counts.
+    """
+    rows = [primary, *sorted(duplicates, key=lambda row: row.doi)]
+
+    def first_value(field: str):
+        for row in rows:
+            value = getattr(row, field, None)
+            if value is not None and value != "":
+                return value
+        return None
+
+    def maximum(field: str):
+        values = [getattr(row, field, None) for row in rows]
+        present = [value for value in values if value is not None]
+        return max(present) if present else None
+
+    pdf_row = next((row for row in rows if row.has_pdf and row.pdf_path), None)
+    return _GoldArticleSource(
+        id=primary.id,
+        doi=primary.doi,
+        sources=_union_values(rows, "sources"),
+        title=first_value("title"),
+        authors=_union_values(rows, "authors"),
+        year=first_value("year"),
+        venue=first_value("venue"),
+        keywords=_union_values(rows, "keywords"),
+        abstract=first_value("abstract"),
+        citation_count=maximum("citation_count"),
+        reference_count=maximum("reference_count"),
+        countries=_union_values(rows, "countries"),
+        online_date=first_value("online_date"),
+        document_type=first_value("document_type"),
+        license=first_value("license"),
+        url=first_value("url"),
+        has_pdf=pdf_row is not None,
+        pdf_path=pdf_row.pdf_path if pdf_row is not None else None,
+        is_non_article=primary.is_non_article,
+    )
+
+
 # MySQL has a practical cap on how many values fit in one IN (...) clause, and
 # a stale-chunk sweep can cover the whole corpus after a silver rebuild.
 _DELETE_BATCH = 500
@@ -118,6 +201,9 @@ _DELETE_BATCH = 500
 
 def build_gold_articles(silver_session: Session, gold_session: Session) -> dict:
     silver_rows = silver_session.scalars(select(SilverArticle)).all()
+    by_doi = {row.doi: row for row in silver_rows}
+    merge_plan = active_merge_plan(gold_session, set(by_doi))
+    merged_duplicates = {doi for duplicates in merge_plan.groups.values() for doi in duplicates}
 
     # Articles are a plain delete-and-rebuild: nothing expensive is derived from
     # them, and `Chunk.doi` is a value-FK, so churning article ids breaks no
@@ -139,7 +225,11 @@ def build_gold_articles(silver_session: Session, gold_session: Session) -> dict:
     unchanged = invalidated = added = 0
     seen: set[tuple[str, str, int]] = set()
 
-    for row in silver_rows:
+    for silver_row in silver_rows:
+        if silver_row.doi in merged_duplicates:
+            continue
+        duplicate_rows = [by_doi[doi] for doi in merge_plan.groups.get(silver_row.doi, ())]
+        row = _merge_silver_group(silver_row, duplicate_rows) if duplicate_rows else silver_row
         gold_session.add(
             GoldArticle(
                 doi=row.doi,
@@ -212,7 +302,7 @@ def build_gold_articles(silver_session: Session, gold_session: Session) -> dict:
             delete(Chunk).where(Chunk.id.in_(stale_ids[start : start + _DELETE_BATCH]))
         )
 
-    gold_session.commit()
+    gold_session.flush()
 
     # Reported so the caller can tell the operator that `embed` (and therefore
     # `semantic`) has work to do, instead of it being discovered later as a
@@ -233,4 +323,6 @@ def build_gold_articles(silver_session: Session, gold_session: Session) -> dict:
         "chunks_new": added,
         "chunks_removed": len(stale_ids),
         "chunks_missing_embedding": missing_embedding,
+        "duplicate_records_merged": len(merged_duplicates),
+        "duplicate_overrides_inactive": merge_plan.inactive_overrides,
     }

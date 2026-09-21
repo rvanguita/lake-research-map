@@ -64,6 +64,16 @@ def test_create_tables_on_sqlite_for_each_layer():
             assert "lit_pipeline_runs" in tables
             assert "lit_chunks" in tables
             assert "lit_semantics" in tables
+            assert "lit_duplicate_overrides" in tables
+            constraints = {
+                constraint["name"]
+                for constraint in inspector.get_check_constraints("lit_duplicate_overrides")
+            }
+            assert constraints == {
+                "ck_duplicate_override_canonical",
+                "ck_duplicate_override_decision",
+                "ck_duplicate_override_order",
+            }
 
         engine.dispose()
 

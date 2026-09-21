@@ -32,8 +32,12 @@ START_DATE = pendulum.datetime(2024, 1, 1, tz="UTC")
 STAGES = ("raw", "bronze", "silver", "gold", "embed", "semantic")
 
 
-def _bash_command(stage: str) -> str:
-    return f"cd {PROJECT_DIR} && uv run lake-research-map --stage {stage}"
+def _bash_command(stage: str, workflow: str) -> str:
+    execution_id = "{{ dag.dag_id }}:{{ dag_run.run_id }}"
+    return (
+        f"cd {PROJECT_DIR} && uv run lake-research-map --stage {stage} "
+        f"--execution-id '{execution_id}' --trigger airflow --workflow {workflow}"
+    )
 
 
 default_args = {
@@ -52,7 +56,7 @@ for stage in STAGES:
         default_args=default_args,
         tags=["lake-research-map"],
     ):
-        BashOperator(task_id=stage, bash_command=_bash_command(stage))
+        BashOperator(task_id=stage, bash_command=_bash_command(stage, stage))
 
 # One combined DAG running the full medallion flow as a single grouped unit,
 # for the "run all" button.
@@ -66,6 +70,9 @@ with DAG(
     tags=["lake-research-map", "pipeline"],
 ):
     with TaskGroup(group_id="medallion_pipeline") as medallion_pipeline:
-        tasks = [BashOperator(task_id=stage, bash_command=_bash_command(stage)) for stage in STAGES]
+        tasks = [
+            BashOperator(task_id=stage, bash_command=_bash_command(stage, "all"))
+            for stage in STAGES
+        ]
         for upstream, downstream in zip(tasks, tasks[1:], strict=False):
             upstream >> downstream

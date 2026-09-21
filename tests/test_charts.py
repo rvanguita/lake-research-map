@@ -19,7 +19,7 @@ from lake_research_map.dashboard.charts import (
     stacked_area,
     topn_hbar,
 )
-from lake_research_map.dashboard.components import _warn_unnamed_axes, metric_row
+from lake_research_map.dashboard.components import _warn_unnamed_axes, metric_row, summary_card_row
 
 
 def _by_source() -> pd.DataFrame:
@@ -153,3 +153,13 @@ def test_metric_row_accepts_both_2_and_3_tuples() -> None:
         )
         mock_col1.metric.assert_called_once_with("Taxa", "50%", None)
         mock_col2.metric.assert_called_once_with("Score", "9.5", "+1.2")
+
+    long_value = "GAMS / AMPL (Modeladores Algébricos)"
+    with (
+        patch("streamlit.container", return_value=mock_container),
+        patch("streamlit.columns", return_value=[mock_col1]),
+        patch("streamlit.caption"),
+        patch("streamlit.markdown") as markdown,
+    ):
+        summary_card_row([("Ferramenta mais citada", long_value, "42 artigos")])
+        markdown.assert_called_once_with(f"### {long_value}")

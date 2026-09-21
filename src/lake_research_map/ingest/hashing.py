@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from lake_research_map.config import relative_path
 from lake_research_map.db.raw_models import SourceFile
+from lake_research_map.db.time import naive_utc_now
 
 
 def sha256_file(path: Path, chunk_size: int = 1 << 20) -> str:
@@ -51,10 +52,12 @@ def record_source_file(
         return row, True
 
     changed = existing.sha256 != sha
+    existing.source = source
+    existing.kind = kind
     if changed:
         existing.sha256 = sha
         existing.size_bytes = stat.st_size
         existing.mtime = dt.datetime.fromtimestamp(stat.st_mtime)
-        existing.ingested_at = dt.datetime.utcnow()
+        existing.ingested_at = naive_utc_now()
         session.flush()
     return existing, changed

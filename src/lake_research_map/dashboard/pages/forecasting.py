@@ -7,19 +7,14 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from lake_research_map.dashboard import loaders
-from lake_research_map.dashboard.analytics import explode_keywords
+from lake_research_map.dashboard.analytics import technological_burst_detection
 from lake_research_map.dashboard.components import (
     hero_banner,
     metric_row,
     page_header,
     render_chart,
 )
-from lake_research_map.dashboard.forecasting import (
-    HOLDOUT_YEAR,
-    ForecastResult,
-    fit_and_forecast,
-    yearly_counts,
-)
+from lake_research_map.dashboard.forecasting import HOLDOUT_YEAR, ForecastResult
 from lake_research_map.dashboard.theme import (
     CATEGORICAL_PALETTE,
     SOURCE_COLORS,
@@ -34,8 +29,8 @@ TOP_KEYWORD_TRENDS = 5
 MIN_KEYWORD_OCCURRENCES = 20
 
 _MODEL_LABELS = {
+    "baseline": "Persistência (último valor)",
     "linear": "Linear",
-    "polynomial": "Polinomial (grau 2)",
     "log_linear": "Log-linear (crescimento exponencial)",
     "none": "—",
 }
@@ -44,21 +39,16 @@ _MODEL_LABELS = {
 def render() -> None:
     page_header(
         "🔮",
-        "Tendências & Previsão",
-        "Projeção de volume de publicações para 2027-2028 a partir de modelos de regressão treinados "
-        "em 2010-2025 e validados contra 2026.",
+        "Tendências e frentes",
+        "Projeção de volume com validação temporal, treino apenas em anos completos e intervalos "
+        "conformes calibrados nos erros históricos.",
     )
 
     hero_banner(
-        "⚠️ Esta página ignora o filtro global de ano da barra lateral",
-        "Uma previsão de série temporal precisa do histórico completo, não de um recorte. Três modelos "
-        "(linear, polinomial e log-linear) são treinados em 2010–2025, validados de duas formas — contra "
-        "2026 e por validação cruzada nos anos 2023–2025 — e o melhor é escolhido antes de projetar 2027 e "
-        f"2028. <b>{HOLDOUT_YEAR} é um ano parcial</b> (o corpus foi coletado no meio do ano), então o erro "
-        "contra ele mede acerto sobre um ano ainda incompleto, não um ano fechado — por isso a validação "
-        "cruzada nos anos completos anteriores pesa igualmente na escolha do modelo. O corpus também é "
-        "deliberadamente incompleto (ver CLAUDE.md), então a curva reflete o que foi coletado, não "
-        "necessariamente o volume real de publicações na área.",
+        "Série histórica completa",
+        "A previsão ignora o filtro global de ano. Persistência, tendência linear e tendência log-linear "
+        "são comparadas por validação temporal. O ano parcial é apenas monitorado; não entra no treino. "
+        "As bandas usam erros históricos conformes e representam incerteza do corpus coletado.",
     )
 
     _, articles_df = loaders.articles()
@@ -66,31 +56,82 @@ def render() -> None:
         st.warning("Nenhum dado disponível ainda. Execute o pipeline e recarregue esta página.")
         return
 
-    tab_total, tab_ieee, tab_elsevier, tab_keywords, tab_bass = st.tabs(
+    tab_volume, tab_keywords, tab_bass, tab_bursts = st.tabs(
         [
-            "🌐 Total",
-            "🔷 IEEE",
-            "🟠 Elsevier",
-            "🏷️ Tópicos em Alta",
-            "📊 Difusão Tecnológica (Bass)",
+            "Volume",
+            "Trajetórias de tópicos",
+            "Difusão tecnológica",
+            "Bursts de conceitos",
+        ],
+        on_change="rerun",
+        key="forecasting_primary_tab",
+    )
+    if tab_volume.open:
+        with tab_volume:
+            source_label = st.segmented_control(
+                "Série",
+                ["Total", SOURCE_LABELS["ieee"], SOURCE_LABELS["elsevier"]],
+                default="Total",
+                key="forecast_source",
+            )
+            sources = {
+                "Total": (None, TOTAL_COLOR),
+                SOURCE_LABELS["ieee"]: ("ieee", SOURCE_COLORS["ieee"]),
+                SOURCE_LABELS["elsevier"]: ("elsevier", SOURCE_COLORS["elsevier"]),
+            }
+            source, color = sources[source_label or "Total"]
+            _render_series_forecast(source_label or "Total", color, _series_forecast(source))
+    elif tab_keywords.open:
+        with tab_keywords:
+            _keyword_growth_ranking()
+    elif tab_bass.open:
+        with tab_bass:
+            _bass_diffusion_analysis()
+    elif tab_bursts.open:
+        with tab_bursts:
+            _render_bursts(articles_df)
+
+
+def _render_bursts(df: pd.DataFrame) -> None:
+    st.subheader("Bursts de frequência de conceitos")
+    st.caption(
+        "Modelo de dois estados de Kleinberg aplicado à proporção anual de documentos que menciona "
+        "cada conceito. A intensidade é o ganho de log-verossimilhança do estado de burst."
+    )
+    result = technological_burst_detection(df)
+    bursts = result["burst_timeline"]
+    if bursts.empty:
+        st.info("Nenhum burst sustentado foi detectado neste recorte.")
+        return
+    metric_row(
+        [
+            ("Intervalos detectados", f"{result['total_bursts']:,}"),
+            ("Ativos no último ano", f"{len(result['active_frontiers']):,}"),
+            ("Maior intensidade", f"{bursts.iloc[0]['Intensidade']:.2f}"),
         ]
     )
-    for tab, label, source, color in (
-        (tab_total, "Total", None, TOTAL_COLOR),
-        (tab_ieee, SOURCE_LABELS["ieee"], "ieee", SOURCE_COLORS["ieee"]),
-        (tab_elsevier, SOURCE_LABELS["elsevier"], "elsevier", SOURCE_COLORS["elsevier"]),
-    ):
-        with tab:
-            _render_series_forecast(label, color, _series_forecast(source))
+    plot = bursts.sort_values(["Início do Burst", "Intensidade"])
+    figure = go.Figure()
+    for _, row in plot.iterrows():
+        figure.add_bar(
+            y=[row["Tecnologia / Conceito"]],
+            x=[row["Duração (Anos)"]],
+            base=[row["Início do Burst"]],
+            orientation="h",
+            marker_color=CATEGORICAL_PALETTE[0]
+            if row["Status"] == "Ativo"
+            else CATEGORICAL_PALETTE[6],
+            hovertemplate=(
+                f"Início: {row['Início do Burst']}<br>Pico: {row['Ano de Pico']}<br>"
+                f"Fim: {row['Fim do Burst']}<br>Intensidade: {row['Intensidade']:.2f}<extra></extra>"
+            ),
+            showlegend=False,
+        )
+    figure.update_layout(xaxis_title="Ano", yaxis_title="Conceito")
+    render_chart(figure)
+    st.dataframe(bursts, hide_index=True, width="stretch")
 
-    with tab_keywords:
-        _keyword_growth_ranking()
 
-    with tab_bass:
-        _bass_diffusion_analysis()
-
-
-@st.cache_data(ttl=60)
 def _series_forecast(source: str | None) -> ForecastResult:
     """Volume forecast for one source (or the whole corpus when `source` is None).
 
@@ -98,8 +139,7 @@ def _series_forecast(source: str | None) -> ForecastResult:
     rolling-origin CV over 3 candidate models, and it reads the unfiltered
     layer, so it never changes between reruns.
     """
-    _, articles_df = loaders.articles()
-    return fit_and_forecast(yearly_counts(articles_df, source=source))
+    return loaders.volume_forecast(source)
 
 
 def _render_series_forecast(label: str, color: str, result: ForecastResult) -> None:
@@ -152,7 +192,7 @@ def _render_series_forecast(label: str, color: str, result: ForecastResult) -> N
         opacity=0.85,
     )
 
-    # Fitted curve over the training + holdout range.
+    # Fitted curve over complete training years only.
     fig.add_trace(
         go.Scatter(
             x=result.fitted_curve.index,
@@ -233,13 +273,13 @@ def _render_series_forecast(label: str, color: str, result: ForecastResult) -> N
                 "model": "Modelo",
                 "holdout_mae": f"MAE vs. {HOLDOUT_YEAR} (parcial)",
                 "cv_mae": "MAE validação cruzada (2023–2025)",
-                "combined_mae": "Score combinado (usado na escolha)",
+                "combined_mae": "MAE temporal (usado na escolha)",
             }
         )
         st.dataframe(table, hide_index=True, width="stretch")
         st.caption(
-            "O modelo com menor score combinado é escolhido, depois re-treinado com todos os anos reais "
-            f"disponíveis (até {HOLDOUT_YEAR}) antes de gerar a previsão acima."
+            "O modelo com menor MAE na validação temporal é escolhido e reajustado somente com anos "
+            f"completos. {HOLDOUT_YEAR} permanece fora do treino por ser parcial."
         )
 
 
@@ -301,7 +341,6 @@ def _keyword_trend_lines(
     )
 
 
-@st.cache_data(ttl=60)
 def _keyword_forecasts() -> tuple[str, list[dict], dict[str, ForecastResult], int | None]:
     """Fit a forecast per eligible keyword; returns `(status, rows, results, final_year)`.
 
@@ -310,40 +349,7 @@ def _keyword_forecasts() -> tuple[str, list[dict], dict[str, ForecastResult], in
     the result never changes between reruns. Without this it re-ran in full
     on every widget interaction.
     """
-    _, articles_df = loaders.articles()
-    kw_exploded = explode_keywords(articles_df)
-    if kw_exploded.empty or "year" not in kw_exploded.columns:
-        return "no_keywords", [], {}, None
-
-    counts = kw_exploded["keyword"].value_counts()
-    eligible = counts[counts >= MIN_KEYWORD_OCCURRENCES].index.tolist()
-    if not eligible:
-        return "none_eligible", [], {}, None
-
-    rows = []
-    results_by_keyword: dict[str, ForecastResult] = {}
-    final_forecast_year = None
-    for kw in eligible:
-        kw_df = kw_exploded[kw_exploded["keyword"] == kw]
-        series = kw_df.groupby(kw_df["year"].astype("Int64")).size()
-        series.index = series.index.astype(int)
-        result = fit_and_forecast(series)
-        if result.insufficient_data:
-            continue
-        results_by_keyword[kw] = result
-        final_forecast_year = result.forecast_years[-1]
-        year_2025 = float(series.get(2025, series.tail(1).iloc[0] if len(series) else 0))
-        year_forecast = float(result.forecast_values[-1])
-        rows.append(
-            {
-                "keyword": kw,
-                "2025 (real)": year_2025,
-                f"{final_forecast_year} (previsto)": year_forecast,
-                "variação": year_forecast - year_2025,
-                "modelo": _MODEL_LABELS.get(result.chosen_model, result.chosen_model),
-            }
-        )
-    return "ok", rows, results_by_keyword, final_forecast_year
+    return loaders.keyword_forecasts(MIN_KEYWORD_OCCURRENCES)
 
 
 def _keyword_growth_ranking() -> None:
@@ -361,6 +367,7 @@ def _keyword_growth_ranking() -> None:
         return
 
     ranking = pd.DataFrame(rows).sort_values("variação", ascending=False)
+    ranking["modelo"] = ranking["modelo"].map(lambda value: _MODEL_LABELS.get(value, value))
     top = ranking.head(min(TOP_KEYWORDS_FORECAST, len(ranking))).sort_values("variação")
 
     sub_trend, sub_rank = st.tabs(["📈 Trajetórias", "🏆 Ranking de Crescimento"])

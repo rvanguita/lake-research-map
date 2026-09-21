@@ -62,7 +62,7 @@ def build_embeddings(gold_session: Session, on_progress: ProgressCallback | None
             chunk.embedding = vector.tolist()
             chunk.embedding_bin = np.array(vector, dtype=np.float32).tobytes()
             chunk.embed_model = EMBED_MODEL_NAME
-        gold_session.commit()
+        gold_session.flush()
 
         embedded += len(ordered_chunks)
         if on_progress:

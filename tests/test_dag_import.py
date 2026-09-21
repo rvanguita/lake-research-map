@@ -18,6 +18,7 @@ from unittest.mock import MagicMock
 
 def test_dag_module_imports_and_defines_expected_dags():
     dag_instances: list[dict] = []
+    bash_tasks: list[dict] = []
 
     class FakeDAG:
         def __init__(self, dag_id: str, **kwargs):
@@ -43,6 +44,7 @@ def test_dag_module_imports_and_defines_expected_dags():
     class FakeBashOperator:
         def __init__(self, **kwargs):
             self.kwargs = kwargs
+            bash_tasks.append(kwargs)
 
         def __rshift__(self, other):
             return other
@@ -92,3 +94,9 @@ def test_dag_module_imports_and_defines_expected_dags():
 
     # Total: 6 per-stage + 1 combined = 7.
     assert len(dag_ids) == 7
+    all_commands = [
+        task["bash_command"] for task in bash_tasks if "--workflow all" in task["bash_command"]
+    ]
+    assert len(all_commands) == 6
+    assert all("{{ dag.dag_id }}:{{ dag_run.run_id }}" in command for command in all_commands)
+    assert all("--trigger airflow" in command for command in all_commands)

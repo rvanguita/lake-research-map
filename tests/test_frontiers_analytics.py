@@ -1,4 +1,4 @@
-"""Unit tests for knowledge frontiers, disruption, Price's index, and open access analytics."""
+"""Availability contracts for frontiers methods and Kleinberg burst tests."""
 
 import pandas as pd
 
@@ -97,12 +97,9 @@ def test_price_index_analysis() -> None:
     df = _sample_corpus_df()
     res = price_index_analysis(df)
 
-    assert "global_price_index" in res
-    assert res["global_price_index"] > 0
-    assert not res["theme_price_df"].empty
-    assert "price_index" in res["theme_price_df"].columns
-    assert not res["yearly_price_df"].empty
-    assert "pub_year" in res["yearly_price_df"].columns
+    assert res["available"] is False
+    assert "reference" in res["reason"].lower()
+    assert res["theme_price_df"].empty
 
     # Test empty dataframe
     empty_res = price_index_analysis(pd.DataFrame())
@@ -113,13 +110,9 @@ def test_sleeping_beauties_detection() -> None:
     df = _sample_corpus_df()
     res = sleeping_beauties_detection(df, min_age=5)
 
-    assert "sleeping_beauties" in res
-    assert not res["sleeping_beauties"].empty
-    assert "beauty_coefficient" in res["sleeping_beauties"].columns
-    assert "awakening_lag" in res["sleeping_beauties"].columns
-    assert res["count"] >= 1
-    assert "top_trajectories" in res
-    assert not res["top_trajectories"].empty
+    assert res["available"] is False
+    assert "annual citation" in res["reason"].lower()
+    assert res["sleeping_beauties"].empty
 
     # Test empty dataframe
     empty_res = sleeping_beauties_detection(pd.DataFrame())
@@ -130,16 +123,9 @@ def test_disruption_index_estimation() -> None:
     df = _sample_corpus_df()
     res = disruption_index_estimation(df)
 
-    assert "disruption_df" in res
-    assert "cd_index" in res["disruption_df"].columns
-    assert "team_size_analysis" in res
-    assert not res["team_size_analysis"].empty
-    assert "mean_cd" in res["team_size_analysis"].columns
-    assert "disruptive_ratio" in res
-
-    # Check CD range
-    cd_vals = res["disruption_df"]["cd_index"]
-    assert (cd_vals >= -1.0).all() and (cd_vals <= 1.0).all()
+    assert res["available"] is False
+    assert "citation graph" in res["reason"].lower()
+    assert res["disruption_df"].empty
 
     # Test empty dataframe
     empty_res = disruption_index_estimation(pd.DataFrame())
@@ -150,11 +136,9 @@ def test_open_access_impact_analysis() -> None:
     df = _sample_corpus_df()
     res = open_access_impact_analysis(df)
 
-    assert "oa_share_pct" in res
-    assert "oaca_ratio" in res
-    assert not res["comparison_table"].empty
-    assert not res["yearly_oa"].empty
-    assert "oa_pct" in res["yearly_oa"].columns
+    assert res["available"] is False
+    assert "verified access" in res["reason"].lower()
+    assert res["comparison_table"].empty
 
     # Test empty dataframe
     empty_res = open_access_impact_analysis(pd.DataFrame())
@@ -176,9 +160,3 @@ def test_technological_burst_detection() -> None:
     # Test empty dataframe
     empty_res = technological_burst_detection(pd.DataFrame())
     assert empty_res["total_bursts"] == 0
-
-
-def test_frontiers_page_import() -> None:
-    from lake_research_map.dashboard.pages import frontiers
-
-    assert callable(frontiers.render)

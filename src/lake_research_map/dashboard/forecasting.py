@@ -21,8 +21,6 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LinearRegression
-from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import PolynomialFeatures
 
 logger = logging.getLogger(__name__)
 
@@ -32,16 +30,16 @@ HOLDOUT_YEAR = 2026  # current year at collection time -- a partial year, not a 
 FORECAST_YEARS = (2027, 2028)
 CV_YEARS = (2023, 2024, 2025)  # rolling-origin validation over the last complete years
 
-_CANDIDATES = ("linear", "polynomial", "log_linear")
+_CANDIDATES = ("baseline", "linear", "log_linear")
 
 
 def _fit_model(kind: str, years: np.ndarray, values: np.ndarray):
     x = years.reshape(-1, 1)
+    if kind == "baseline":
+        level = float(values[-1])
+        return lambda yrs: np.full(len(np.asarray(yrs)), level)
     if kind == "linear":
         model = LinearRegression().fit(x, values)
-        return lambda yrs: model.predict(np.asarray(yrs).reshape(-1, 1))
-    if kind == "polynomial":
-        model = make_pipeline(PolynomialFeatures(degree=2), LinearRegression()).fit(x, values)
         return lambda yrs: model.predict(np.asarray(yrs).reshape(-1, 1))
     if kind == "log_linear":
         model = LinearRegression().fit(x, np.log1p(values))
@@ -132,12 +130,11 @@ def fit_and_forecast(
     forecast_years: tuple[int, ...] = FORECAST_YEARS,
     cv_years: tuple[int, ...] = CV_YEARS,
 ) -> ForecastResult:
-    """Fit 3 candidate regressions, validate, select, and forecast ahead.
+    """Select a parsimonious model by rolling-origin CV and forecast ahead.
 
-    Selection uses the mean of the 2026 holdout MAE and the rolling-origin CV
-    MAE (2023-2025) -- relying on the holdout alone would overweight a single,
-    partial year. The chosen model is then refit on every real year available
-    (through `holdout_year`, inclusive) before projecting `forecast_years`.
+    The incomplete holdout year is reported for monitoring but never enters
+    model selection or final training. Prediction bands use the empirical
+    90th percentile of rolling one-step errors (conformal calibration).
     """
     notes: list[str] = []
     history = series[series.index >= min_train_year]
@@ -189,25 +186,18 @@ def fit_and_forecast(
         )
     comparison = pd.DataFrame(rows)
 
-    # Combined score: mean of whichever validation signals are available.
-    def _combined(row) -> float:
-        vals = [v for v in (row["holdout_mae"], row["cv_mae"]) if v == v]  # drop NaN
-        return float(np.mean(vals)) if vals else float("inf")
-
-    comparison["combined_mae"] = comparison.apply(_combined, axis=1)
+    comparison["combined_mae"] = comparison["cv_mae"].fillna(float("inf"))
     chosen_model = comparison.loc[comparison["combined_mae"].idxmin(), "model"]
 
-    # Refit the chosen model on every real year through the holdout year.
-    final_train = history[history.index <= holdout_year]
+    # Refit on complete years only. The current partial year must not pull the
+    # forecast curve down merely because ingestion is still under way.
+    final_train = train
     final_years = final_train.index.to_numpy()
     final_values = final_train.to_numpy()
     final_predict = _fit_model(chosen_model, final_years, final_values)
 
     fitted_curve = pd.Series(final_predict(final_years), index=final_years)
     residuals = final_values - fitted_curve.to_numpy()
-    residual_std = (
-        float(np.std(residuals, ddof=1)) if len(residuals) > 2 else float(np.std(residuals))
-    )
     ss_res = float(np.sum(residuals**2))
     ss_tot = float(np.sum((final_values - final_values.mean()) ** 2))
     r2_train = 1 - ss_res / ss_tot if ss_tot > 0 else float("nan")
@@ -215,11 +205,21 @@ def fit_and_forecast(
     forecast_values = final_predict(np.array(forecast_years))
     forecast_values = np.clip(forecast_values, 0, None)  # counts can't be negative
 
-    # Dynamic horizon-expanding prediction intervals: forecast variance scales
-    # with lead time h (Var propto h, so std propto sqrt(h)), replacing static
-    # homoscedastic bands with statistically sound widening intervals.
+    # Conformal calibration from one-step rolling-origin errors. This avoids a
+    # normality assumption that is hard to justify for a short count series.
+    calibration_errors = []
+    for index in range(3, len(final_years)):
+        predictor = _fit_model(chosen_model, final_years[:index], final_values[:index])
+        calibration_errors.append(
+            abs(float(final_values[index]) - float(predictor([final_years[index]])[0]))
+        )
+    conformal_radius = (
+        float(np.quantile(calibration_errors, 0.9, method="higher"))
+        if calibration_errors
+        else float(np.max(np.abs(residuals), initial=0.0))
+    )
     step_factors = np.sqrt(np.arange(1, len(forecast_years) + 1, dtype=float))
-    margin = 1.96 * residual_std * step_factors
+    margin = conformal_radius * step_factors
     forecast_lower = np.clip(forecast_values - margin, 0, None)
     forecast_upper = forecast_values + margin
 
@@ -230,8 +230,8 @@ def fit_and_forecast(
         train_only_predict = _fit_model(chosen_model, train_years, train_values)
         holdout_predicted = float(train_only_predict([holdout_year])[0])
         notes.append(
-            f"O erro contra {holdout_year} compara com um ano ainda em andamento na coleta do corpus "
-            "(dado parcial), não um ano completo."
+            f"{holdout_year} é parcial: aparece apenas como monitoramento e não participa "
+            "da seleção nem do ajuste final."
         )
     if (train_values.max() if len(train_values) else 0) < 20:
         notes.append("Série de baixo volume — a banda de confiança é proporcionalmente mais larga.")

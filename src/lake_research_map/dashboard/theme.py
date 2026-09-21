@@ -160,21 +160,13 @@ _THEME_STATE_KEY = "dashboard_theme_mode"
 
 
 def _active_theme_type() -> str:
-    """'light' or 'dark', from our own sidebar toggle -- deliberately NOT
-    `st.context.theme.type`.
-
-    Streamlit's own docs say that API is unreliable exactly when it would
-    matter most here: "the theme type may be incorrect ... when the app is
-    first loaded within a session" and "when the user changes the theme in
-    the settings menu" (see Streamlit GitHub issue #11920). Relying on it
-    meant the dashboard could silently render the wrong theme on first load
-    or right after a user switched it. `render_theme_toggle()` gives us a
-    single source of truth in `st.session_state` instead: 100% deterministic,
-    defaults to "dark" (the dashboard's original look) so nothing changes for
-    anyone who doesn't touch the toggle, and takes effect the moment it's
-    changed since it's rendered before `apply_dashboard_theme()` runs.
-    """
-    return st.session_state.get(_THEME_STATE_KEY, "dark")
+    """Return Streamlit's active native theme, with a light fallback for tests."""
+    if _THEME_STATE_KEY in st.session_state:
+        return st.session_state[_THEME_STATE_KEY]
+    try:
+        return st.context.theme.type
+    except Exception:
+        return "light"
 
 
 def render_theme_toggle() -> str:

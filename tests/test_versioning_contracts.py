@@ -1,0 +1,591 @@
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from types import SimpleNamespace
+
+import numpy as np
+import pytest
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import sessionmaker
+
+from lake_research_map import pipeline
+from lake_research_map.db import bronze_models, gold_models, raw_models, silver_models
+from lake_research_map.db.bronze_models import Article as BronzeArticle
+from lake_research_map.db.gold_models import (
+    Article,
+    Chunk,
+    DatasetArticle,
+    DatasetChunk,
+    DatasetSemantics,
+    DatasetVersion,
+    PublicationState,
+    Semantics,
+)
+from lake_research_map.db.raw_models import BibEntry, IeeeCsvRow
+from lake_research_map.db.silver_models import Article as SilverArticle
+from lake_research_map.ingest.snapshots import (
+    ScannedSource,
+    VersionFingerprint,
+    build_fingerprint,
+    diff_manifests,
+    scan_sources,
+)
+from lake_research_map.quality import assert_contract, embed_contract, semantic_contract
+from lake_research_map.transform.bronze_articles import build_bronze_articles
+from lake_research_map.transform.embeddings import EMBED_MODEL_NAME
+from lake_research_map.transform.versioned_gold import (
+    build_dataset_embeddings,
+    build_dataset_gold,
+    build_dataset_semantics,
+    materialize_version,
+)
+
+
+def _write_source_tree(root):
+    data = root / "data"
+    (data / "ieee").mkdir(parents=True)
+    (data / "elsevier").mkdir()
+    (data / "articles").mkdir()
+    (data / "ieee" / "config.csv").write_text('query "distribution planning"')
+    (data / "ieee" / "records.bib").write_text("@article{x,title={X}}")
+    (data / "articles" / "paper.pdf").write_bytes(b"%PDF-test")
+    (root / "src").mkdir()
+    (root / "src" / "pipeline.py").write_text("VERSION = 1\n")
+    (root / "pyproject.toml").write_text("[project]\nname='fixture'\n")
+    return data
+
+
+def test_source_snapshot_is_content_addressed_and_logically_stable(tmp_path):
+    data = _write_source_tree(tmp_path)
+    archive = data / ".lake_research_map" / "objects"
+
+    first = scan_sources(data, repo_root=tmp_path, archive_dir=archive)
+    fingerprint_a = build_fingerprint(first, repo_root=tmp_path)
+    objects_a = {path for path in archive.rglob("*") if path.is_file()}
+
+    config = data / "ieee" / "config.csv"
+    os.utime(config, (config.stat().st_atime, config.stat().st_mtime + 10))
+    second = scan_sources(data, repo_root=tmp_path, archive_dir=archive)
+    fingerprint_b = build_fingerprint(second, repo_root=tmp_path)
+
+    assert fingerprint_a.version_id == fingerprint_b.version_id
+    assert {path for path in archive.rglob("*") if path.is_file()} == objects_a
+
+    config.write_text('query "distribution planning"\nfilter open-access')
+    third = scan_sources(data, repo_root=tmp_path, archive_dir=archive)
+    fingerprint_c = build_fingerprint(third, repo_root=tmp_path)
+    assert fingerprint_c.version_id != fingerprint_a.version_id
+    assert len({path for path in archive.rglob("*") if path.is_file()}) == len(objects_a) + 1
+
+
+def test_manifest_diff_recognizes_rename_without_duplicating_content(tmp_path):
+    data = _write_source_tree(tmp_path)
+    archive = data / ".lake_research_map" / "objects"
+    first = scan_sources(data, repo_root=tmp_path, archive_dir=archive)
+    previous = {row.path: (row.revision_id, row.sha256) for row in first}
+
+    original = data / "ieee" / "records.bib"
+    original.rename(data / "ieee" / "renamed.bib")
+    second = scan_sources(data, repo_root=tmp_path, archive_dir=archive)
+    changes = diff_manifests(previous, {row.path: row for row in second})
+
+    renamed = [change for change in changes if change["change_type"] == "renamed"]
+    assert len(renamed) == 1
+    assert renamed[0]["path"] == "data/ieee/renamed.bib"
+
+
+def test_bronze_rebuild_uses_file_qualified_keys_and_propagates_removal(
+    raw_session, bronze_session
+):
+    fields = {
+        "Document Title": "Paper",
+        "Publication Year": "2024",
+        "Authors": "Author",
+    }
+    raw_session.add_all(
+        [
+            IeeeCsvRow(
+                row_index=0,
+                source_file="data/ieee/export-a.csv",
+                fields={**fields, "DOI": "10.1/a"},
+                doi="10.1/a",
+            ),
+            IeeeCsvRow(
+                row_index=0,
+                source_file="data/ieee/export-b.csv",
+                fields={**fields, "DOI": "10.1/b"},
+                doi="10.1/b",
+            ),
+        ]
+    )
+    raw_session.commit()
+
+    build_bronze_articles(raw_session, bronze_session, "v1")
+    bronze_session.commit()
+    rows = bronze_session.scalars(select(BronzeArticle)).all()
+    assert len(rows) == 2
+    assert len({row.source_id for row in rows}) == 2
+    assert {row.dataset_version_id for row in rows} == {"v1"}
+
+    raw_session.delete(raw_session.scalar(select(IeeeCsvRow).where(IeeeCsvRow.doi == "10.1/a")))
+    raw_session.commit()
+    build_bronze_articles(raw_session, bronze_session, "v2")
+    bronze_session.commit()
+
+    remaining = bronze_session.scalars(select(BronzeArticle)).all()
+    assert [row.doi for row in remaining] == ["10.1/b"]
+    assert remaining[0].dataset_version_id == "v2"
+
+
+def test_versioned_gold_build_does_not_mutate_live_publication(silver_session, gold_session):
+    silver_session.add(
+        SilverArticle(
+            dataset_version_id="v1",
+            doi="10.1/candidate",
+            sources=["ieee"],
+            record_type="article",
+            title="Candidate",
+            authors=[],
+            keywords=[],
+            countries=[],
+            has_abstract=True,
+            has_doi=True,
+            is_duplicate_merge=False,
+            has_pdf=False,
+            is_non_article=False,
+            bronze_ids=[1],
+        )
+    )
+    silver_session.commit()
+    gold_session.add(DatasetVersion(version_id="v1", status="candidate"))
+    gold_session.commit()
+
+    stats = build_dataset_gold(silver_session, gold_session, "v1")
+
+    assert stats["articles"] == 1
+    assert gold_session.query(DatasetArticle).count() == 1
+    assert gold_session.query(Article).count() == 0
+
+    version = gold_session.get(DatasetVersion, "v1")
+    version.status = "active"
+    gold_session.commit()
+    for rebuild in (
+        lambda: build_dataset_gold(silver_session, gold_session, "v1"),
+        lambda: build_dataset_embeddings(gold_session, "v1"),
+        lambda: build_dataset_semantics(gold_session, "v1"),
+    ):
+        with pytest.raises(ValueError, match="already published"):
+            rebuild()
+
+
+def _candidate(session, version_id: str, doi: str, value: float) -> None:
+    vector = np.full(384, value, dtype=np.float32)
+    session.add(DatasetVersion(version_id=version_id, status="candidate"))
+    session.add(DatasetArticle(dataset_version_id=version_id, doi=doi, sources=["ieee"], title=doi))
+    session.add(
+        DatasetChunk(
+            dataset_version_id=version_id,
+            doi=doi,
+            seq=0,
+            chunk_type="abstract",
+            text=doi,
+            char_len=len(doi),
+            embedding=vector.tolist(),
+            embedding_bin=vector.tobytes(),
+            embed_model=EMBED_MODEL_NAME,
+        )
+    )
+    session.add(
+        DatasetSemantics(
+            dataset_version_id=version_id,
+            doi=doi,
+            relevance_score=0.7,
+            offtopic_score=0.2,
+            theme_id=0,
+            theme_label="Planning",
+            map_x=0.0,
+            map_y=0.0,
+            embed_model=EMBED_MODEL_NAME,
+        )
+    )
+    session.flush()
+
+
+def test_quality_gates_reject_incompatible_embedding(gold_session):
+    _candidate(gold_session, "a" * 64, "10.1/a", 0.1)
+    chunk = gold_session.scalar(select(DatasetChunk))
+    chunk.embedding_bin = b"short"
+    results = embed_contract(gold_session, "a" * 64)
+
+    assert any(result.check_id == "embed.compatible" and not result.passed for result in results)
+    try:
+        assert_contract("embed", results)
+    except Exception as exc:
+        assert "embed.compatible" in str(exc)
+    else:
+        raise AssertionError("incompatible embeddings must block publication")
+
+
+def test_publication_and_reactivation_restore_exact_gold_snapshot(gold_session):
+    first_id = "1" * 64
+    second_id = "2" * 64
+    _candidate(gold_session, first_id, "10.1/first", 0.1)
+    assert all(result.passed for result in semantic_contract(gold_session, first_id))
+    materialize_version(gold_session, first_id, "execution-1")
+    gold_session.commit()
+
+    _candidate(gold_session, second_id, "10.1/second", 0.2)
+    materialize_version(gold_session, second_id, "execution-2")
+    gold_session.commit()
+    assert [row.doi for row in gold_session.scalars(select(Article)).all()] == ["10.1/second"]
+
+    materialize_version(gold_session, first_id, "execution-rollback")
+    gold_session.commit()
+
+    assert [row.doi for row in gold_session.scalars(select(Article)).all()] == ["10.1/first"]
+    assert [row.doi for row in gold_session.scalars(select(Chunk)).all()] == ["10.1/first"]
+    assert [row.doi for row in gold_session.scalars(select(Semantics)).all()] == ["10.1/first"]
+    state = gold_session.get(PublicationState, 1)
+    assert state.active_version_id == first_id
+
+
+def test_versions_cli_dispatches_without_starting_pipeline(monkeypatch):
+    called = []
+    monkeypatch.setattr(pipeline, "_run_version_command", called.append)
+
+    pipeline.main(["versions", "list"])
+
+    assert len(called) == 1
+    assert called[0].version_action == "list"
+
+
+def test_full_pipeline_correlates_stages_and_publishes_only_after_gates(monkeypatch):
+    factories = {}
+    for layer, module in {
+        "raw": raw_models,
+        "bronze": bronze_models,
+        "silver": silver_models,
+        "gold": gold_models,
+    }.items():
+        engine = create_engine("sqlite:///:memory:", future=True)
+        module.Base.metadata.create_all(engine)
+        factories[layer] = sessionmaker(bind=engine, future=True)
+
+    monkeypatch.setattr(pipeline, "bootstrap", lambda: None)
+    monkeypatch.setattr(pipeline, "get_session", lambda layer: factories[layer]())
+    source = ScannedSource(
+        path="data/elsevier/test.bib",
+        source="elsevier",
+        kind="bib",
+        sha256="a" * 64,
+        size_bytes=10,
+        mtime=pipeline.datetime(2026, 9, 21),
+        revision_id="b" * 64,
+        archive_path="data/.lake_research_map/objects/aa/" + "a" * 64,
+    )
+    fingerprint = VersionFingerprint(
+        version_id="c" * 64,
+        source_manifest_sha256="d" * 64,
+        config_sha256="e" * 64,
+        code_revision="commit",
+        code_sha256="f" * 64,
+        curation_sha256="0" * 64,
+    )
+    monkeypatch.setattr(pipeline, "scan_sources", lambda: [source])
+    monkeypatch.setattr(pipeline, "build_fingerprint", lambda *args, **kwargs: fingerprint)
+    monkeypatch.setattr(pipeline, "load_configs", lambda session: 0)
+    monkeypatch.setattr(pipeline, "load_ieee_csv", lambda session: 0)
+    monkeypatch.setattr(pipeline, "load_pdf_inventory", lambda session: 0)
+
+    def load_bib(session):
+        if session.query(BibEntry).count() == 0:
+            session.add(
+                BibEntry(
+                    source="elsevier",
+                    bib_key="paper",
+                    entry_type="article",
+                    source_file=source.path,
+                    fields={
+                        "title": "Planning paper",
+                        "author": "Researcher",
+                        "year": "2024",
+                        "abstract": "Distribution network planning study.",
+                    },
+                    doi="10.1/paper",
+                )
+            )
+            session.flush()
+        return 1
+
+    monkeypatch.setattr(pipeline, "load_bib_entries", load_bib)
+
+    def embed(session, version_id):
+        vector = np.full(384, 0.1, dtype=np.float32)
+        rows = session.scalars(
+            select(DatasetChunk).where(DatasetChunk.dataset_version_id == version_id)
+        ).all()
+        for row in rows:
+            row.embedding = vector.tolist()
+            row.embedding_bin = vector.tobytes()
+            row.embed_model = EMBED_MODEL_NAME
+        session.flush()
+        return {"embedded": len(rows), "already_embedded": 0, "total_chunks": len(rows)}
+
+    def semantics(session, version_id):
+        chunks = session.scalars(
+            select(DatasetChunk)
+            .where(DatasetChunk.dataset_version_id == version_id)
+            .where(DatasetChunk.chunk_type == "abstract")
+        ).all()
+        for row in chunks:
+            session.add(
+                DatasetSemantics(
+                    dataset_version_id=version_id,
+                    doi=row.doi,
+                    relevance_score=0.7,
+                    offtopic_score=0.2,
+                    theme_id=0,
+                    theme_label="Planning",
+                    map_x=0.0,
+                    map_y=0.0,
+                    embed_model=EMBED_MODEL_NAME,
+                )
+            )
+        session.flush()
+        return {
+            "articles": len(chunks),
+            "themes": 1,
+            "duplicate_pairs": 0,
+            "embedding_coverage": 1.0,
+        }
+
+    monkeypatch.setattr(pipeline, "build_dataset_embeddings", embed)
+    monkeypatch.setattr(pipeline, "build_dataset_semantics", semantics)
+
+    pipeline.run_all(execution_id="parent-execution")
+
+    gold_session = factories["gold"]()
+    runs = gold_session.scalars(select(gold_models.PipelineRun)).all()
+    assert [row.stage for row in runs] == ["raw", "bronze", "silver", "gold", "embed", "semantic"]
+    assert {row.execution_id for row in runs} == {"parent-execution"}
+    assert {row.dataset_version_id for row in runs} == {fingerprint.version_id}
+    assert all(row.status == "success" for row in runs)
+    assert gold_session.get(PublicationState, 1).active_version_id == fingerprint.version_id
+    assert [row.doi for row in gold_session.scalars(select(Article)).all()] == ["10.1/paper"]
+    assert gold_session.query(gold_models.QualityResult).count() > 0
+    gold_session.close()
+
+    pipeline.run_all(execution_id="parent-unchanged")
+    gold_session = factories["gold"]()
+    repeated = gold_session.scalars(
+        select(gold_models.PipelineRun).where(
+            gold_models.PipelineRun.execution_id == "parent-unchanged"
+        )
+    ).all()
+    assert len(repeated) == 6
+    assert all(row.status == "skipped" for row in repeated)
+    assert {row.dataset_version_id for row in repeated} == {fingerprint.version_id}
+    assert gold_session.query(DatasetVersion).count() == 1
+    gold_session.close()
+
+
+def test_golden_corpus_add_edit_rename_remove_and_reactivate(monkeypatch, tmp_path):
+    """Exercise reconciliation and publication over a complete mutation sequence."""
+    from lake_research_map.ingest import hashing, raw_bib, raw_config, raw_csv, raw_pdfs
+    from lake_research_map.transform import bronze_articles
+
+    data = _write_source_tree(tmp_path)
+    (data / "articles" / "paper.pdf").unlink()
+    first_bib = data / "elsevier" / "first.bib"
+    second_bib = data / "elsevier" / "second.bib"
+
+    def write_bib(path: Path, key: str, doi: str, title: str) -> None:
+        path.write_text(
+            "\n".join(
+                [
+                    f"@article{{{key},",
+                    f"  title={{{title}}},",
+                    "  author={Researcher, Ada},",
+                    "  year={2024},",
+                    "  journal={Grid Journal},",
+                    f"  abstract={{Distribution network planning study for {key}.}},",
+                    f"  doi={{{doi}}}",
+                    "}",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    write_bib(first_bib, "first", "10.1000/first", "First planning study")
+    (data / "ieee" / "records.bib").unlink()
+
+    factories = {}
+    for layer, module in {
+        "raw": raw_models,
+        "bronze": bronze_models,
+        "silver": silver_models,
+        "gold": gold_models,
+    }.items():
+        engine = create_engine("sqlite:///:memory:", future=True)
+        module.Base.metadata.create_all(engine)
+        factories[layer] = sessionmaker(bind=engine, future=True)
+
+    monkeypatch.setattr(pipeline, "bootstrap", lambda: None)
+    monkeypatch.setattr(pipeline, "get_session", lambda layer: factories[layer]())
+    monkeypatch.setattr(raw_bib, "IEEE_DIR", data / "ieee")
+    monkeypatch.setattr(raw_bib, "ELSEVIER_DIR", data / "elsevier")
+    monkeypatch.setattr(raw_config, "IEEE_DIR", data / "ieee")
+    monkeypatch.setattr(raw_config, "ELSEVIER_DIR", data / "elsevier")
+    monkeypatch.setattr(raw_csv, "IEEE_DIR", data / "ieee")
+    monkeypatch.setattr(raw_pdfs, "ARTICLES_DIR", data / "articles")
+
+    def fixture_relative_path(path) -> str:
+        return Path(path).resolve().relative_to(tmp_path).as_posix()
+
+    for module in (hashing, raw_bib, raw_config, raw_csv, raw_pdfs):
+        monkeypatch.setattr(module, "relative_path", fixture_relative_path)
+    monkeypatch.setattr(bronze_articles, "load_enrichment_cache", lambda: {})
+    monkeypatch.setattr(
+        pipeline,
+        "scan_sources",
+        lambda: scan_sources(
+            data,
+            repo_root=tmp_path,
+            archive_dir=data / ".lake_research_map" / "objects",
+        ),
+    )
+
+    def fixture_fingerprint(sources, *, curation_records=None):
+        return build_fingerprint(
+            sources,
+            curation_records=curation_records,
+            repo_root=tmp_path,
+        )
+
+    monkeypatch.setattr(pipeline, "build_fingerprint", fixture_fingerprint)
+
+    def embed(session, version_id):
+        rows = session.scalars(
+            select(DatasetChunk).where(DatasetChunk.dataset_version_id == version_id)
+        ).all()
+        for index, row in enumerate(rows, start=1):
+            vector = np.full(384, index / 100, dtype=np.float32)
+            row.embedding = vector.tolist()
+            row.embedding_bin = vector.tobytes()
+            row.embed_model = EMBED_MODEL_NAME
+        session.flush()
+        return {"embedded": len(rows), "already_embedded": 0, "total_chunks": len(rows)}
+
+    def semantics(session, version_id):
+        chunks = session.scalars(
+            select(DatasetChunk)
+            .where(DatasetChunk.dataset_version_id == version_id)
+            .where(DatasetChunk.chunk_type == "abstract")
+        ).all()
+        for index, row in enumerate(chunks):
+            session.add(
+                DatasetSemantics(
+                    dataset_version_id=version_id,
+                    doi=row.doi,
+                    relevance_score=0.7,
+                    offtopic_score=0.2,
+                    theme_id=index,
+                    theme_label=f"Theme {index}",
+                    map_x=float(index),
+                    map_y=0.0,
+                    embed_model=EMBED_MODEL_NAME,
+                )
+            )
+        session.flush()
+        return {
+            "articles": len(chunks),
+            "themes": len(chunks),
+            "duplicate_pairs": 0,
+            "embedding_coverage": 1.0,
+        }
+
+    monkeypatch.setattr(pipeline, "build_dataset_embeddings", embed)
+    monkeypatch.setattr(pipeline, "build_dataset_semantics", semantics)
+
+    def run_and_assert(execution_id: str, expected_dois: set[str]) -> str:
+        pipeline.run_all(execution_id=execution_id)
+        raw_session = factories["raw"]()
+        bronze_session = factories["bronze"]()
+        silver_session = factories["silver"]()
+        gold_session = factories["gold"]()
+        try:
+            assert {row.doi for row in raw_session.scalars(select(BibEntry)).all()} == expected_dois
+            assert {
+                row.doi for row in bronze_session.scalars(select(BronzeArticle)).all()
+            } == expected_dois
+            assert {
+                row.doi for row in silver_session.scalars(select(SilverArticle)).all()
+            } == expected_dois
+            assert {row.doi for row in gold_session.scalars(select(Article)).all()} == expected_dois
+            state = gold_session.get(PublicationState, 1)
+            assert state.active_version_id is not None
+            return state.active_version_id
+        finally:
+            raw_session.close()
+            bronze_session.close()
+            silver_session.close()
+            gold_session.close()
+
+    initial_version = run_and_assert("golden-initial", {"10.1000/first"})
+
+    write_bib(second_bib, "second", "10.1000/second", "Second planning study")
+    added_version = run_and_assert("golden-add", {"10.1000/first", "10.1000/second"})
+
+    write_bib(first_bib, "first", "10.1000/first", "First planning study revised")
+    edited_version = run_and_assert("golden-edit", {"10.1000/first", "10.1000/second"})
+    gold_session = factories["gold"]()
+    revised = gold_session.scalar(select(Article).where(Article.doi == "10.1000/first"))
+    assert revised.title == "First planning study revised"
+    gold_session.close()
+
+    renamed_bib = data / "elsevier" / "renamed-second.bib"
+    second_bib.rename(renamed_bib)
+    renamed_version = run_and_assert("golden-rename", {"10.1000/first", "10.1000/second"})
+    raw_session = factories["raw"]()
+    rename_changes = raw_session.scalars(
+        select(raw_models.SourceChange).where(
+            raw_models.SourceChange.execution_id == "golden-rename"
+        )
+    ).all()
+    assert [
+        (row.change_type, row.path) for row in rename_changes if row.change_type == "renamed"
+    ] == [("renamed", "data/elsevier/renamed-second.bib")]
+    raw_session.close()
+
+    first_bib.unlink()
+    removed_version = run_and_assert("golden-remove", {"10.1000/second"})
+    raw_session = factories["raw"]()
+    removal_changes = raw_session.scalars(
+        select(raw_models.SourceChange).where(
+            raw_models.SourceChange.execution_id == "golden-remove"
+        )
+    ).all()
+    assert ("removed", "data/elsevier/first.bib") in {
+        (row.change_type, row.path) for row in removal_changes
+    }
+    raw_session.close()
+
+    assert (
+        len({initial_version, added_version, edited_version, renamed_version, removed_version}) == 5
+    )
+
+    pipeline._run_version_command(
+        SimpleNamespace(version_action="activate", version_id=renamed_version)
+    )
+    gold_session = factories["gold"]()
+    try:
+        assert gold_session.get(PublicationState, 1).active_version_id == renamed_version
+        assert {row.doi for row in gold_session.scalars(select(Article)).all()} == {
+            "10.1000/first",
+            "10.1000/second",
+        }
+        revised = gold_session.scalar(select(Article).where(Article.doi == "10.1000/first"))
+        assert revised.title == "First planning study revised"
+    finally:
+        gold_session.close()

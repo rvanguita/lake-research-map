@@ -13,6 +13,7 @@ from lake_research_map.dashboard.components import (
     metric_row,
     page_header,
     render_chart,
+    render_pipeline_controls,
 )
 from lake_research_map.dashboard.theme import (
     CATEGORICAL_PALETTE,
@@ -23,45 +24,49 @@ from lake_research_map.dashboard.theme import (
     hex_to_rgba,
 )
 
-
-def _load_pipeline_runs() -> pd.DataFrame:
-    """Load recent pipeline runs from gold.lit_pipeline_runs, if the table exists."""
-    from lake_research_map.dashboard.data import table_exists
-    from lake_research_map.db.engines import get_engine
-
-    if not table_exists("gold", "lit_pipeline_runs"):
-        return pd.DataFrame()
-    engine = get_engine("gold")
-    return pd.read_sql_query(
-        "SELECT stage, started_at, finished_at, duration_seconds, stats, status, error_message "
-        "FROM lit_pipeline_runs ORDER BY finished_at DESC LIMIT 50",
-        engine,
-    )
-
-
-def _load_rejected_records() -> pd.DataFrame:
-    """Load rejected records from silver.lit_rejected, if the table exists."""
-    from lake_research_map.dashboard.data import table_exists
-    from lake_research_map.db.engines import get_engine
-
-    if not table_exists("silver", "lit_rejected"):
-        return pd.DataFrame()
-    engine = get_engine("silver")
-    return pd.read_sql_query("SELECT * FROM lit_rejected ORDER BY rejected_at DESC", engine)
-
-
 LAYER_ORDER = ("raw", "bronze", "silver", "gold")
+
+
+def _render_search_provenance() -> None:
+    """Show immutable search provenance without writing to pipeline tables."""
+    st.subheader("Proveniência da busca")
+    configs = loaders.search_configs()
+    if configs.empty:
+        st.info("A configuração de busca ainda não foi ingerida na camada raw.")
+        return
+
+    st.caption(
+        "Os registros abaixo preservam as consultas que originaram os exports. "
+        "Eles documentam a coleta e não representam artigos do corpus."
+    )
+    for _, row in configs.iterrows():
+        source = str(row.get("source") or "Fonte")
+        with st.expander(SOURCE_LABELS.get(source, source.title())):
+            st.code(str(row.get("query_string") or "—"), language=None, wrap_lines=True)
+            columns = st.columns(2)
+            columns[0].metric("Intervalo de anos", str(row.get("year_range") or "—"))
+            columns[1].metric("Filtros", str(row.get("filters") or "—"))
+            search_url = row.get("search_url")
+            if search_url:
+                st.link_button(
+                    "Abrir busca original", str(search_url), icon=":material/open_in_new:"
+                )
+            st.caption(f"Arquivo: {row.get('source_file') or '—'}")
 
 
 def render() -> None:
     page_header(
         "🏗️",
-        "Camadas & Pipeline",
+        "Pipeline e proveniência",
         "O funil raw → bronze → silver → gold: quanto sobrevive em cada etapa, por que, e onde a "
         "cobertura de metadados melhora ou piora.",
     )
 
-    runs_df = _load_pipeline_runs()
+    runs_df = loaders.pipeline_runs()
+    executions_df = loaders.pipeline_executions()
+    versions_df = loaders.dataset_versions()
+    publication_df = loaders.publication_state()
+    quality_df = loaders.quality_results()
     if runs_df.empty:
         hero_banner(
             "Sem histórico de execuções",
@@ -70,10 +75,15 @@ def render() -> None:
         )
     else:
         last = runs_df.iloc[0]
+        active = None
+        if not publication_df.empty:
+            active = publication_df.iloc[0].get("active_version_id")
+        active_text = f" Versão ativa: <code>{str(active)[:12]}</code>." if active else ""
         hero_banner(
             "Histórico de execuções",
             f"Última execução: <b>{last['stage']}</b> em "
-            f"<code>{last['finished_at']}</code> — status: <b>{last['status']}</b>.",
+            f"<code>{last['finished_at']}</code> — status: <b>{last['status']}</b>."
+            f"{active_text}",
         )
 
     funnel_df = loaders.layer_funnel()
@@ -84,56 +94,49 @@ def render() -> None:
             "Nenhum dado encontrado em nenhuma camada ainda. Execute o pipeline "
             "(`uv run lake-research-map --stage all`) e recarregue esta página."
         )
-        return
+        has_pipeline_data = False
+    else:
+        has_pipeline_data = True
+        _headline_metrics(funnel_df)
 
-    _headline_metrics(funnel_df)
-
-    (
-        tab_funil,
-        tab_retencao,
-        tab_drift,
-        tab_cobertura,
-        tab_detalhes,
-        tab_historico,
-        tab_rejeitados,
-    ) = st.tabs(
+    tab_flow, tab_quality, tab_audit, tab_operations = st.tabs(
         [
-            "🔀 Funil",
-            "📊 Retenção",
-            "⚠️ Drift",
-            "🗂️ Cobertura",
-            "📋 Detalhes",
-            "📜 Histórico",
-            "🚫 Rejeitados",
-        ]
+            "Fluxo e retenção",
+            "Qualidade entre camadas",
+            "Auditoria",
+            "Execução e proveniência",
+        ],
+        on_change="rerun",
+        key="pipeline_primary_tab",
     )
 
-    with tab_funil:
-        _sankey_funnel(funnel_df)
-
-    with tab_retencao:
-        _retention_by_stage(funnel_df)
-
-    with tab_drift:
-        _drift_check(funnel_df)
-
-    with tab_cobertura:
-        _metadata_coverage_by_layer()
-
-    with tab_detalhes:
-        st.subheader("📋 Contagem bruta por tabela (todas as camadas)")
-        st.dataframe(row_counts, hide_index=True, width="stretch")
-
-    with tab_historico:
-        st.subheader("📜 Histórico de execuções do pipeline")
-        if runs_df.empty:
-            st.info("Nenhuma execução registrada. Execute o pipeline para popular o histórico.")
+    if tab_flow.open:
+        if has_pipeline_data:
+            _sankey_funnel(funnel_df)
+            _retention_by_stage(funnel_df)
         else:
-            st.dataframe(runs_df, hide_index=True, width="stretch")
-
-    with tab_rejeitados:
-        st.subheader("🚫 Registros rejeitados na camada silver")
-        rejected_df = _load_rejected_records()
+            st.info("Execute a camada raw para iniciar o funil.")
+    elif tab_quality.open:
+        if not quality_df.empty:
+            _render_contract_status(quality_df)
+        elif has_pipeline_data:
+            st.info(
+                "Ainda não há contratos persistidos; o diagnóstico abaixo é apenas uma "
+                "verificação legada sobre as tabelas carregadas."
+            )
+            _drift_check(funnel_df)
+        if has_pipeline_data:
+            _metadata_coverage_by_layer()
+            st.subheader("Contagem bruta por tabela")
+            st.dataframe(row_counts, hide_index=True, width="stretch")
+        else:
+            st.info("Ainda não há camadas para comparar.")
+    elif tab_audit.open:
+        _render_version_audit(versions_df, publication_df)
+        _render_execution_audit(executions_df, runs_df)
+        _render_source_changes()
+        st.subheader("Registros rejeitados na camada silver")
+        rejected_df = loaders.rejected_records()
         if rejected_df.empty:
             st.info("Nenhum registro rejeitado encontrado. Execute `--stage silver` para popular.")
         else:
@@ -142,6 +145,111 @@ def render() -> None:
                 "auditoria da revisão sistemática."
             )
             st.dataframe(rejected_df, hide_index=True, width="stretch")
+    elif tab_operations.open:
+        render_pipeline_controls()
+        _render_search_provenance()
+
+
+def _render_contract_status(quality_df: pd.DataFrame) -> None:
+    st.subheader("Contratos executáveis")
+    latest = quality_df.sort_values("checked_at").drop_duplicates(
+        ["dataset_version_id", "stage", "check_id"], keep="last"
+    )
+    failures = latest[(latest["severity"] == "error") & (~latest["passed"].astype(bool))]
+    warnings = latest[(latest["severity"] == "warning") & (~latest["passed"].astype(bool))]
+    metric_row(
+        [
+            ("Verificações", f"{len(latest):,}", "último resultado por contrato"),
+            ("Bloqueios", f"{len(failures):,}", "severidade error"),
+            ("Alertas", f"{len(warnings):,}", "não bloqueantes"),
+        ]
+    )
+    if failures.empty:
+        st.success("Nenhuma falha bloqueante no conjunto mais recente de contratos.")
+    else:
+        st.error(
+            f"{len(failures)} contrato(s) bloqueante(s) falharam; a versão candidata não pode "
+            "ser publicada."
+        )
+    display = latest[
+        [
+            "stage",
+            "check_id",
+            "severity",
+            "passed",
+            "observed",
+            "expected",
+            "checked_at",
+        ]
+    ].rename(
+        columns={
+            "stage": "Etapa",
+            "check_id": "Contrato",
+            "severity": "Severidade",
+            "passed": "Aprovado",
+            "observed": "Observado",
+            "expected": "Esperado",
+            "checked_at": "Verificado em",
+        }
+    )
+    st.dataframe(display, hide_index=True, width="stretch")
+
+
+def _render_version_audit(versions_df: pd.DataFrame, publication_df: pd.DataFrame) -> None:
+    st.subheader("Versões do corpus")
+    if versions_df.empty:
+        st.info("Nenhuma versão determinística foi registrada.")
+        return
+    active = None
+    working = None
+    if not publication_df.empty:
+        active = publication_df.iloc[0].get("active_version_id")
+        working = publication_df.iloc[0].get("working_version_id")
+    metric_row(
+        [
+            ("Versão ativa", str(active)[:12] if active else "—", "Gold publicado"),
+            ("Versão de trabalho", str(working)[:12] if working else "—", "pipeline atual"),
+            ("Versões registradas", f"{len(versions_df):,}", None),
+        ]
+    )
+    columns = [
+        "version_id",
+        "status",
+        "parent_version_id",
+        "source_manifest_sha256",
+        "code_revision",
+        "created_at",
+        "published_at",
+        "failure_reason",
+    ]
+    st.dataframe(
+        versions_df[[col for col in columns if col in versions_df]],
+        hide_index=True,
+        width="stretch",
+    )
+
+
+def _render_execution_audit(executions_df: pd.DataFrame, runs_df: pd.DataFrame) -> None:
+    st.subheader("Execuções e etapas correlacionadas")
+    if executions_df.empty:
+        if runs_df.empty:
+            st.info("Nenhuma execução registrada. Execute o pipeline para popular o histórico.")
+        else:
+            st.dataframe(runs_df, hide_index=True, width="stretch")
+        return
+    st.dataframe(executions_df, hide_index=True, width="stretch")
+    if not runs_df.empty:
+        st.caption("Tentativas de etapa vinculadas às execuções acima.")
+        st.dataframe(runs_df, hide_index=True, width="stretch")
+
+
+def _render_source_changes() -> None:
+    st.subheader("Reconciliação dos arquivos de origem")
+    changes = loaders.source_changes()
+    if changes.empty:
+        st.info("Nenhuma reconciliação versionada foi registrada.")
+        return
+    st.dataframe(changes, hide_index=True, width="stretch")
 
 
 def _headline_metrics(funnel_df: pd.DataFrame) -> None:

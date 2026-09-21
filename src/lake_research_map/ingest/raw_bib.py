@@ -57,5 +57,5 @@ def load_bib_entries(session: Session) -> int:
     written = 0
     written += _load_bib_dir(session, "ieee", IEEE_DIR)
     written += _load_bib_dir(session, "elsevier", ELSEVIER_DIR)
-    session.commit()
+    session.flush()
     return written

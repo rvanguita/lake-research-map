@@ -17,6 +17,7 @@ from lake_research_map.transform.semantics import (
     reduced_space,
     relevance_scores,
     theme_labels_from_terms,
+    unresolved_duplicate_pairs,
 )
 
 
@@ -62,6 +63,7 @@ def test_near_duplicate_pairs_respects_threshold_and_never_self_pairs():
     assert {doi_a, doi_b} == {"10.1/a", "10.1/b"}
     assert doi_a != doi_b
     assert similarity >= 0.95
+    assert unresolved_duplicate_pairs(pairs, {("10.1/b", "10.1/a")}) == []
 
 
 def test_near_duplicate_pairs_sorted_by_similarity_descending():
@@ -246,7 +248,7 @@ def test_theme_labels_fall_back_to_numbers_without_a_vocabulary():
 def test_build_semantics_end_to_end_with_injected_anchors(gold_session):
     """build_semantics runs to completion with injected anchor vectors,
     bypassing the fastembed model entirely."""
-    from lake_research_map.db.gold_models import Chunk, Semantics
+    from lake_research_map.db.gold_models import Chunk, DuplicateOverride, DuplicatePair, Semantics
     from lake_research_map.transform.semantics import build_semantics
 
     rng = np.random.default_rng(42)
@@ -254,8 +256,10 @@ def test_build_semantics_end_to_end_with_injected_anchors(gold_session):
     dim = 384
 
     # Create gold chunks with embeddings to simulate an embedded corpus.
+    shared = rng.standard_normal(dim).astype(np.float32)
+    shared /= np.linalg.norm(shared)
     for i in range(n):
-        vec = rng.standard_normal(dim).astype(np.float32)
+        vec = shared if i < 2 else rng.standard_normal(dim).astype(np.float32)
         vec /= np.linalg.norm(vec)
         gold_session.add(
             Chunk(
@@ -269,6 +273,15 @@ def test_build_semantics_end_to_end_with_injected_anchors(gold_session):
                 embedding=vec.tolist(),
             )
         )
+    gold_session.add(
+        DuplicateOverride(
+            doi_a="10.1000/test-0",
+            doi_b="10.1000/test-1",
+            decision="keep",
+            canonical_doi=None,
+            reason="Distinct publications after review",
+        )
+    )
     gold_session.commit()
 
     # Inject anchor vectors instead of loading the real embedding model.
@@ -281,7 +294,10 @@ def test_build_semantics_end_to_end_with_injected_anchors(gold_session):
     assert stats["themes"] > 0
     assert "median_relevance" in stats
     assert "median_margin" in stats
+    assert stats["duplicate_pairs_reviewed"] == 1
 
     # Verify lit_semantics rows were written.
     sem_count = gold_session.query(Semantics).count()
     assert sem_count == n
+    assert gold_session.query(DuplicatePair).count() == 0
+    assert gold_session.query(DuplicateOverride).count() == 1

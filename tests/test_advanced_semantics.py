@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from lake_research_map.transform.semantics import (
     compute_semantic_novelty,
@@ -26,12 +27,11 @@ def test_project_pca_2d_handles_degenerate_cases():
     assert project_pca_2d(np.array([[1.0, 2.0]], dtype="float32")).shape == (1, 2)
 
 
-def test_project_umap_falls_back_gracefully():
+def test_project_umap_is_explicitly_unavailable_without_dependency():
     rng = np.random.default_rng(42)
     matrix = rng.normal(0, 1, (15, 6)).astype("float32")
-    coords = project_umap(matrix, n_neighbors=5)
-    assert coords.shape == (15, 2)
-    assert np.isfinite(coords).all()
+    with pytest.raises(ImportError):
+        project_umap(matrix, n_neighbors=5)
 
 
 def test_compute_thematic_centroids():
@@ -143,11 +143,9 @@ def test_alternative_projections_and_novelty_mapping():
         dtype="float32",
     )
     pca_coords = project_pca_2d(matrix)
-    umap_coords = project_umap(matrix, n_neighbors=2)
     novelty = compute_semantic_novelty(matrix, k=2)
 
     assert pca_coords.shape == (3, 2)
-    assert umap_coords.shape == (3, 2)
     assert len(novelty) == 3
 
     df = pd.DataFrame({"doi": dois, "pca_x": pca_coords[:, 0], "novelty": novelty})

@@ -22,6 +22,28 @@ OTHERS_LABEL = "Outros"
 # years, inclusive of the latest) everywhere it's shown.
 RECENT_WINDOW_YEARS = 5
 
+METADATA_COVERAGE_FIELDS = (
+    "doi",
+    "title",
+    "year",
+    "venue",
+    "authors",
+    "abstract",
+    "keywords",
+    "citation_count",
+    "reference_count",
+    "has_pdf",
+)
+
+PDF_BIAS_METRICS = {
+    "year": "identity",
+    "citation_count": "log1p",
+    "reference_count": "log1p",
+    "team_size": "identity",
+    "abstract_chars": "log1p",
+    "keyword_count": "log1p",
+}
+
 
 def valid_years(df: pd.DataFrame, lo: int = 1950, hi: int = 2026) -> pd.Series:
     """Coerce `year` to numeric and drop rows outside a plausible window.
@@ -34,6 +56,154 @@ def valid_years(df: pd.DataFrame, lo: int = 1950, hi: int = 2026) -> pd.Series:
     """
     years = pd.to_numeric(df.get("year"), errors="coerce")
     return years.where(years.between(lo, hi))
+
+
+def _field_present(series: pd.Series, field: str) -> pd.Series:
+    """Return a boolean presence mask without treating unknown counts as zero."""
+    if field in {"authors", "keywords", "sources"}:
+        return series.apply(lambda value: isinstance(value, list) and len(value) > 0)
+    if field == "has_pdf":
+        return series.fillna(False).astype(bool)
+    if pd.api.types.is_string_dtype(series.dtype) or series.dtype == object:
+        return series.notna() & series.astype(str).str.strip().ne("")
+    return series.notna()
+
+
+def metadata_coverage_matrix(
+    df: pd.DataFrame,
+    fields: tuple[str, ...] = METADATA_COVERAGE_FIELDS,
+) -> pd.DataFrame:
+    """Measure field completeness by source using explicit denominators."""
+    columns = ["field", "source", "n_total", "n_present", "coverage"]
+    if df.empty:
+        return pd.DataFrame(columns=columns)
+
+    working = df.copy()
+    if "source" not in working.columns:
+        if "sources" in working.columns:
+            working["source"] = working["sources"].apply(
+                lambda values: values[0] if isinstance(values, list) and values else "unknown"
+            )
+        else:
+            working["source"] = "total"
+
+    rows: list[dict[str, object]] = []
+    for source, group in working.groupby("source", dropna=False):
+        for field in fields:
+            if field not in group.columns:
+                continue
+            present = _field_present(group[field], field)
+            n_total = len(group)
+            n_present = int(present.sum())
+            rows.append(
+                {
+                    "field": field,
+                    "source": str(source),
+                    "n_total": n_total,
+                    "n_present": n_present,
+                    "coverage": n_present / n_total if n_total else np.nan,
+                }
+            )
+    return pd.DataFrame(rows, columns=columns)
+
+
+def _standardized_mean_difference(left: np.ndarray, right: np.ndarray) -> float:
+    if len(left) < 2 or len(right) < 2:
+        return float("nan")
+    pooled_variance = (
+        (len(left) - 1) * np.var(left, ddof=1) + (len(right) - 1) * np.var(right, ddof=1)
+    ) / (len(left) + len(right) - 2)
+    if pooled_variance <= 0 or np.isclose(pooled_variance, 0.0):
+        return 0.0 if np.isclose(np.mean(left), np.mean(right)) else float("nan")
+    return float((np.mean(left) - np.mean(right)) / np.sqrt(pooled_variance))
+
+
+def pdf_selection_bias(
+    df: pd.DataFrame,
+    *,
+    n_bootstrap: int = 1000,
+    seed: int = 42,
+) -> pd.DataFrame:
+    """Compare PDF and non-PDF subsets using standardized mean differences.
+
+    Positive effects mean the PDF subset has a larger transformed mean. The
+    bootstrap is stratified by PDF availability so group sizes remain fixed.
+    """
+    columns = [
+        "metric",
+        "transform",
+        "n_pdf",
+        "n_no_pdf",
+        "mean_pdf",
+        "mean_no_pdf",
+        "smd",
+        "ci_low",
+        "ci_high",
+        "status",
+    ]
+    if df.empty or "has_pdf" not in df.columns:
+        return pd.DataFrame(columns=columns)
+
+    working = df.copy()
+    working["has_pdf"] = working["has_pdf"].fillna(False).astype(bool)
+    working["team_size"] = working.get(
+        "authors", pd.Series(index=working.index, dtype=object)
+    ).apply(lambda value: len(value) if isinstance(value, list) else np.nan)
+    working["abstract_chars"] = working.get(
+        "abstract", pd.Series(index=working.index, dtype=object)
+    ).apply(lambda value: len(value.strip()) if isinstance(value, str) else np.nan)
+    working["keyword_count"] = working.get(
+        "keywords", pd.Series(index=working.index, dtype=object)
+    ).apply(lambda value: len(value) if isinstance(value, list) else np.nan)
+
+    rng = np.random.default_rng(seed)
+    rows: list[dict[str, object]] = []
+    for metric, transform in PDF_BIAS_METRICS.items():
+        if metric not in working.columns:
+            continue
+        values = pd.to_numeric(working[metric], errors="coerce")
+        valid = values.notna() & values.ge(0)
+        pdf_values = values[valid & working["has_pdf"]].to_numpy(dtype=float)
+        no_pdf_values = values[valid & ~working["has_pdf"]].to_numpy(dtype=float)
+        if transform == "log1p":
+            pdf_values = np.log1p(pdf_values)
+            no_pdf_values = np.log1p(no_pdf_values)
+
+        smd = _standardized_mean_difference(pdf_values, no_pdf_values)
+        if len(pdf_values) < 2 or len(no_pdf_values) < 2:
+            status = "insufficient_group"
+        elif not np.isfinite(smd):
+            status = "zero_variance"
+        else:
+            status = "ok"
+        boot = np.array([], dtype=float)
+        if n_bootstrap > 0 and len(pdf_values) >= 2 and len(no_pdf_values) >= 2:
+            estimates = [
+                _standardized_mean_difference(
+                    rng.choice(pdf_values, size=len(pdf_values), replace=True),
+                    rng.choice(no_pdf_values, size=len(no_pdf_values), replace=True),
+                )
+                for _ in range(n_bootstrap)
+            ]
+            boot = np.asarray([value for value in estimates if np.isfinite(value)], dtype=float)
+        ci_low, ci_high = (
+            np.quantile(boot, [0.025, 0.975]) if len(boot) else (float("nan"), float("nan"))
+        )
+        rows.append(
+            {
+                "metric": metric,
+                "transform": transform,
+                "n_pdf": len(pdf_values),
+                "n_no_pdf": len(no_pdf_values),
+                "mean_pdf": float(np.mean(pdf_values)) if len(pdf_values) else np.nan,
+                "mean_no_pdf": float(np.mean(no_pdf_values)) if len(no_pdf_values) else np.nan,
+                "smd": smd,
+                "ci_low": float(ci_low),
+                "ci_high": float(ci_high),
+                "status": status,
+            }
+        )
+    return pd.DataFrame(rows, columns=columns)
 
 
 def source_counts_by(df: pd.DataFrame, index_col: str) -> pd.DataFrame:
@@ -1060,52 +1230,146 @@ def analyze_coauthorship_partners(
     return res_df
 
 
-def citation_determinants_glm(df: pd.DataFrame) -> dict:
-    """Estimate econometric determinants of citation counts via Poisson GLM."""
-    from sklearn.linear_model import PoissonRegressor
+def citation_determinants_glm(df: pd.DataFrame, *, observation_year: int = 2026) -> dict:
+    """Fit an exposure-adjusted count GLM with robust uncertainty estimates.
 
-    valid = df.dropna(subset=["citation_count", "year"]).copy()
-    if len(valid) < 20:
-        return {"valid": False, "features": [], "coefficients": [], "irr": []}
+    Citation counts accumulate over time, so ``log(article_age + 1)`` is used
+    as an exposure offset. Numeric predictors are standardized and rows with
+    missing predictors are excluded instead of silently filled. A negative
+    binomial variance is used when the preliminary Poisson fit is materially
+    overdispersed.
+    """
+    from statsmodels.genmod.families import NegativeBinomial, Poisson
+    from statsmodels.genmod.generalized_linear_model import GLM
+    from statsmodels.tools.tools import add_constant
 
-    y = valid["citation_count"].clip(lower=0).to_numpy()
-    years = valid["year"].to_numpy()
-    ref_count = (
-        valid["reference_count"].fillna(0).to_numpy()
-        if "reference_count" in valid.columns
-        else np.zeros(len(valid))
-    )
-    author_count = (
-        valid["authors"].apply(lambda a: len(a) if isinstance(a, list) else 1).to_numpy()
-        if "authors" in valid.columns
-        else np.ones(len(valid))
-    )
-    is_ieee = (
-        valid["source"].apply(lambda s: 1 if s == "ieee" else 0).to_numpy()
-        if "source" in valid.columns
-        else np.zeros(len(valid))
-    )
+    feature_names = ["qtd_referencias", "tamanho_equipe", "origem_ieee"]
+    required = {"citation_count", "year", "reference_count", "authors", "source"}
+    if df.empty or not required.issubset(df.columns):
+        return {
+            "valid": False,
+            "features": feature_names,
+            "coefficients": [],
+            "irr": [],
+            "n_total": len(df),
+            "n_used": 0,
+            "coverage": 0.0,
+            "warning": "Campos necessários ausentes.",
+        }
 
-    X = np.column_stack([years, ref_count, author_count, is_ieee])
-    feature_names = [
-        "ano_publicacao",
-        "qtd_referencias",
-        "tamanho_equipe",
-        "origem_ieee",
+    valid = df.copy()
+    valid["citations"] = pd.to_numeric(valid["citation_count"], errors="coerce")
+    valid["publication_year"] = pd.to_numeric(valid["year"], errors="coerce")
+    valid["references"] = pd.to_numeric(valid["reference_count"], errors="coerce")
+    valid["team_size"] = valid["authors"].apply(
+        lambda authors: len(authors) if isinstance(authors, list) and authors else np.nan
+    )
+    valid["is_ieee"] = valid["source"].map({"ieee": 1.0, "elsevier": 0.0})
+    valid = valid.dropna(
+        subset=["citations", "publication_year", "references", "team_size", "is_ieee"]
+    )
+    valid = valid[
+        (valid["citations"] >= 0)
+        & valid["publication_year"].between(1900, observation_year)
+        & (valid["references"] >= 0)
+        & (valid["team_size"] > 0)
     ]
+    n_total = len(df)
+    n_used = len(valid)
+    coverage = n_used / n_total if n_total else 0.0
+    if n_used < 20:
+        return {
+            "valid": False,
+            "features": feature_names,
+            "coefficients": [],
+            "irr": [],
+            "n_total": n_total,
+            "n_used": n_used,
+            "coverage": coverage,
+            "warning": "Menos de 20 observações completas.",
+        }
+
+    numeric = valid[["references", "team_size"]].astype(float)
+    std = numeric.std(ddof=0).replace(0, 1.0)
+    standardized = (numeric - numeric.mean()) / std
+    design = pd.DataFrame(
+        {
+            "qtd_referencias": standardized["references"],
+            "tamanho_equipe": standardized["team_size"],
+            "origem_ieee": valid["is_ieee"].astype(float),
+        },
+        index=valid.index,
+    )
+    omitted = [column for column in feature_names if design[column].nunique() < 2]
+    active_features = [column for column in feature_names if column not in omitted]
+    design = design[active_features]
+    if not active_features:
+        return {
+            "valid": False,
+            "features": [],
+            "coefficients": [],
+            "irr": [],
+            "n_total": n_total,
+            "n_used": n_used,
+            "coverage": coverage,
+            "warning": "Os preditores não variam neste recorte.",
+        }
+    design = add_constant(design, has_constant="add")
+    response = valid["citations"].astype(float)
+    exposure = np.log((observation_year - valid["publication_year"] + 1).clip(lower=1))
 
     try:
-        model = PoissonRegressor(alpha=0.0, max_iter=300).fit(X, y)
-        irr = np.exp(model.coef_)
+        poisson = GLM(
+            response,
+            design,
+            family=Poisson(),
+            offset=exposure,
+        ).fit(cov_type="HC3")
+        dispersion = float(poisson.pearson_chi2 / max(poisson.df_resid, 1))
+        if dispersion > 1.5:
+            fitted = GLM(
+                response,
+                design,
+                family=NegativeBinomial(alpha=max(dispersion - 1.0, 0.01)),
+                offset=exposure,
+            ).fit(cov_type="HC3")
+            family = "binomial_negativa"
+        else:
+            fitted = poisson
+            family = "poisson"
+        coefficients = fitted.params.reindex(active_features)
+        intervals = fitted.conf_int().reindex(active_features)
         return {
             "valid": True,
-            "features": feature_names,
-            "coefficients": [float(c) for c in model.coef_],
-            "irr": [float(val) for val in irr],
-            "score": float(model.score(X, y)),
+            "features": active_features,
+            "coefficients": coefficients.astype(float).tolist(),
+            "irr": np.exp(coefficients).astype(float).tolist(),
+            "irr_lower": np.exp(intervals[0]).astype(float).tolist(),
+            "irr_upper": np.exp(intervals[1]).astype(float).tolist(),
+            "p_values": fitted.pvalues.reindex(active_features).astype(float).tolist(),
+            "family": family,
+            "dispersion": dispersion,
+            "score": float(1 - fitted.deviance / fitted.null_deviance)
+            if fitted.null_deviance > 0
+            else float("nan"),
+            "n_total": n_total,
+            "n_used": n_used,
+            "coverage": coverage,
+            "warning": (
+                "Preditores sem variação foram omitidos: " + ", ".join(omitted) if omitted else None
+            ),
         }
-    except Exception:
-        return {"valid": False, "features": feature_names, "coefficients": [], "irr": []}
+    except (ValueError, np.linalg.LinAlgError):
+        return {
+            "valid": False,
+            "features": feature_names,
+            "coefficients": [],
+            "irr": [],
+            "n_total": n_total,
+            "n_used": n_used,
+            "coverage": coverage,
+            "warning": "O modelo não convergiu para este recorte.",
+        }
 
 
 def zipf_law_analysis(df: pd.DataFrame) -> dict:
@@ -1460,6 +1724,13 @@ def callon_strategic_diagram(
       Q3 (Emerging or Marginal Themes): Low Centrality, Low Density
       Q4 (Basic/Transversal Themes): High Centrality, Low Density
     """
+    return {
+        "available": False,
+        "reason": "A Callon diagram requires a keyword equivalence network.",
+        "themes_df": pd.DataFrame(),
+        "median_density": 0.0,
+        "median_centrality": 0.0,
+    }
     if df.empty or "theme_label" not in df.columns or embeddings is None or dois is None:
         return {"themes_df": pd.DataFrame(), "median_density": 0.0, "median_centrality": 0.0}
 
@@ -2206,6 +2477,13 @@ def text_readability_and_stylometrics(df: pd.DataFrame) -> dict:
 
 def citation_longevity_and_decay(df: pd.DataFrame) -> dict:
     """Analyze literature citation decay, half-life, and identify Evergreen classical papers."""
+    return {
+        "available": False,
+        "reason": "Citation longevity requires citations indexed by citing year.",
+        "half_life_years": 0.0,
+        "decay_curve": pd.DataFrame(),
+        "evergreen_df": pd.DataFrame(),
+    }
     if df.empty or "year" not in df.columns:
         return {
             "half_life_years": 0.0,
@@ -2660,6 +2938,13 @@ def price_index_analysis(df: pd.DataFrame) -> dict:
     preceding 5 years. In fields with high technological dynamism (e.g. AI, Storage),
     the Price Index typically exceeds 35-40%, whereas canonical fields stay below 25%.
     """
+    return {
+        "available": False,
+        "reason": "Price's index requires publication years for cited references.",
+        "global_price_index": 0.0,
+        "theme_price_df": pd.DataFrame(),
+        "yearly_price_df": pd.DataFrame(),
+    }
     if df.empty or "year" not in df.columns:
         return {
             "global_price_index": 0.0,
@@ -2744,6 +3029,13 @@ def sleeping_beauties_detection(df: pd.DataFrame, min_age: int = 7) -> dict:
     published at least `min_age` years ago with significant cumulative citations
     whose impact experienced a prolonged dormancy period before an awakening surge.
     """
+    return {
+        "available": False,
+        "reason": "Sleeping Beauty detection requires annual citation histories.",
+        "sleeping_beauties": pd.DataFrame(),
+        "top_trajectories": pd.DataFrame(),
+        "count": 0,
+    }
     if df.empty or "year" not in df.columns:
         return {"sleeping_beauties": pd.DataFrame(), "top_trajectories": pd.DataFrame(), "count": 0}
 
@@ -2834,6 +3126,14 @@ def disruption_index_estimation(df: pd.DataFrame) -> dict:
     consolidates it (CD < 0, developing established approaches).
     Also tests the hypothesis that small teams are more disruptive than large teams.
     """
+    return {
+        "available": False,
+        "reason": "The CD index requires a forward and backward citation graph.",
+        "disruption_df": pd.DataFrame(),
+        "team_size_analysis": pd.DataFrame(),
+        "theme_disruption": pd.DataFrame(),
+        "disruptive_ratio": 0.0,
+    }
     if df.empty:
         return {
             "disruption_df": pd.DataFrame(),
@@ -2922,6 +3222,15 @@ def open_access_impact_analysis(df: pd.DataFrame) -> dict:
     Compares citation accrual between Open Access articles (e.g. Creative Commons licenses)
     and proprietary closed-access publications across time.
     """
+    return {
+        "available": False,
+        "reason": "OACA requires verified access status and confounder controls.",
+        "oa_share_pct": 0.0,
+        "oaca_ratio": 1.0,
+        "yearly_oa": pd.DataFrame(),
+        "comparison_table": pd.DataFrame(),
+        "license_dist": pd.DataFrame(),
+    }
     if df.empty:
         return {
             "oa_share_pct": 0.0,
@@ -3032,11 +3341,20 @@ def open_access_impact_analysis(df: pd.DataFrame) -> dict:
     }
 
 
-def technological_burst_detection(df: pd.DataFrame, top_n: int = 15) -> dict:
-    """Implement Jon Kleinberg's (2002) Burst Detection for technological concepts.
+def technological_burst_detection(
+    df: pd.DataFrame,
+    top_n: int = 15,
+    *,
+    state_multiplier: float = 2.0,
+    transition_penalty: float = 1.0,
+) -> dict:
+    """Detect two-state Kleinberg bursts in yearly concept frequencies.
 
-    Identifies technical terms in titles and abstracts that experienced sudden
-    surges in relative publication frequency (birth and maturity of research frontiers).
+    The observation at each year is the number of matching documents out of
+    all documents published that year. Dynamic programming chooses between a
+    baseline binomial state and a burst state with ``state_multiplier`` times
+    the baseline probability. Moving into the burst state incurs Kleinberg's
+    transition penalty; contiguous burst-state years become intervals.
     """
     if df.empty or "year" not in df.columns:
         return {
@@ -3076,8 +3394,41 @@ def technological_burst_detection(df: pd.DataFrame, top_n: int = 15) -> dict:
         "Soft Open Points (SOP)": r"\b(?:soft open points?|sop|power electronic devices?)\b",
     }
 
+    all_years = np.arange(int(res["pub_year"].min()), int(res["pub_year"].max()) + 1)
+    totals = res["pub_year"].astype(int).value_counts().reindex(all_years, fill_value=0).to_numpy()
     burst_rows = []
-    current_year = 2025
+
+    def _binomial_cost(successes: int, trials: int, probability: float) -> float:
+        if trials <= 0:
+            return 0.0
+        probability = float(np.clip(probability, 1e-9, 1 - 1e-9))
+        return -(successes * np.log(probability) + (trials - successes) * np.log1p(-probability))
+
+    def _states(counts: np.ndarray) -> tuple[np.ndarray, float, float]:
+        total_trials = int(totals.sum())
+        baseline = float(counts.sum() / total_trials) if total_trials else 0.0
+        elevated = min(max(baseline * state_multiplier, baseline + 1e-9), 1 - 1e-9)
+        costs = np.full((len(all_years), 2), np.inf)
+        previous = np.zeros((len(all_years), 2), dtype=int)
+        entry_cost = transition_penalty * np.log(max(total_trials, 2))
+        costs[0, 0] = _binomial_cost(int(counts[0]), int(totals[0]), baseline)
+        costs[0, 1] = entry_cost + _binomial_cost(int(counts[0]), int(totals[0]), elevated)
+        for index in range(1, len(all_years)):
+            for state in (0, 1):
+                candidates = costs[index - 1].copy()
+                if state == 1:
+                    candidates[0] += entry_cost
+                source_state = int(np.argmin(candidates))
+                previous[index, state] = source_state
+                probability = elevated if state else baseline
+                costs[index, state] = candidates[source_state] + _binomial_cost(
+                    int(counts[index]), int(totals[index]), probability
+                )
+        states = np.zeros(len(all_years), dtype=int)
+        states[-1] = int(np.argmin(costs[-1]))
+        for index in range(len(all_years) - 1, 0, -1):
+            states[index - 1] = previous[index, states[index]]
+        return states, baseline, elevated
 
     for label, pattern in frontiers_map.items():
         matched = text_corpus.str.contains(pattern, regex=True)
@@ -3085,46 +3436,43 @@ def technological_burst_detection(df: pd.DataFrame, top_n: int = 15) -> dict:
             continue
 
         matched_years = res.loc[matched, "pub_year"].astype(int)
-        year_counts = matched_years.value_counts().sort_index()
-
-        cum_counts = year_counts.cumsum()
-        total_m = len(matched_years)
-
-        start_yr = int(year_counts.index[0])
-        for yr, cum in cum_counts.items():
-            if cum >= total_m * 0.15:
-                start_yr = int(yr)
-                break
-
-        peak_yr = int(year_counts.idxmax())
-
-        recent_count = (
-            year_counts.loc[year_counts.index >= 2022].sum()
-            if any(year_counts.index >= 2022)
-            else 0
-        )
-        is_active = recent_count >= 5 or peak_yr >= 2021
-        end_yr = current_year if is_active else min(current_year, peak_yr + 3)
-
-        burst_intensity = float(round((total_m / (end_yr - start_yr + 1)) * 1.5, 1))
-
-        burst_rows.append(
-            {
-                "Tecnologia / Conceito": label,
-                "Início do Burst": start_yr,
-                "Ano de Pico": peak_yr,
-                "Fim do Burst": end_yr,
-                "Duração (Anos)": end_yr - start_yr + 1,
-                "Intensidade": burst_intensity,
-                "Status": "Ativo (Contemporâneo)" if is_active else "Estabilizado (Maduro)",
-                "Artigos": total_m,
-            }
-        )
+        counts = matched_years.value_counts().reindex(all_years, fill_value=0).to_numpy()
+        states, baseline, elevated = _states(counts)
+        index = 0
+        while index < len(states):
+            if states[index] == 0:
+                index += 1
+                continue
+            end_index = index
+            while end_index + 1 < len(states) and states[end_index + 1] == 1:
+                end_index += 1
+            segment = slice(index, end_index + 1)
+            interval_counts = counts[segment]
+            interval_totals = totals[segment]
+            strength = sum(
+                _binomial_cost(int(k), int(n), baseline) - _binomial_cost(int(k), int(n), elevated)
+                for k, n in zip(interval_counts, interval_totals, strict=True)
+            )
+            peak_index = index + int(np.argmax(interval_counts))
+            is_active = end_index == len(states) - 1
+            burst_rows.append(
+                {
+                    "Tecnologia / Conceito": label,
+                    "Início do Burst": int(all_years[index]),
+                    "Ano de Pico": int(all_years[peak_index]),
+                    "Fim do Burst": int(all_years[end_index]),
+                    "Duração (Anos)": int(end_index - index + 1),
+                    "Intensidade": round(float(max(strength, 0.0)), 2),
+                    "Status": "Ativo" if is_active else "Encerrado",
+                    "Artigos": int(interval_counts.sum()),
+                }
+            )
+            index = end_index + 1
 
     burst_df = pd.DataFrame(burst_rows)
     if not burst_df.empty:
-        burst_df = burst_df.sort_values(by=["Status", "Intensidade"], ascending=[True, False])
-        active_df = burst_df[burst_df["Status"] == "Ativo (Contemporâneo)"].copy()
+        burst_df = burst_df.sort_values("Intensidade", ascending=False).head(top_n)
+        active_df = burst_df[burst_df["Status"] == "Ativo"].copy()
     else:
         active_df = pd.DataFrame()
 
@@ -3217,10 +3565,10 @@ def detect_structural_breaks(series: pd.Series | np.ndarray) -> dict:
 
 
 def conceptual_atypicality_analysis(df: pd.DataFrame, top_n_keywords: int = 50) -> dict:
-    """Implement Brian Uzzi et al. (Science 2013) conceptual atypicality & novelty analysis.
+    """Describe uncommon keyword combinations and their citation association.
 
-    Examines whether combining historically rare keyword pairs ('atypical combinations')
-    embedded within conventional research foundations predicts exceptional scientific impact (top 5% citations).
+    This independence-based co-occurrence diagnostic is exploratory. It is
+    not the journal-pair randomized null model introduced by Uzzi et al.
     """
     import itertools
     from collections import Counter

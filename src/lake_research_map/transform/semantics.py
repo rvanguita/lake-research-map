@@ -26,7 +26,7 @@ import numpy as np
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
-from lake_research_map.db.gold_models import Chunk, DuplicatePair, Semantics
+from lake_research_map.db.gold_models import Chunk, DuplicateOverride, DuplicatePair, Semantics
 from lake_research_map.transform.embeddings import EMBED_MODEL_NAME
 
 logger = logging.getLogger(__name__)
@@ -60,7 +60,8 @@ OFF_ANCHOR_TEXT = (
     "management, freight transportation, facility location and cold chain distribution networks."
 )
 
-N_THEMES = 8
+MIN_THEMES = 4
+MAX_THEMES = 12
 DUPLICATE_THRESHOLD = 0.95
 THEME_LABEL_TERMS = 3
 RANDOM_SEED = 0
@@ -184,28 +185,47 @@ def theme_labels_from_terms(
 
 
 def discover_themes(
-    matrix: np.ndarray, texts: list[str], k: int = N_THEMES
+    matrix: np.ndarray, texts: list[str], k: int | None = None
 ) -> tuple[np.ndarray, dict[int, str]]:
-    """Cluster `matrix` into `k` themes and name each from its distinctive terms.
+    """Cluster the reduced space and label themes from distinctive terms.
 
-    Returns `(labels, {theme_id: label})`. Pass the `reduced_space` matrix, not
-    the raw embeddings: the map is built from the same space, and that is what
-    keeps a theme's color and its position on the map in agreement.
-
-    `k` is a fixed, human-inspected choice, and the measurements say it has to
-    be: silhouette is flat across k=6..14 (0.035-0.044 on this corpus) because
-    the themes genuinely overlap, and density clustering doesn't rescue it --
-    HDBSCAN over the map finds exactly two groups and calls 13% of the corpus
-    noise, which is the honest shape of the data (one continuum plus the
-    logistics island), not a usable set of themes. k=10 was tried and split off
-    a junk theme ("Problems - Constrained - Population"), so 8 stays; the
-    criterion is whether the labels read as real topics.
+    Without an explicit ``k``, candidates from 4 through 12 are compared by
+    silhouette score. Solutions containing a cluster below 2% of the corpus
+    are rejected, and near-ties prefer the smaller candidate.
     """
     from sklearn.cluster import KMeans
+    from sklearn.metrics import silhouette_score
 
     n_samples = len(matrix)
-    k = max(1, min(k, n_samples))
-    labels = KMeans(n_clusters=k, n_init=10, random_state=RANDOM_SEED).fit_predict(matrix)
+    if n_samples == 0:
+        return np.zeros(0, dtype=int), {}
+    if k is None:
+        candidates = range(MIN_THEMES, min(MAX_THEMES, n_samples - 1) + 1)
+        scored: list[tuple[float, int, np.ndarray]] = []
+        for candidate in candidates:
+            candidate_labels = KMeans(
+                n_clusters=candidate, n_init=10, random_state=RANDOM_SEED
+            ).fit_predict(matrix)
+            counts = np.bincount(candidate_labels)
+            if counts.min(initial=n_samples) / n_samples < 0.02:
+                continue
+            scored.append(
+                (float(silhouette_score(matrix, candidate_labels)), candidate, candidate_labels)
+            )
+        if scored:
+            best_score = max(score for score, _, _ in scored)
+            _, _, labels = min(
+                (item for item in scored if best_score - item[0] <= 0.005),
+                key=lambda item: item[1],
+            )
+        else:
+            fallback_k = max(1, min(MIN_THEMES, n_samples))
+            labels = KMeans(n_clusters=fallback_k, n_init=10, random_state=RANDOM_SEED).fit_predict(
+                matrix
+            )
+    else:
+        k = max(1, min(k, n_samples))
+        labels = KMeans(n_clusters=k, n_init=10, random_state=RANDOM_SEED).fit_predict(matrix)
     return labels, theme_labels_from_terms(texts, labels)
 
 
@@ -253,27 +273,21 @@ def project_pca_2d(matrix: np.ndarray) -> np.ndarray:
 
 
 def project_umap(matrix: np.ndarray, n_neighbors: int = 15, min_dist: float = 0.1) -> np.ndarray:
-    """Project embeddings to 2D via UMAP, preserving both local and global topology.
-
-    Falls back to PCA if `umap-learn` is not available in the environment.
-    """
+    """Project embeddings to 2D via UMAP when the optional dependency exists."""
     n_samples = len(matrix)
     if n_samples < 3:
         return np.zeros((n_samples, 2), dtype="float32")
-    try:
-        import umap
+    import umap
 
-        effective_neighbors = min(n_neighbors, max(2, n_samples - 1))
-        reducer = umap.UMAP(
-            n_components=2,
-            n_neighbors=effective_neighbors,
-            min_dist=min_dist,
-            metric="cosine",
-            random_state=RANDOM_SEED,
-        )
-        return reducer.fit_transform(matrix).astype("float32")
-    except ImportError:
-        return project_pca_2d(matrix)
+    effective_neighbors = min(n_neighbors, max(2, n_samples - 1))
+    reducer = umap.UMAP(
+        n_components=2,
+        n_neighbors=effective_neighbors,
+        min_dist=min_dist,
+        metric="cosine",
+        random_state=RANDOM_SEED,
+    )
+    return reducer.fit_transform(matrix).astype("float32")
 
 
 def compute_thematic_centroids(matrix: np.ndarray, labels: np.ndarray) -> dict[int, np.ndarray]:
@@ -320,11 +334,7 @@ def compute_temporal_drift(
 
 
 def compute_semantic_novelty(matrix: np.ndarray, k: int = 10) -> np.ndarray:
-    """Compute a semantic novelty score for each vector in `matrix`.
-
-    Measures average distance to the k-nearest neighbors in normalized embedding space.
-    Points far from established clusters have higher scores (boundary-spanning/interdisciplinary).
-    """
+    """Compute semantic isolation as mean cosine distance to k nearest neighbors."""
     from sklearn.neighbors import NearestNeighbors
 
     n_samples = len(matrix)
@@ -360,6 +370,14 @@ def near_duplicate_pairs(
         if dois[int(i)] != dois[int(j)]
     ]
     return sorted(pairs, key=lambda p: p[2], reverse=True)
+
+
+def unresolved_duplicate_pairs(
+    pairs: list[tuple[str, str, float]], reviewed_pairs: set[tuple[str, str]]
+) -> list[tuple[str, str, float]]:
+    """Remove reviewed unordered DOI pairs from a detected candidate list."""
+    reviewed = {tuple(sorted(pair)) for pair in reviewed_pairs}
+    return [pair for pair in pairs if tuple(sorted(pair[:2])) not in reviewed]
 
 
 def _embed_anchors(texts: list[str]) -> np.ndarray:
@@ -448,6 +466,11 @@ def build_semantics(
     labels, theme_labels = discover_themes(reduced, texts)
     coords = project_2d(reduced)
     pairs = near_duplicate_pairs(matrix, dois)
+    reviewed_pairs = {
+        (override.doi_a, override.doi_b)
+        for override in gold_session.scalars(select(DuplicateOverride)).all()
+    }
+    unresolved_pairs = unresolved_duplicate_pairs(pairs, reviewed_pairs)
 
     gold_session.execute(delete(Semantics))
     gold_session.execute(delete(DuplicatePair))
@@ -466,13 +489,16 @@ def build_semantics(
             for i, doi in enumerate(dois)
         ]
     )
-    gold_session.add_all([DuplicatePair(doi_a=a, doi_b=b, similarity=s) for a, b, s in pairs])
-    gold_session.commit()
+    gold_session.add_all(
+        [DuplicatePair(doi_a=a, doi_b=b, similarity=s) for a, b, s in unresolved_pairs]
+    )
+    gold_session.flush()
 
     return {
         "articles": len(dois),
         "themes": len(theme_labels),
-        "duplicate_pairs": len(pairs),
+        "duplicate_pairs": len(unresolved_pairs),
+        "duplicate_pairs_reviewed": len(pairs) - len(unresolved_pairs),
         "embedding_coverage": round(coverage, 4),
         "median_relevance": round(float(np.median(scores)), 4),
         # The screening signal: positive means closer to the review's topic

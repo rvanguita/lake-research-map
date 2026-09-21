@@ -53,7 +53,7 @@ MIN_KEYWORD_OCCURRENCES = 15
 def render() -> None:
     page_header(
         "🏷️",
-        "Tópicos e Periódicos",
+        "Tópicos e estrutura científica",
         "Onde o corpus publica, sobre o que, e como os temas evoluíram ao longo do tempo.",
     )
 
@@ -129,7 +129,7 @@ def render() -> None:
                 "🏷️ Top 20 Palavras-Chave",
                 "📊 Estrutura do Vocabulário (Zipf & Métricas)",
                 "🧬 Vocabulário Dinâmico (c-TF-IDF)",
-                "🧪 Atipicidade Conceitual (Uzzi et al.)",
+                "Combinações incomuns",
             ]
         )
         with sub_top:
@@ -978,12 +978,11 @@ def _semantic_venues_analysis(articles_df: pd.DataFrame) -> None:
 
 
 def _conceptual_atypicality_tab(articles_df: pd.DataFrame) -> None:
-    st.subheader("🧪 Análise de Atipicidade Conceitual (Uzzi et al., Science 2013)")
+    st.subheader("Combinações incomuns de palavras-chave")
     st.caption(
-        "A teoria de Brian Uzzi et al. demonstra que a ciência de mais alto impacto não decorre de ideias "
-        "totalmente exóticas nem puramente convencionais, mas da combinação de um alicerce altamente convencional "
-        "(mediana de Z > 0) com inserções de novidade conceitual atípica (Z mínimo < -0.5). Abaixo avalia-se se "
-        "papers com essa assinatura atípica apresentam taxa desproporcional de artigos hiper-citados (top 5%)."
+        "Diagnóstico exploratório de coocorrências em relação à independência marginal das palavras-chave. "
+        "Ele descreve combinações raras neste corpus e sua associação com citações; não reproduz o modelo "
+        "nulo por pares de periódicos de Uzzi et al."
     )
     res = conceptual_atypicality_analysis(articles_df)
     if not res.get("valid"):
@@ -993,7 +992,7 @@ def _conceptual_atypicality_tab(articles_df: pd.DataFrame) -> None:
     metric_row(
         [
             (
-                "🚀 Taxa de Sucesso (Alta Atipicidade)",
+                "Taxa top 5% no grupo incomum",
                 f"{res['hit_rate_high_atypical']:.1f}%",
                 f"Baseline: {res['hit_rate_baseline']:.1f}%",
             ),
@@ -1003,9 +1002,9 @@ def _conceptual_atypicality_tab(articles_df: pd.DataFrame) -> None:
                 "Artigos no percentil 95",
             ),
             (
-                "🧬 Assinatura Uzzi et al.",
-                "Equilíbrio Conceitual",
-                "Convencional + Atípico",
+                "Critério descritivo",
+                "Coocorrência",
+                "Esperado por independência",
             ),
             (
                 "📊 Pares Raros Mapeados",
