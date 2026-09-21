@@ -8,12 +8,16 @@ from lake_research_map.dashboard.search import (
 )
 
 
+def _vector(*values: float) -> bytes:
+    return np.array(values, dtype=np.float32).tobytes()
+
+
 def _chunks_df() -> pd.DataFrame:
     return pd.DataFrame(
         [
-            {"doi": "10.1/a", "text": "close match", "embedding": [1.0, 0.0, 0.0]},
-            {"doi": "10.1/b", "text": "far match", "embedding": [0.0, 1.0, 0.0]},
-            {"doi": "10.1/c", "text": "no embedding yet", "embedding": None},
+            {"doi": "10.1/a", "text": "close match", "embedding_bin": _vector(1.0, 0.0, 0.0)},
+            {"doi": "10.1/b", "text": "far match", "embedding_bin": _vector(0.0, 1.0, 0.0)},
+            {"doi": "10.1/c", "text": "no embedding yet", "embedding_bin": None},
         ]
     )
 
@@ -42,13 +46,25 @@ def test_rank_by_similarity_respects_top_k():
 
 
 def test_rank_by_similarity_no_embedded_rows_returns_empty():
-    df = pd.DataFrame([{"doi": "10.1/c", "text": "no embedding yet", "embedding": None}])
+    df = pd.DataFrame([{"doi": "10.1/c", "text": "no embedding yet", "embedding_bin": None}])
     result = _rank_by_similarity(np.array([1.0, 0.0, 0.0]), df, top_k=10)
     assert result.empty
 
 
 def test_rank_by_similarity_no_embedding_column_returns_empty():
     df = pd.DataFrame([{"doi": "10.1/c", "text": "no embedding column"}])
+    result = _rank_by_similarity(np.array([1.0, 0.0, 0.0]), df, top_k=10)
+    assert result.empty
+
+
+def test_rank_by_similarity_ignores_the_retired_json_mirror():
+    """Binary is the only canonical vector representation.
+
+    The JSON column is no longer written, so a frame carrying only JSON is a
+    frame with no usable vectors -- silently parsing it would hide a chunk that
+    never passed `embed_contract`.
+    """
+    df = pd.DataFrame([{"doi": "10.1/a", "text": "json only", "embedding": [1.0, 0.0, 0.0]}])
     result = _rank_by_similarity(np.array([1.0, 0.0, 0.0]), df, top_k=10)
     assert result.empty
 

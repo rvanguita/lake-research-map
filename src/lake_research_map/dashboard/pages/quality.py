@@ -9,7 +9,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from lake_research_map.dashboard import actions, loaders
+from lake_research_map.dashboard import loaders
 from lake_research_map.dashboard.analytics import metadata_coverage_matrix, pdf_selection_bias
 from lake_research_map.dashboard.charts import topn_hbar
 from lake_research_map.dashboard.components import (
@@ -50,15 +50,15 @@ def render() -> None:
     )
     hero_banner(
         "RAG diagnosis",
-        f"O corpus oferece <b>{pdf_share:.0%}</b> de cobertura de texto completo e "
+        f"The corpus offers <b>{pdf_share:.0%}</b> full-text coverage and "
         f"<b>{len(chunks_df):,}</b> chunks ready for retrieval.",
     )
 
     tab_metadata, tab_content, tab_anomalies, tab_search = st.tabs(
         [
-            "Metadados e cobertura",
-            "Texto, chunks e embeddings",
-            "Auditoria e anomalias",
+            "Metadata and coverage",
+            "Text, chunks and embeddings",
+            "Audit and anomalies",
             "Hybrid search",
         ],
         on_change="rerun",
@@ -75,14 +75,14 @@ def render() -> None:
             _pdf_selection_bias(articles_df)
             if _chunks_intro(chunks_df):
                 content_view = st.segmented_control(
-                    "Detalhamento dos chunks",
-                    ["Tipos", "Tamanho", "By article", "Embeddings"],
-                    default="Tipos",
+                    "Chunk breakdown",
+                    ["Types", "Length", "By article", "Embeddings"],
+                    default="Types",
                     key="quality_chunk_view",
                 )
-                if content_view == "Tipos":
+                if content_view == "Types":
                     _chunk_type_pie(chunks_df)
-                elif content_view == "Tamanho":
+                elif content_view == "Length":
                     _chunk_length_histogram(chunks_df)
                 elif content_view == "By article":
                     _chunks_per_article(chunks_df)
@@ -108,7 +108,7 @@ def _ieee_extras(articles_df: pd.DataFrame) -> None:
 
     if "countries" not in articles_df.columns:
         st.info(
-            "IEEE enrichment columns do not exist in this layer yet — round"
+            "IEEE enrichment columns do not exist in this layer yet — round "
             "`uv run lake-research-map --stage bronze` (and silver/gold) to populate them."
         )
         return
@@ -127,7 +127,7 @@ def _ieee_extras(articles_df: pd.DataFrame) -> None:
         "Partial coverage by nature of the source",
         f"These fields come from the IEEE Xplore CSV export and are not supplied by ScienceDirect. "
         f"The denominator is <b>{n_ieee:,} IEEE articles</b> — about "
-        f"{n_ieee / max(len(articles_df), 1):.0%} do corpus filtrado. "
+        f"{n_ieee / max(len(articles_df), 1):.0%} of the filtered corpus. "
         "All the percentages below use this denominator, not the entire corpus.",
     )
 
@@ -148,7 +148,7 @@ def _ieee_extras(articles_df: pd.DataFrame) -> None:
     )
 
     sub_pais, sub_mes, sub_tipo = st.tabs(
-        ["🌍 Countries", "🗓️ Granularidade Mensal", "& License type"]
+        ["🌍 Countries", "🗓️ Monthly granularity", "& License type"]
     )
 
     with sub_pais:
@@ -166,7 +166,7 @@ def _ieee_extras(articles_df: pd.DataFrame) -> None:
             fig.update_traces(hovertemplate="<b>%{y}</b><br>%{x:,} articles<extra></extra>")
             render_chart(
                 fig,
-                caption="An article counts once a country present among its affiliations, then"
+                caption="An article counts once a country present among its affiliations, then "
                 "International collaborations appear in more than one country and the sum of bars"
                 f"exceeds the {n_ieee:,} articles. It is extracted from the final segment of each affiliation "
                 "(`…, city, country`) and also handles the U.S. format (`…, UT, USA`).",
@@ -192,8 +192,8 @@ def _ieee_extras(articles_df: pd.DataFrame) -> None:
             )
             render_chart(
                 fig,
-                caption="`Online Date` is the unique** corpus field with finer resolution than the"
-                "year — in all the rest of the dashboard only the year survives."
+                caption="`Online Date` is the unique** corpus field with finer resolution than the "
+                "year — in all the rest of the dashboard only the year survives. "
                 "and the gap between online publication and formal edition.",
             )
 
@@ -210,7 +210,7 @@ def _ieee_extras(articles_df: pd.DataFrame) -> None:
                 )
                 render_chart(
                     fig,
-                    caption="It reveals that the IEEE Xplore also hosts periodicals from others"
+                    caption="It reveals that the IEEE Xplore also hosts periodicals from others "
                     "publishers (CSEE, SGEPRI), as well as magazines and book chapters.",
                 )
             else:
@@ -256,7 +256,7 @@ def _embedding_readiness(chunks_df: pd.DataFrame) -> None:
                 "borderwidth": 0,
             },
             title={
-                "text": "% de chunks com embedding gerado",
+                "text": "% of chunks with a vector",
                 "font": {"color": t["chart_text"], "size": 14},
             },
         )
@@ -264,13 +264,13 @@ def _embedding_readiness(chunks_df: pd.DataFrame) -> None:
     if with_embedding and "embed_model" in chunks_df.columns:
         model_used = chunks_df["embed_model"].dropna().mode()
         model_caption = (
-            f"Gerados com `{model_used.iat[0]}` — a etapa `embed` do pipeline "
-            "(`transform/embeddings.py`) runs 100% local via `fastembed`, without API key."
+            f"Generated with `{model_used.iat[0]}` — the pipeline's `embed` stage runs "
+            "fully locally through `fastembed`, with no API key."
         )
     else:
         model_caption = (
-            "The `embedding` column exists in the scheme (`gold_models.Chunk`) but no chunk was processed"
-            "still — this is the main blockage to use the corpus as the basis of a real RAG."
+            "The vector column exists on `gold_models.DatasetChunk` but no chunk has been embedded "
+            "yet — this is the blocker for using the corpus as a RAG source."
         )
     render_chart(
         fig,
@@ -291,38 +291,27 @@ def _embedding_readiness(chunks_df: pd.DataFrame) -> None:
             .reset_index()
         )
         by_type["embedded"] = by_type["embedded"].astype(int)
-        by_type["pendente"] = by_type["total"] - by_type["embedded"]
-        by_type.columns = ["Tipo", "Total", "Com embedding", "Pendente"]
+        by_type["pending"] = by_type["total"] - by_type["embedded"]
+        by_type.columns = ["Type", "Total", "Embedded", "Pending"]
         st.dataframe(by_type, hide_index=True, width="stretch")
 
     if pending > 0:
-        if st.button(
-            f"🚀 Gerar embeddings agora ({pending:,} chunks pendentes)", key="generate_embeddings"
-        ):
-            _run_embedding_generation(pending)
-
-
-def _run_embedding_generation(pending: int) -> None:
-    progress_bar = st.progress(0.0, text=f"Gerando embeddings (0/{pending})...")
-
-    def on_progress(done: int, total_pending: int) -> None:
-        progress_bar.progress(
-            min(done / total_pending, 1.0),
-            text=f"Gerando embeddings ({done:,}/{total_pending:,})...",
+        # Deliberately not a button. This page used to embed synchronously into
+        # the live `lit_chunks` table, but publication rebuilds that table from
+        # the versioned candidate, so those vectors were discarded at the next
+        # publish and never passed `embed_contract`. Embedding belongs to the
+        # audited pipeline run like every other stage (ADR-06).
+        st.info(
+            f"{pending:,} chunks are waiting for a vector. Run the `embed` stage through the "
+            "pipeline \u2014 `uv run lake-research-map --stage embed`, or the Airflow trigger on "
+            "the Pipeline and provenance page. Embedding from here would write to the live table "
+            "that the next publication rebuilds, so the work would be lost and would never pass "
+            "the embedding contract."
         )
-
-    with st.spinner(
-        "Carrying the model of embeddings (first execution low weights) was used to evaluate the performance of the system."
-    ):
-        stats = actions.run_embedding_generation(on_progress=on_progress)
-
-    st.success(f"{stats['embedded']:,} chunks embedded. Refreshing the page...")
-    st.cache_data.clear()
-    st.rerun()
 
 
 def _fulltext_coverage(articles_df: pd.DataFrame, chunks_df: pd.DataFrame) -> None:
-    st.subheader("📄 Cobertura de texto completo")
+    st.subheader("📄 Full-text coverage")
     if not require_columns(articles_df, ["has_pdf"]):
         return
 
@@ -343,7 +332,7 @@ def _fulltext_coverage(articles_df: pd.DataFrame, chunks_df: pd.DataFrame) -> No
 
     funnel_df = pd.DataFrame(
         {
-            "stage": ["All articles", "Com PDF vinculado", "Com chunks de texto completo"],
+            "stage": ["All articles", "With a linked PDF", "With full-text chunks"],
             "count": [n_total, n_with_pdf, n_with_fulltext_chunks],
         }
     )
@@ -353,8 +342,8 @@ def _fulltext_coverage(articles_df: pd.DataFrame, chunks_df: pd.DataFrame) -> No
             funnel_df,
             x="count",
             y="stage",
-            title="Funil de disponibilidade de texto completo",
-            labels={"count": "Number of articles", "stage": "Etapa"},
+            title="Full-text availability funnel",
+            labels={"count": "Number of articles", "stage": "Stage"},
         )
         fig.update_traces(
             marker_color=[CATEGORICAL_PALETTE[0], CATEGORICAL_PALETTE[3], CATEGORICAL_PALETTE[2]]
@@ -383,8 +372,8 @@ def _fulltext_coverage(articles_df: pd.DataFrame, chunks_df: pd.DataFrame) -> No
         )
     st.caption(
         f"Only {n_with_pdf / n_total:.1%} of articles have a PDF — corpus PDFs come exclusively from "
-        "IEEE bulk-downloads, so Elsevier has 0% full text coverage."
-        "(`gold_articles.py`) silently swallows faults, so a PDF that failed is indistinguishable from a"
+        "IEEE bulk-downloads, so Elsevier has 0% full text coverage. "
+        "(`gold_articles.py`) silently swallows faults, so a PDF that failed is indistinguishable from a "
         "PDF without extractable text — the card '"
     )
 
@@ -400,10 +389,10 @@ def _pdf_selection_bias(articles_df: pd.DataFrame) -> None:
 
     labels = {
         "year": "Year",
-        "citation_count": "Quotations",
+        "citation_count": "Citations",
         "reference_count": "References",
-        "team_size": "Tamanho da equipe",
-        "abstract_chars": "Tamanho do resumo",
+        "team_size": "Team size",
+        "abstract_chars": "Abstract length",
         "keyword_count": "Number of keywords",
     }
     bias = bias.copy()
@@ -429,7 +418,7 @@ def _pdf_selection_bias(articles_df: pd.DataFrame) -> None:
             },
             customdata=finite[["n_pdf", "n_no_pdf", "transform"]],
             hovertemplate=(
-                "<b>%{y}</b><br>SMD: %{x:.2f}<br>Com PDF: %{customdata[0]}"
+                "<b>%{y}</b><br>SMD: %{x:.2f}<br>With PDF: %{customdata[0]} "
                 "<br>No PDF: %{customdata[1]}<br>Transformation: %{customdata[2]}<extra></extra>"
             ),
         )
@@ -444,8 +433,8 @@ def _pdf_selection_bias(articles_df: pd.DataFrame) -> None:
     )
     render_chart(
         fig,
-        caption="Positive values indicate a higher mean in the subset with PDF."
-        "The comparison is descriptive: PDF availability depends"
+        caption="Positive values indicate a higher mean in the subset with PDF. "
+        "The comparison is descriptive: PDF availability depends "
         "of the source and does not support causal interpretation.",
     )
 
@@ -482,7 +471,7 @@ def _metadata_coverage(articles_df: pd.DataFrame) -> None:
         "authors": "Authors",
         "abstract": "Resumo",
         "keywords": "Keywords",
-        "citation_count": "Quotations",
+        "citation_count": "Citations",
         "reference_count": "References",
         "has_pdf": "PDF available",
     }
@@ -501,8 +490,8 @@ def _metadata_coverage(articles_df: pd.DataFrame) -> None:
     fig.update_layout(xaxis_title="Source", yaxis_title="Campo")
     render_chart(
         fig,
-        caption="Each cell uses only the articles of the indicated source as a denominator."
-        "Availability, not simple existence of the column."
+        caption="Each cell uses only the articles of the indicated source as a denominator. "
+        "Availability, not simple existence of the column. "
         "separately below to avoid classifying structural absence of Elsevier as a failure.",
     )
     exact = coverage[["Campo", "source", "n_total", "n_present", "coverage"]].rename(
@@ -526,7 +515,7 @@ def _chunks_intro(chunks_df: pd.DataFrame) -> bool:
     st.subheader("🧩 Fragmentos (chunks) preparados para embedding")
     if chunks_df.empty:
         st.info(
-            "`lit_gold.chunks` has not yet been populated — run the complete pipeline"
+            "`lit_gold.chunks` has not yet been populated — run the complete pipeline "
             "(sidebar button or `uv run lake-research-map --stage all`)."
         )
         return False
@@ -547,8 +536,8 @@ def _chunks_intro(chunks_df: pd.DataFrame) -> bool:
 
     metric_row(
         [
-            ("🧩 Total de fragmentos (chunks)", f"{len(chunks_df):,}", None),
-            ("📝 Chunks de resumo", f"{n_abstract:,}", None),
+            ("🧩 Total chunks", f"{len(chunks_df):,}", None),
+            ("📝 Abstract chunks", f"{n_abstract:,}", None),
             ("📄 Full-text chunks", f"{n_fulltext:,}", f"{n_ft_dois} articles with PDFs"),
             (
                 "📄 DOIs distintos com fragmentos",
@@ -561,9 +550,9 @@ def _chunks_intro(chunks_df: pd.DataFrame) -> bool:
     if n_fulltext > 0 and n_dois > 0:
         st.caption(
             f"⚠️ **Coverage bias**: full text covers {n_ft_dois} of {n_dois} articles "
-            f"({100 * n_ft_dois / n_dois:.1f}%), mas gera {n_fulltext:,} de {len(chunks_df):,} "
+            f"({100 * n_ft_dois / n_dois:.1f}%), but produces {n_fulltext:,} of {len(chunks_df):,} "
             f"chunks ({100 * n_fulltext / len(chunks_df):.1f}%). Per-chunk statistics reflect "
-            f"desproporcionalmente esses {100 * n_ft_dois / n_dois:.1f}% do corpus."
+            f"disproportionately those {100 * n_ft_dois / n_dois:.1f}% of the corpus."
         )
     return True
 
@@ -581,7 +570,7 @@ def _chunk_type_pie(chunks_df: pd.DataFrame) -> None:
     render_chart(
         fig,
         height=CHART_HEIGHT,
-        caption="`abstract` = 1 fragment per article (title + keywords + abstract); `fulltext` ="
+        caption="`abstract` = 1 fragment per article (title + keywords + abstract); `fulltext` = "
         "fragments extracted directly from the PDFs of the available articles.",
     )
 
@@ -606,12 +595,12 @@ def _chunk_length_histogram(chunks_df: pd.DataFrame) -> None:
         opacity=0.75,
         nbins=40,
         category_orders={"chunk_type": type_order} if type_order else None,
-        title="Tamanho dos chunks (caracteres) por tipo",
+        title="Chunk length (characters) by type",
         labels={"char_len": "Comprimento em caracteres", "chunk_type": "Tipo"},
     )
-    fig.update_traces(hovertemplate="Tamanho: ~%{x} caracteres<br>Chunks: %{y:,}<extra></extra>")
+    fig.update_traces(hovertemplate="Length: ~%{x} characters<br>Chunks: %{y:,}<extra></extra>")
     fig.update_layout(
-        xaxis_title=f"Caracteres por fragmento (teto de chunking: {CHUNK_MAX_CHARS:,})",
+        xaxis_title=f"Characters per chunk (chunking cap: {CHUNK_MAX_CHARS:,})",
         yaxis_title="Number of chunks",
     )
     render_chart(
@@ -651,7 +640,7 @@ def _chunks_per_article(chunks_df: pd.DataFrame) -> None:
     render_chart(
         fig,
         height=CHART_HEIGHT,
-        caption="Dimensions the cost of generating embeddings: articles with long PDFs generate more blanks"
+        caption="Dimensions the cost of generating embeddings: articles with long PDFs generate more blanks "
         "de texto completo.",
     )
 
@@ -689,16 +678,16 @@ def _search_demo(chunks_df: pd.DataFrame) -> None:
 
     if has_embeddings:
         st.caption(
-            "Search for real vector similarity: the query is embedded with the same model"
-            "(`BAAI/bge-small-en-v1.5` via `fastembed`) used for chunks, and the results are"
-            "ordenados por similaridade de cosseno (`dashboard/search.py`)."
+            "Search for real vector similarity: the query is embedded with the same model "
+            "(`BAAI/bge-small-en-v1.5` via `fastembed`) used for chunks, and the results are "
+            "ranked by cosine similarity (`dashboard/search.py`)."
         )
     else:
         st.caption(
-            "This simulates a keyword retrieval, *not** a real semantic search — the column"
-            "`embedding` has not yet been completed (see the indicator above; turn the `embed` step of the"
-            "pipeline)."
-            "contexto de resposta."
+            "This simulates a keyword retrieval, *not** a real semantic search — the column "
+            "`embedding` has not yet been completed (see the indicator above; turn the `embed` step of the "
+            "pipeline). "
+            "answer context."
         )
     if chunks_df.empty or "doi" not in chunks_df.columns:
         st.info("No chunk available in this layer/filter.")
@@ -763,15 +752,15 @@ def _search_demo(chunks_df: pd.DataFrame) -> None:
         _render_result_card(row, term_pattern, score)
 
     if not has_embeddings and n_total_matches > SEARCH_DEMO_MAX_RESULTS:
-        st.caption(f"Mostrando {SEARCH_DEMO_MAX_RESULTS} de {n_total_matches:,} resultados.")
+        st.caption(f"Showing {SEARCH_DEMO_MAX_RESULTS} of {n_total_matches:,} results.")
 
 
 def _bibliometric_anomalies_audit(articles_df: pd.DataFrame) -> None:
     st.subheader("Isolation Forest (Isolation Forest)")
     st.caption(
-        "The Isolation Forest algorithm isolates atypical observations through random partitioning of space"
-        "multidimensional attributes (year of publication, citation count, references, co-authors and authors)"
-        "Thematic relevance).Anomalous articles require fewer divisions to be isolated, revealing"
+        "The Isolation Forest algorithm isolates atypical observations through random partitioning of space "
+        "multidimensional attributes (year of publication, citation count, references, co-authors and authors) "
+        "Thematic relevance).Anomalous articles require fewer divisions to be isolated, revealing "
         "Recent hyper-cited publications, unusual mega-teams, metadata deviations or indexing noise."
     )
 
@@ -791,7 +780,7 @@ def _bibliometric_anomalies_audit(articles_df: pd.DataFrame) -> None:
             (
                 "🚩 Detected Atypical Articles",
                 f"{n_anomalies}",
-                f"{n_anomalies / max(len(anomalies_df), 1):.1%} do acervo",
+                f"{n_anomalies / max(len(anomalies_df), 1):.1%} of the collection",
             ),
             ("🎯 Contamination", "3.0%", "Statistical threshold"),
             ("🔍 Algoritmo", "Isolation Forest", "100 estimators/trees"),
@@ -807,7 +796,7 @@ def _bibliometric_anomalies_audit(articles_df: pd.DataFrame) -> None:
         hover_data=["title", "venue", "anomaly_reason", "anomaly_score"],
         labels={
             "year": "Year of Publication",
-            "citation_count": "Quotations",
+            "citation_count": "Citations",
             "is_anomaly": "Atypical?",
         },
         title="Citations × Year Dispersion with Bibliometric Anomalies Marking",
@@ -835,4 +824,4 @@ def _bibliometric_anomalies_audit(articles_df: pd.DataFrame) -> None:
         "doi",
     ]
     display_cols = [c for c in cols if c in outliers.columns]
-    article_table(outliers, display_cols, download_key="artigos_anomalos_auditoria")
+    article_table(outliers, display_cols, download_key="anomalous_articles_audit")

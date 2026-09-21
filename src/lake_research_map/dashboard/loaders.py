@@ -120,7 +120,7 @@ def chunks() -> pd.DataFrame:
 
 @st.cache_data(ttl=60)
 def chunk_search_data() -> pd.DataFrame:
-    """Full chunk rows (`text` + `embedding`) for the on-demand search box in
+    """Binary-first chunk rows for the on-demand search box in
     `pages/quality.py` -- callers should only invoke this once a query is
     actually submitted, not on a plain page render (see `data.load_chunk_search_data`).
     """
@@ -370,7 +370,7 @@ def volume_forecast(source: str | None):
 def keyword_forecasts(min_occurrences: int = 20):
     """Fit and cache temporal models for sufficiently frequent keywords."""
     from lake_research_map.dashboard.analytics import explode_keywords
-    from lake_research_map.dashboard.forecasting import fit_and_forecast
+    from lake_research_map.dashboard.forecasting import TRAIN_END_YEAR, fit_and_forecast
 
     _, articles_df = articles()
     exploded = explode_keywords(articles_df)
@@ -394,15 +394,18 @@ def keyword_forecasts(min_occurrences: int = 20):
             continue
         results[keyword] = result
         final_year = result.forecast_years[-1]
-        observed = float(series.get(2025, series.tail(1).iloc[0] if len(series) else 0))
+        # The comparison baseline is the last COMPLETE year, which moves with
+        # TRAIN_END_YEAR. Hard-coding it meant the "observed" column silently
+        # became a partial year as soon as the calendar rolled over.
+        observed = float(series.get(TRAIN_END_YEAR, series.tail(1).iloc[0] if len(series) else 0))
         forecast = float(result.forecast_values[-1])
         rows.append(
             {
                 "keyword": keyword,
-                "2025 (real)": observed,
-                f"{final_year} (previsto)": forecast,
+                f"{TRAIN_END_YEAR} (actual)": observed,
+                f"{final_year} (forecast)": forecast,
                 "variation": forecast - observed,
-                "modelo": result.chosen_model,
+                "model": result.chosen_model,
             }
         )
     return "ok", rows, results, final_year
@@ -432,7 +435,7 @@ def require_articles() -> pd.DataFrame:
     if all_articles.empty:
         st.warning(
             "No data found in the `lit_bronze`, `lit_silver`, or `lit_gold` layers yet.\n\n"
-            "Perform the pipeline (handbar or sidebar buttons)"
+            "Perform the pipeline (handbar or sidebar buttons) "
             "`uv run lake-research-map --stage all`) and reload this page."
         )
         st.stop()
@@ -446,7 +449,7 @@ def require_articles() -> pd.DataFrame:
     _, df = filtered_articles()
     if df.empty:
         st.warning(
-            "No article corresponds to global filters."
+            "No article corresponds to global filters. "
             "Expand the year, the source or the journal in the sidebar."
         )
         st.stop()
@@ -508,13 +511,54 @@ def abstract_embeddings() -> tuple[list[str], np.ndarray] | None:
     dois = []
     vecs = []
     for _, r in df.iterrows():
-        vec = _parse_embedding(r.get("embedding_bin"), r.get("embedding"))
+        vec = _parse_embedding(r.get("embedding_bin"))
         if vec is not None:
             dois.append(r["doi"])
             vecs.append(vec)
     if not vecs:
         return None
     return dois, np.stack(vecs)
+
+
+@st.cache_data(ttl=300)
+def semantic_stability(points: tuple[tuple[str, str, float, float], ...]) -> dict | None:
+    """Bootstrap-ARI for the theme solution and trustworthiness for the shown map.
+
+    Cached here, not in the page, for two reasons. It refits KMeans 30 times,
+    which is seconds of work that must not repeat on every widget interaction;
+    and the key is `(doi, theme, x, y)` tuples rather than the embedding matrix,
+    so Streamlit hashes a few thousand small values instead of a 3115x384 array.
+
+    Clustering stability is measured in the SAME PCA space the themes were built
+    in (`transform/semantics.reduced_space`), not in the raw 384-dimensional
+    space: measuring the stability of a geometry nothing was clustered in would
+    answer a different question, and it is an order of magnitude cheaper.
+    Trustworthiness is measured against the coordinates actually on screen,
+    whichever projection the user selected, for the same reason.
+    """
+    import numpy as np
+
+    from lake_research_map.dashboard.analytics import semantic_stability_diagnostics
+    from lake_research_map.transform.semantics import reduced_space
+
+    if not points:
+        return None
+    embeddings = abstract_embeddings()
+    if embeddings is None:
+        return None
+    dois, matrix = embeddings
+
+    by_doi = {doi: (theme, x, y) for doi, theme, x, y in points}
+    rows = [index for index, doi in enumerate(dois) if doi in by_doi]
+    if len(rows) < 10:
+        return None
+    labels = np.array([by_doi[dois[index]][0] for index in rows])
+    projection = np.array([by_doi[dois[index]][1:] for index in rows], dtype=float)
+
+    reduced = reduced_space(matrix[rows])
+    if reduced.ndim != 2 or reduced.shape[1] < 2:
+        return None
+    return semantic_stability_diagnostics(reduced, labels, projection)
 
 
 @st.cache_data(ttl=300)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import math
 from dataclasses import dataclass, field
 from typing import Any
@@ -28,7 +29,7 @@ from lake_research_map.db.raw_models import (
 from lake_research_map.db.silver_models import Article as SilverArticle
 from lake_research_map.db.silver_models import RejectedArticle
 from lake_research_map.transform.bronze_articles import normalize_doi
-from lake_research_map.transform.embeddings import EMBED_MODEL_NAME
+from lake_research_map.transform.embeddings import EMBED_MODEL_NAME, EMBED_MODEL_REVISION
 from lake_research_map.transform.publication_categories import PUBLICATION_CATEGORIES
 
 EMBED_DIMENSION = 384
@@ -259,13 +260,25 @@ def embed_contract(session: Session, version_id: str) -> list[CheckResult]:
     ).all()
     missing = []
     incompatible = []
+    stale = []
     non_finite = []
     for row in chunks:
         if row.embedding_bin is None:
             missing.append(row.id)
             continue
-        if len(row.embedding_bin) != EMBED_DIMENSION * 4 or row.embed_model != EMBED_MODEL_NAME:
+        if (
+            len(row.embedding_bin) != EMBED_DIMENSION * 4
+            or row.embed_model != EMBED_MODEL_NAME
+            or row.embed_revision != EMBED_MODEL_REVISION
+            or row.embedding_dim != EMBED_DIMENSION
+            or row.embedding_dtype != "float32"
+            or row.embedding_normalized is not True
+        ):
             incompatible.append(row.id)
+            continue
+        expected_hash = hashlib.sha256(row.text.encode("utf-8")).hexdigest()
+        if row.text_sha256 != expected_hash:
+            stale.append(row.id)
             continue
         if not np.isfinite(np.frombuffer(row.embedding_bin, dtype=np.float32)).all():
             non_finite.append(row.id)
@@ -286,6 +299,13 @@ def embed_contract(session: Session, version_id: str) -> list[CheckResult]:
             len(non_finite),
             0,
             details={"chunk_ids": non_finite[:20]},
+        ),
+        _result(
+            "embed.text_hash",
+            not stale,
+            len(stale),
+            0,
+            details={"chunk_ids": stale[:20]},
         ),
     ]
 

@@ -83,6 +83,12 @@ class Chunk(Base):
     embedding: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # filled by --stage embed
     embed_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
     embedding_bin: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    text_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    embed_revision: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    embedding_dim: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    embedding_dtype: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    embedding_normalized: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    embedded_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
 
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=naive_utc_now)
 
@@ -208,6 +214,7 @@ class PipelineExecution(Base):
     dataset_version_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
     started_at: Mapped[dt.datetime] = mapped_column(DateTime, default=naive_utc_now)
+    heartbeat_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
     finished_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
@@ -300,6 +307,12 @@ class DatasetChunk(Base):
     embedding: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     embed_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
     embedding_bin: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    text_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    embed_revision: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    embedding_dim: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    embedding_dtype: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    embedding_normalized: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    embedded_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=naive_utc_now)
 
 
@@ -335,6 +348,116 @@ class DatasetDuplicatePair(Base):
     doi_b: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     similarity: Mapped[float] = mapped_column(Float, nullable=False)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=naive_utc_now)
+
+
+class SemanticRun(Base):
+    """Immutable manifest for one semantic derivation of a dataset version."""
+
+    __tablename__ = "lit_semantic_runs"
+
+    run_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    dataset_version_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    embed_model: Mapped[str] = mapped_column(String(128), nullable=False)
+    embed_revision: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    embedding_dim: Mapped[int] = mapped_column(Integer, nullable=False)
+    article_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    parameters: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=naive_utc_now)
+
+
+class ReviewProtocol(Base):
+    """Versioned instructions shared by human-evidence workflows."""
+
+    __tablename__ = "lit_review_protocols"
+    __table_args__ = (
+        UniqueConstraint("workflow", "protocol_version", name="uq_review_protocol_version"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    workflow: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    protocol_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    instructions_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    instructions: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=naive_utc_now)
+
+
+class ReviewAssignment(Base):
+    """Deterministic reviewer assignment for an immutable dataset version."""
+
+    __tablename__ = "lit_review_assignments"
+    __table_args__ = (
+        UniqueConstraint(
+            "workflow",
+            "dataset_version_id",
+            "subject_id",
+            "reviewer_id",
+            name="uq_review_assignment",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    workflow: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    dataset_version_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    protocol_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    subject_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    reviewer_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    stratum: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=naive_utc_now)
+
+
+class ReviewLabel(Base):
+    """Append-only raw human label; adjudication never overwrites this row."""
+
+    __tablename__ = "lit_review_labels"
+    __table_args__ = (
+        UniqueConstraint("assignment_id", "label_revision", name="uq_review_label_revision"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    assignment_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    label_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    label: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
+    payload_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    imported_at: Mapped[dt.datetime] = mapped_column(DateTime, default=naive_utc_now)
+
+
+class ReviewAdjudication(Base):
+    __tablename__ = "lit_review_adjudications"
+    __table_args__ = (
+        UniqueConstraint("workflow", "dataset_version_id", "subject_id", name="uq_adjudication"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    workflow: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    dataset_version_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    subject_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    final_label: Mapped[str] = mapped_column(String(128), nullable=False)
+    adjudicator_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    rationale: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=naive_utc_now)
+
+
+class ModelApproval(Base):
+    """Durable approval gate for a measured threshold or retrieval default."""
+
+    __tablename__ = "lit_model_approvals"
+    __table_args__ = (
+        UniqueConstraint(
+            "workflow", "dataset_version_id", "model_sha256", name="uq_model_approval"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    workflow: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    dataset_version_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    model_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    parameters: Mapped[dict] = mapped_column(JSON, nullable=False)
+    metrics: Mapped[dict] = mapped_column(JSON, nullable=False)
+    label_set_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    approved: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    approved_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    approved_at: Mapped[dt.datetime] = mapped_column(DateTime, default=naive_utc_now)
 
 
 class PipelineRun(Base):

@@ -15,9 +15,14 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime
 from pathlib import Path
 
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
 from lake_research_map.config import DATA_DIR
+from lake_research_map.db.bronze_models import EnrichmentObservation
 
 ENRICHMENT_CACHE_PATH = DATA_DIR / "enrichment_cache.json"
 
@@ -61,3 +66,31 @@ def load_enrichment_cache(path: Path | None = None) -> dict[str, dict[str, int |
             "reference_count": values.get("reference_count"),
         }
     return normalized
+
+
+def load_enrichment_observations(
+    session: Session,
+    *,
+    as_of: datetime | None = None,
+) -> dict[str, dict[str, int | None]]:
+    """Select the latest successful provider observation per DOI as of a cutoff."""
+    query = select(EnrichmentObservation).where(EnrichmentObservation.status == "success")
+    if as_of is not None:
+        query = query.where(EnrichmentObservation.observed_at <= as_of)
+    rows = session.scalars(
+        query.order_by(
+            EnrichmentObservation.doi,
+            EnrichmentObservation.observed_at.desc(),
+            EnrichmentObservation.id.desc(),
+        )
+    ).all()
+    selected: dict[str, dict[str, int | None]] = {}
+    for row in rows:
+        selected.setdefault(
+            row.doi,
+            {
+                "citation_count": row.citation_count,
+                "reference_count": row.reference_count,
+            },
+        )
+    return selected

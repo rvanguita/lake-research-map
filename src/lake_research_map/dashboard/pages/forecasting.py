@@ -1,4 +1,8 @@
-"""🔮 Trends & Prediction — volume projection of publications (2027-2028) via regression."""
+"""🔮 Trends and fronts — publication-volume projection via regression.
+
+The horizon follows the last complete bibliographic year, so it moves with the
+corpus rather than being pinned to a calendar year in this docstring.
+"""
 
 from __future__ import annotations
 
@@ -14,7 +18,13 @@ from lake_research_map.dashboard.components import (
     page_header,
     render_chart,
 )
-from lake_research_map.dashboard.forecasting import HOLDOUT_YEAR, ForecastResult
+from lake_research_map.dashboard.forecasting import (
+    COVERAGE_HOLDOUT_FOLDS,
+    CV_YEARS,
+    HOLDOUT_YEAR,
+    TRAIN_END_YEAR,
+    ForecastResult,
+)
 from lake_research_map.dashboard.theme import (
     CATEGORICAL_PALETTE,
     SOURCE_COLORS,
@@ -31,7 +41,7 @@ MIN_KEYWORD_OCCURRENCES = 20
 _MODEL_LABELS = {
     "baseline": "Persistence (last value)",
     "linear": "Linear",
-    "log_linear": "Log-linear (crescimento exponencial)",
+    "log_linear": "Log-linear (exponential growth)",
     "none": "—",
 }
 
@@ -40,14 +50,14 @@ def render() -> None:
     page_header(
         "🔮",
         "Trends and fronts",
-        "Volume projection with temporal validation, training only in complete years and intervals"
+        "Volume projection with temporal validation, training only in complete years and intervals "
         "conformations calibrated in historical errors.",
     )
 
     hero_banner(
         "Complete historical series",
-        "Persistence, linear trend and log-linear trend"
-        "The partial year is only monitored; it does not enter the training."
+        "Persistence, linear trend and log-linear trend "
+        "The partial year is only monitored; it does not enter the training. "
         "The bands use conformal historical errors and represent uncertainty of the collected corpus.",
     )
 
@@ -61,7 +71,7 @@ def render() -> None:
             "Volume",
             "Topic trajectories",
             "Technological diffusion",
-            "Bursts de conceitos",
+            "Concept bursts",
         ],
         on_change="rerun",
         key="forecasting_primary_tab",
@@ -142,6 +152,25 @@ def _series_forecast(source: str | None) -> ForecastResult:
     return loaders.volume_forecast(source)
 
 
+def _baseline_skill_label(skill: float | None) -> str:
+    """A forecast that does not beat last-year-repeated has to say so.
+
+    Skill is 1 - MAE(model) / MAE(persistence) over the rolling-origin folds, so
+    zero or less means the naive baseline was at least as good.
+    """
+    if skill is None:
+        return "n/a"
+    return f"{skill:+.0%}" if skill > 0 else "No better than naive"
+
+
+def _baseline_skill_help(skill: float | None) -> str:
+    if skill is None:
+        return "Not enough complete years to compare against persistence"
+    if skill > 0:
+        return "Lower validation error than repeating the last complete year"
+    return "Persistence matched or beat the fitted model; read the projection with care"
+
+
 def _render_series_forecast(label: str, color: str, result: ForecastResult) -> None:
     if result.insufficient_data:
         st.info(" ".join(result.notes) or "Insufficient data for a forecast.")
@@ -154,19 +183,30 @@ def _render_series_forecast(label: str, color: str, result: ForecastResult) -> N
     metric_row(
         [
             (
-                "🧮 Modelo escolhido",
+                "🧮 Selected model",
                 _MODEL_LABELS.get(result.chosen_model, result.chosen_model),
                 None,
             ),
             (
                 "📉 MAE validation",
-                partial_note or "N/D",
-                f"CV 2023–2025: {result.cv_mae:.1f}" if result.cv_mae == result.cv_mae else None,
+                partial_note or "n/a",
+                f"CV {CV_YEARS[0]}–{CV_YEARS[-1]}: {result.cv_mae:.1f}"
+                if result.cv_mae == result.cv_mae
+                else None,
             ),
             (
-                "📈 R² (ajuste no treino)",
-                f"{result.r2_train:.2f}" if result.r2_train == result.r2_train else "N/D",
-                None,
+                "🏁 Skill vs. persistence",
+                _baseline_skill_label(result.baseline_skill),
+                _baseline_skill_help(result.baseline_skill),
+            ),
+            (
+                "📏 Interval coverage",
+                "n/a"
+                if result.empirical_interval_coverage is None
+                else f"{result.empirical_interval_coverage:.0%}",
+                f"{COVERAGE_HOLDOUT_FOLDS} held-out one-step folds in a 90% band"
+                if result.empirical_interval_coverage is not None
+                else "Series too short to hold folds back",
             ),
             (
                 f"🔮 Forecast {result.forecast_years[0]}",
@@ -197,7 +237,7 @@ def _render_series_forecast(label: str, color: str, result: ForecastResult) -> N
         go.Scatter(
             x=result.fitted_curve.index,
             y=result.fitted_curve.values,
-            name="Modelo ajustado",
+            name="Fitted model",
             mode="lines",
             line=dict(color=color, width=2, dash="dot"),
         )
@@ -261,7 +301,7 @@ def _render_series_forecast(label: str, color: str, result: ForecastResult) -> N
     render_chart(
         fig,
         caption=f"Bars = observed (including partial {HOLDOUT_YEAR}). Dotted line = model fit "
-        "in history."
+        "in history. "
         "records already indexed for the next year, shown apart because they are not the final total of it.",
     )
 
@@ -270,9 +310,9 @@ def _render_series_forecast(label: str, color: str, result: ForecastResult) -> N
         table["model"] = table["model"].map(_MODEL_LABELS)
         table = table.rename(
             columns={
-                "model": "Modelo",
+                "model": "Model",
                 "holdout_mae": f"MAE vs. partial {HOLDOUT_YEAR}",
-                "cv_mae": "MAE cross-validation (2023–2025)",
+                "cv_mae": f"MAE cross-validation ({CV_YEARS[0]}–{CV_YEARS[-1]})",
                 "combined_mae": "MAE temporal (usado na escolha)",
             }
         )
@@ -336,7 +376,7 @@ def _keyword_trend_lines(
     )
     render_chart(
         fig,
-        caption="Solid = observed history; traced : continuation predicted by the same chosen model"
+        caption="Solid = observed history; traced : continuation predicted by the same chosen model "
         "Shows the real trajectory behind the next ranking, not only the point of arrival.",
     )
 
@@ -367,10 +407,10 @@ def _keyword_growth_ranking() -> None:
         return
 
     ranking = pd.DataFrame(rows).sort_values("variation", ascending=False)
-    ranking["modelo"] = ranking["modelo"].map(lambda value: _MODEL_LABELS.get(value, value))
+    ranking["model"] = ranking["model"].map(lambda value: _MODEL_LABELS.get(value, value))
     top = ranking.head(min(TOP_KEYWORDS_FORECAST, len(ranking))).sort_values("variation")
 
-    sub_trend, sub_rank = st.tabs(["📈 Trajectories", "🏆 Ranking de Crescimento"])
+    sub_trend, sub_rank = st.tabs(["📈 Trajectories", "🏆 Growth ranking"])
     with sub_trend:
         _keyword_trend_lines(
             ranking.head(TOP_KEYWORD_TRENDS)["keyword"].tolist(), results_by_keyword
@@ -387,8 +427,8 @@ def _keyword_growth_ranking() -> None:
             hovertemplate=f"<b>%{{y}}</b><br>Projected change through {final_forecast_year}: %{{x:+.1f}} articles/year<extra></extra>",
         )
         fig.update_layout(
-            xaxis_title=f"Projected change (2025 → {final_forecast_year}, articles/year)",
-            yaxis_title="Palavra-chave",
+            xaxis_title=f"Projected change ({TRAIN_END_YEAR} → {final_forecast_year}, articles/year)",
+            yaxis_title="Keyword",
         )
         render_chart(
             fig,
@@ -404,8 +444,8 @@ def _keyword_growth_ranking() -> None:
 def _bass_diffusion_analysis() -> None:
     st.subheader("📊 Bass Diffusion Model for Emerging Technologies")
     st.caption(
-        "The Bass Diffusion Model (1969) models the cycle of adoption of technological innovations."
-        "separating the external influence of innovators (p) from the influence of internal contagion/imitation (q)."
+        "The Bass Diffusion Model (1969) models the cycle of adoption of technological innovations. "
+        "separating the external influence of innovators (p) from the influence of internal contagion/imitation (q). "
         "It allows estimating the theoretical saturation capacity (m) and the year of peak of publications (t*)."
     )
     from lake_research_map.dashboard.forecasting import fit_bass_diffusion_nls
@@ -437,8 +477,8 @@ def _bass_diffusion_analysis() -> None:
     if bass_records:
         st.dataframe(pd.DataFrame(bass_records), hide_index=True, width="stretch")
         st.caption(
-            "Nonlinear continuous adjustment (NLS via `scipy.optimize.curve_fit`) with physical capacity limits."
-            "Topics in 'Growth' stage have not yet reached the apex of scientific production;"
+            "Nonlinear continuous adjustment (NLS via `scipy.optimize.curve_fit`) with physical capacity limits. "
+            "Topics in 'Growth' stage have not yet reached the apex of scientific production; "
             "Topics in 'Maturity' have already exceeded the estimated peak year and tend to stabilize."
         )
     else:

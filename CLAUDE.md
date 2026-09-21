@@ -91,7 +91,7 @@ column sets differ — never assume a column on one layer's model exists on anot
 `lit_`-prefixed tables.
 
 `db/bootstrap.py` runs on every pipeline start: `create_all` (new tables only) plus the additive migrations in
-`_ARTICLE_COLUMNS`. Adding a column to an existing table requires an entry there, and every entry must be
+`_ADDITIVE_COLUMNS`. Adding a column to an existing table requires an entry there, and every entry must be
 nullable and purely additive — it runs unattended.
 
 ### Session lifecycle
@@ -111,9 +111,10 @@ Strict one-way layering — `data.py` (raw SQL → DataFrame, tolerates a missin
 `search.py` / `qualis.py` (pure pandas, no `streamlit` import, unit-tested) → `charts.py` (styled Plotly
 figures) → `components.py` → `pages/*.py` (one zero-arg `render()`, registered in `app.py`'s `PAGES`).
 
-Pages are read-only. Pipeline execution goes through Airflow's REST API (`pipeline_control.py` →
-`airflow_client.py`); the single in-process exception is embedding generation, isolated in `actions.py` so
-`pages/` stays free of db/transform access.
+Pages are read-only, with no exception: pipeline execution goes through Airflow's REST API
+(`pipeline_control.py` → `airflow_client.py`). Embedding generation used to be an in-process exception in
+`actions.py`; it was removed on 2026-09-21 because it wrote the live `lit_chunks` table that publication
+rebuilds from the versioned candidate, so the vectors were silently discarded on the next publish.
 
 The dashboard reads MySQL directly and prefers the **silver** layer (`pick_best_articles_layer`), while
 `lit_semantics` lives in gold — hence `loaders.with_semantics()` joins it on `doi` rather than treating it as
@@ -134,10 +135,14 @@ but their score distributions overlap, so the percentile cut this used to take a
 the margin reaches AUC 0.99 with no overlap. Nothing is auto-deleted, and articles with no score are never
 filtered out by `loaders.filter_articles`.
 
-The themes on the same page come from KMeans (`N_THEMES = 8`) and the map from t-SNE, both over the **same**
+The themes on the same page come from KMeans and the map from t-SNE, both over the **same**
 PCA(50) space (`transform/semantics.py::reduced_space`) — sharing it is what keeps a point's color and its
-position on the map in agreement. `k` is human-chosen, not optimized: silhouette is flat across k=6..14 on
-this corpus and HDBSCAN finds only two groups (one continuum plus the logistics island).
+position on the map in agreement. `k` is no longer a fixed constant: `discover_themes` sweeps
+`MIN_THEMES`..`MAX_THEMES` (4..12), rejects any solution with a cluster under 2% of the corpus, and breaks
+near-ties (within 0.005 silhouette) toward the smaller `k` — because silhouette is nearly flat across that
+range on this corpus, so the tie-break, not the maximum, is what actually decides. HDBSCAN finds only two
+groups (one continuum plus the logistics island). The Screening page reports bootstrap ARI and projection
+trustworthiness beside the map, since a flat silhouette means the boundaries deserve a stability caveat.
 
 ## Data corpus (`data/`, gitignored)
 
@@ -217,8 +222,12 @@ this corpus. The 18 near-identical abstracts under distinct DOIs in `lit_duplica
 
 ## Conventions
 
-- **Language**: code, comments, docstrings and `docs/` are in English; everything the dashboard renders
-  (page titles, captions, warnings) is in Portuguese. Keep both sides consistent when editing a page.
+- **Language**: everything is in English -- code, comments, docstrings, `docs/`, and every string the
+  dashboard renders (page titles, captions, warnings, metric labels, download filenames). The UI was
+  Portuguese until the 2026-09-21 migration; `PRD.md` NFR-07 now requires English. Watch for two
+  leftovers when editing: values produced in `analytics.py`/`forecasting.py` that are rendered verbatim
+  by a page, and multi-line implicit string concatenation, which silently drops the space between
+  fragments unless the first one ends with it.
 - **Comments explain *why***, and the existing ones encode hard-won decisions (why a chunk boundary is where it
   is, why a palette isn't derived from the brand colors, why `fastembed` is imported lazily). Don't strip them.
 - `.claude/settings.json` hooks run on every edit: `ruff check --fix` + `ruff format` on any `.py`, and

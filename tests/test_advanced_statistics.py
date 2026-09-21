@@ -8,6 +8,7 @@ import pandas as pd
 
 from lake_research_map.dashboard.analytics import (
     age_normalized_citations,
+    benjamini_hochberg,
     bradford_zones,
     citation_determinants_glm,
     coauthorship_community_detection,
@@ -15,6 +16,8 @@ from lake_research_map.dashboard.analytics import (
     graph_advanced_metrics,
     lotka_law_analysis,
     mann_kendall_trend,
+    network_null_model_diagnostics,
+    semantic_stability_diagnostics,
     zipf_law_analysis,
 )
 
@@ -50,10 +53,43 @@ def test_age_normalized_citations():
 def test_mann_kendall_trend_strictly_increasing():
     series = np.array([1, 2, 4, 7, 11, 16, 22, 29, 37])
     res = mann_kendall_trend(series)
-    assert res["trend"] == "crescendo"
+    assert res["trend"] == "growing"
     assert res["s"] > 0
     assert res["p_value"] < 0.05
-    assert res["slope"] > 0
+
+
+def test_benjamini_hochberg_is_monotone_and_preserves_missing_values():
+    adjusted = benjamini_hochberg(np.array([0.01, 0.04, 0.03, np.nan]))
+    assert np.allclose(adjusted[:3], [0.03, 0.04, 0.04])
+    assert np.isnan(adjusted[3])
+
+
+def test_semantic_stability_recovers_separated_clusters():
+    rng = np.random.default_rng(7)
+    left = rng.normal(-3, 0.1, size=(20, 4))
+    right = rng.normal(3, 0.1, size=(20, 4))
+    matrix = np.vstack([left, right])
+    labels = np.array([0] * 20 + [1] * 20)
+    projection = matrix[:, :2]
+
+    result = semantic_stability_diagnostics(matrix, labels, projection, n_bootstrap=5, seed=3)
+
+    assert result["valid"] is True
+    assert result["bootstrap_ari_mean"] > 0.95
+    # `projection` drops two of the four dimensions, so some neighbours are
+    # genuinely lost: the bound proves trustworthiness responds to well-separated
+    # structure, not that a truncation preserves it perfectly.
+    assert result["projection_trustworthiness"] > 0.9
+
+
+def test_network_null_model_preserves_degree_comparison():
+    graph = nx.watts_strogatz_graph(20, 4, 0.05, seed=2)
+
+    result = network_null_model_diagnostics(graph, n_simulations=5, seed=2)
+
+    assert result["valid"] is True
+    assert result["simulations"] == 5
+    assert 0 <= result["empirical_p_value"] <= 1
 
 
 def test_mann_kendall_trend_flat():
@@ -112,18 +148,23 @@ def test_citation_determinants_glm():
     )
     res = citation_determinants_glm(df)
     assert res["valid"] is True
-    assert res["family"] in {"poisson", "binomial_negativa"}
+    assert res["family"] in {"poisson", "negative_binomial"}
     assert res["n_used"] == n
     assert res["coverage"] == 1.0
     assert len(res["features"]) == len(res["coefficients"]) == len(res["irr"])
     assert len(res["irr_lower"]) == len(res["irr_upper"]) == len(res["features"])
     assert "tamanho_equipe" not in res["features"]  # constant predictor is not identifiable
+    assert res["condition_number"] > 0
+    assert set(res["candidate_aic"]) >= {"poisson"}
+    assert 0 <= res["observed_zero_fraction"] <= 1
+    assert res["influential_count"] >= 0
 
     with_missing = df.copy()
     with_missing.loc[:4, "reference_count"] = np.nan
     incomplete = citation_determinants_glm(with_missing)
     assert incomplete["n_used"] == n - 5
     assert incomplete["coverage"] == (n - 5) / n
+    assert incomplete["missingness"]["reference_count"] == 5 / n
 
 
 def test_zipf_law_analysis():
@@ -204,27 +245,3 @@ def test_conceptual_atypicality_analysis():
     assert not res["articles_df"].empty
     assert "median_z" in res["articles_df"].columns
     assert "is_atypical" in res["articles_df"].columns
-
-
-def test_venue_semantic_clusters():
-    from lake_research_map.dashboard.analytics import venue_semantic_clusters
-
-    dois = [f"10.1/{i}" for i in range(8)]
-    venues = (
-        ["IEEE TPWRS"] * 2
-        + ["IEEE TSTE"] * 2
-        + ["Applied Energy"] * 2
-        + ["Electric Power Systems Research"] * 2
-    )
-    df = pd.DataFrame(
-        {"doi": dois, "venue": venues, "citation_count": [10, 20, 15, 25, 30, 40, 5, 12]}
-    )
-
-    # Synthetic 8x4 embeddings
-    rng = np.random.default_rng(42)
-    embs = rng.normal(size=(8, 4)).astype(np.float32)
-
-    res = venue_semantic_clusters(df, embs, dois, n_clusters=2)
-    assert not res.empty
-    assert "cluster_id" in res.columns
-    assert len(res) == 4

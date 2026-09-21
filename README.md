@@ -14,7 +14,7 @@
 `lake-research-map` is a production-grade **Medallion Data Lake**, automated ETL pipeline, and scientometric research platform engineered for a Systematic Literature Review (SLR) on:
 > **"Distribution System Planning" (Electric Power Distribution Networks)**
 
-It transforms raw, heterogeneous, and partial bibliographic search exports from **IEEE Xplore** and **Elsevier ScienceDirect** (~1,831 deduplicated articles, 6,235 text chunks) into a structured, audit-ready, RAG-enabled corpus. Without writing direct SQL queries, researchers explore scientometric, econometric, network, and semantic evidence through an interactive 10-page Streamlit analytical dashboard orchestrated by Apache Airflow.
+It transforms raw, heterogeneous, and partial bibliographic search exports from **IEEE Xplore** and **Elsevier ScienceDirect** into a structured, versioned, audit-ready, RAG-enabled corpus. The active 2026-09-21 audit contains 3,115 Gold articles and 7,552 text chunks. Without writing direct SQL queries, researchers explore scientometric, econometric, network, and semantic evidence through an interactive 10-page Streamlit analytical dashboard orchestrated by Apache Airflow.
 
 ---
 
@@ -47,7 +47,7 @@ Doing this manually from raw publisher exports presents severe methodological ro
 1. **Heterogeneous Publisher Formats**: IEEE Xplore exports metadata CSVs alongside paginated `.bib` files and bulk PDF packages. Elsevier ScienceDirect exports paginated `.bib` files only. IEEE BibTeX exports concatenate entries without newlines or separators (`month={Feb},}@ARTICLE{...`), breaking standard parsers.
 2. **DOI Discrepancies**: Elsevier provides full URL DOIs (`https://doi.org/10.1016/...`), while IEEE provides bare DOI strings (`10.1109/...`). Without strict canonical normalization (stripping URL prefixes, trimming whitespace, and casefolding), deduplication fails.
 3. **Lexical Ambiguity (The Logistics Distraction)**: The keyword query `"distribution system planning"` is polysemous. In addition to electric power distribution networks, it matches supply-chain management, warehouse locations, and freight logistics literature (~9% of raw search results). Crude keyword exclusions risk dropping valid interdisciplinary papers; `lake-research-map` solves this via **contrastive semantic screening**.
-4. **Corpus Partiality & Auditability**: Out of 1,836 ingested bronze records, 1,831 survive DOI deduplication (with zero overlap between publishers under the current search window), and 96 have associated full-text PDFs (5.2%). The pipeline captures partiality explicitly, logging every dropped row to `silver.lit_rejected` to maintain PRISMA-compliant SLR audit trails.
+4. **Corpus Partiality & Auditability**: Counts are tied to the active immutable dataset version rather than hard-coded documentation. The pipeline captures partiality explicitly, logging every dropped row to `silver.lit_rejected` to maintain PRISMA-compatible SLR audit trails.
 
 ---
 
@@ -202,7 +202,7 @@ Airflow DAGs (`airflow/dags/lake_research_map_dags.py`) execute stages via `Bash
 ## 🧪 Testing & Quality Assurance
 
 The codebase features an exhaustive automated test suite:
-- **212 tests across 26 test files**, with a **< 5-second reference-environment target**.
+- **More than 230 automated tests**, with a **< 5-second reference-environment target** for the default SQLite suite and separate MySQL/API acceptance runs.
 - **Zero Live MySQL Dependency**: All tests execute against isolated, in-memory SQLite fixtures (`tests/conftest.py`) replicating the multi-layer medallion schemas.
 
 ```bash
@@ -264,7 +264,7 @@ lake-research-map/
 │       ├── analytics.py          # Pure mathematical, scientometric & network analytics
 │       ├── forecasting.py        # Regression benchmarking, quantiles, Bass diffusion
 │       ├── search.py             # Hybrid BM25 Okapi + Dense Vector Faiss/RRF search
-│       ├── theme.py              # Dark/light theme tokens and transparent polar styling
+│       ├── theme.py              # Fixed-dark theme tokens and transparent polar styling
 │       ├── components.py         # Reusable Streamlit UI widgets & metric cards
 │       ├── airflow_client.py     # Airflow REST API client
 │       └── pages/                # 10 workflow-oriented analytical controllers

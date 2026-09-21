@@ -2,13 +2,7 @@
 
 import pandas as pd
 
-from lake_research_map.dashboard.analytics import (
-    disruption_index_estimation,
-    open_access_impact_analysis,
-    price_index_analysis,
-    sleeping_beauties_detection,
-    technological_burst_detection,
-)
+from lake_research_map.dashboard.analytics import technological_burst_detection
 
 
 def _sample_corpus_df() -> pd.DataFrame:
@@ -91,58 +85,6 @@ def _sample_corpus_df() -> pd.DataFrame:
             },
         ]
     )
-
-
-def test_price_index_analysis() -> None:
-    df = _sample_corpus_df()
-    res = price_index_analysis(df)
-
-    assert res["available"] is False
-    assert "reference" in res["reason"].lower()
-    assert res["theme_price_df"].empty
-
-    # Test empty dataframe
-    empty_res = price_index_analysis(pd.DataFrame())
-    assert empty_res["global_price_index"] == 0.0
-
-
-def test_sleeping_beauties_detection() -> None:
-    df = _sample_corpus_df()
-    res = sleeping_beauties_detection(df, min_age=5)
-
-    assert res["available"] is False
-    assert "annual citation" in res["reason"].lower()
-    assert res["sleeping_beauties"].empty
-
-    # Test empty dataframe
-    empty_res = sleeping_beauties_detection(pd.DataFrame())
-    assert empty_res["count"] == 0
-
-
-def test_disruption_index_estimation() -> None:
-    df = _sample_corpus_df()
-    res = disruption_index_estimation(df)
-
-    assert res["available"] is False
-    assert "citation graph" in res["reason"].lower()
-    assert res["disruption_df"].empty
-
-    # Test empty dataframe
-    empty_res = disruption_index_estimation(pd.DataFrame())
-    assert empty_res["disruptive_ratio"] == 0.0
-
-
-def test_open_access_impact_analysis() -> None:
-    df = _sample_corpus_df()
-    res = open_access_impact_analysis(df)
-
-    assert res["available"] is False
-    assert "verified access" in res["reason"].lower()
-    assert res["comparison_table"].empty
-
-    # Test empty dataframe
-    empty_res = open_access_impact_analysis(pd.DataFrame())
-    assert empty_res["oa_share_pct"] == 0.0
 
 
 def test_technological_burst_detection() -> None:

@@ -68,114 +68,116 @@ def render() -> None:
         all_keywords = sorted({k for kws in kw_lists for k in kws})
 
     tab_venues, tab_keywords, tab_explorer, tab_trends = st.tabs(
-        ["📚 Journals", "🏷️ Keywords", "🔎 Explorer", "📈 Temporal evolution"]
+        ["Journals", "Keywords", "Explorer", "Temporal evolution"],
+        on_change="rerun",
+        key="topics_primary_tab",
     )
 
-    with tab_venues:
-        (
-            sub_ranking,
-            sub_qualis,
-            sub_bradford,
-            sub_semantic_venues,
-        ) = st.tabs(
-            [
-                "🏆 Ranking & Impacto",
-                "📋 CAPES/Qualis classification",
-                "🎯 Zonas de Bradford",
-                "️",
-            ]
-        )
-        with sub_ranking:
-            _top_venues(articles_df)
-
-        if require_columns(articles_df, ["venue"]) and articles_df["venue"].notna().any():
-            match_df, with_estrato, totals_by_estrato, estrato_order = _qualis_match_data(
-                articles_df
+    if tab_venues.open:
+        with tab_venues:
+            venue_view = st.segmented_control(
+                "Venue analysis",
+                options=["Ranking and impact", "CAPES/Qualis", "Bradford zones", "Semantics"],
+                default="Ranking and impact",
+                key="topics_venue_view",
             )
-            with sub_qualis:
-                qualis_view = (
-                    st.segmented_control(
-                        "CAPES/Qualis Visualization Format",
-                        options=[
-                            "Detailed Table",
-                            "Totais por Estrato",
-                            "Accumulated Evolution",
-                            "Subconjunto A1-A3",
-                        ],
-                        default="Detailed Table",
-                        key="qualis_view_selector",
-                    )
-                    or "Detailed Table"
+            if venue_view == "Ranking and impact":
+                _top_venues(articles_df)
+            elif require_columns(articles_df, ["venue"]) and articles_df["venue"].notna().any():
+                match_df, with_estrato, totals_by_estrato, estrato_order = _qualis_match_data(
+                    articles_df
                 )
-                if qualis_view == "Detailed Table":
-                    _qualis_table(
-                        articles_df, match_df, with_estrato[with_estrato["estrato"] == "A1"]
+                if venue_view == "CAPES/Qualis":
+                    qualis_view = (
+                        st.segmented_control(
+                            "CAPES/Qualis visualization format",
+                            options=[
+                                "Detailed table",
+                                "Totals by stratum",
+                                "Cumulative evolution",
+                                "A1–A3 subset",
+                            ],
+                            default="Detailed table",
+                            key="qualis_view_selector",
+                        )
+                        or "Detailed table"
                     )
-                elif qualis_view == "Totais por Estrato":
-                    _qualis_totals_chart(totals_by_estrato, estrato_order)
-                elif qualis_view == "Accumulated Evolution":
-                    _qualis_cumulative_chart(with_estrato, estrato_order)
+                    if qualis_view == "Detailed table":
+                        _qualis_table(
+                            articles_df,
+                            match_df,
+                            with_estrato[with_estrato["estrato"] == "A1"],
+                        )
+                    elif qualis_view == "Totals by stratum":
+                        _qualis_totals_chart(totals_by_estrato, estrato_order)
+                    elif qualis_view == "Cumulative evolution":
+                        _qualis_cumulative_chart(with_estrato, estrato_order)
+                    else:
+                        _qualis_a1_a3_combined(with_estrato)
+                elif venue_view == "Bradford zones":
+                    _bradford_analysis(articles_df)
                 else:
-                    _qualis_a1_a3_combined(with_estrato)
-
-            with sub_bradford:
-                _bradford_analysis(articles_df)
-            with sub_semantic_venues:
-                _semantic_venues_analysis(articles_df)
-
-    with tab_keywords:
-        sub_top, sub_vocab, sub_ctfidf, sub_atypical = st.tabs(
-            [
-                "🏷️ Top 20 keywords",
-                "📊 Vocabulary Structure (Zipf & Metrics)",
-                "🧬 Dynamic Vocabulary (c-TF-IDF)",
-                "Unusual combinations",
-            ]
-        )
-        with sub_top:
-            _top_keywords(articles_df)
-        with sub_vocab:
+                    _semantic_venues_analysis(articles_df)
+    elif tab_keywords.open:
+        with tab_keywords:
+            keyword_view = st.segmented_control(
+                "Keyword analysis",
+                options=[
+                    "Top keywords",
+                    "Vocabulary structure",
+                    "Dynamic vocabulary",
+                    "Atypicality",
+                ],
+                default="Top keywords",
+                key="topics_keyword_view",
+            )
+            if keyword_view == "Top keywords":
+                _top_keywords(articles_df)
+            elif keyword_view == "Vocabulary structure":
+                if all_keywords:
+                    _keyword_stats(kw_lists, all_keywords)
+                    st.divider()
+                    _zipf_analysis(articles_df)
+                else:
+                    st.info("No keywords identified in this layer.")
+            elif keyword_view == "Dynamic vocabulary":
+                _dynamic_ctfidf_analysis(articles_df)
+            else:
+                _conceptual_atypicality_tab(articles_df)
+    elif tab_explorer.open:
+        with tab_explorer:
             if all_keywords:
-                _keyword_stats(kw_lists, all_keywords)
-                st.divider()
-                _zipf_analysis(articles_df)
+                _keyword_explorer(articles_df, kw_lists, all_keywords)
             else:
                 st.info("No keywords identified in this layer.")
-        with sub_ctfidf:
-            _dynamic_ctfidf_analysis(articles_df)
-        with sub_atypical:
-            _conceptual_atypicality_tab(articles_df)
-
-    with tab_explorer:
-        if all_keywords:
-            _keyword_explorer(articles_df, kw_lists, all_keywords)
-        else:
-            st.info("No keywords identified in this layer.")
-
-    with tab_trends:
-        if not all_keywords:
-            st.info("No keywords identified in this layer.")
-        else:
-            kw_year = _prepare_keyword_trend_data(articles_df)
-            if kw_year is None:
-                st.info("Insufficient data to analyze temporal trends.")
+    elif tab_trends.open:
+        with tab_trends:
+            if not all_keywords:
+                st.info("No keywords identified in this layer.")
             else:
-                sub_share, sub_slope, sub_first, sub_breaks = st.tabs(
-                    [
-                        "📈 Annual Participation",
-                        "🔀 Rise vs. Decline",
-                        "🌱 New Vocabulary vs. Foundational",
-                        "⚡ Quebras Estruturais (Changepoints)",
-                    ]
-                )
-                with sub_share:
-                    _topic_share_area(kw_year)
-                with sub_slope:
-                    _rising_falling(kw_year)
-                with sub_first:
-                    _first_appearance(kw_year)
-                with sub_breaks:
-                    _structural_breaks_tab(articles_df)
+                kw_year = _prepare_keyword_trend_data(articles_df)
+                if kw_year is None:
+                    st.info("Insufficient data to analyze temporal trends.")
+                else:
+                    trend_view = st.segmented_control(
+                        "Trend analysis",
+                        options=[
+                            "Annual share",
+                            "Rise vs. decline",
+                            "First appearance",
+                            "Breakpoints",
+                        ],
+                        default="Annual share",
+                        key="topics_trend_view",
+                    )
+                    if trend_view == "Annual share":
+                        _topic_share_area(kw_year)
+                    elif trend_view == "Rise vs. decline":
+                        _rising_falling(kw_year)
+                    elif trend_view == "First appearance":
+                        _first_appearance(kw_year)
+                    else:
+                        _structural_breaks_tab(articles_df)
 
 
 def _top_venues(articles_df: pd.DataFrame) -> None:
@@ -186,7 +188,7 @@ def _top_venues(articles_df: pd.DataFrame) -> None:
     rank_mode = (
         st.segmented_control(
             "Highlight Criteria",
-            options=["Volume of Articles", "Average Impact of Quotations"],
+            options=["Volume of Articles", "Average citation impact"],
             default="Volume of Articles",
             key="topics_venue_rank_mode",
         )
@@ -212,7 +214,7 @@ def _top_venues(articles_df: pd.DataFrame) -> None:
         fig.update_traces(hovertemplate="<b>%{y}</b><br>%{x:,} published articles<extra></extra>")
         render_chart(
             fig,
-            caption="Editorial concentration of the corpus — each journal is colored by the predominant basis of the"
+            caption="Editorial concentration of the corpus — each journal is colored by the predominant basis of the "
             "articles published in it.",
         )
     else:
@@ -283,16 +285,16 @@ def _top_keywords(articles_df: pd.DataFrame) -> None:
     fig = topn_hbar(
         grouped["total"],
         x_title="Number of articles",
-        y_title="Palavra-chave",
+        y_title="Keyword",
         title="Top 20 keywords",
     )
     for trace in fig.data:
         breakdown = grouped.loc[list(trace.y), ["ieee", "elsevier"]].to_numpy()
         trace.customdata = breakdown
         trace.hovertemplate = (
-            "<b>%{y}</b><br>"
-            "Total articles: %{x:,}<br>"
-            "• Articles IEEE: %{customdata[0]:,}<br>"
+            "<b>%{y}</b><br> "
+            "Total articles: %{x:,}<br> "
+            "• Articles IEEE: %{customdata[0]:,}<br> "
             "• Elsevier Articles: %{customdata[1]:,}<extra></extra>"
         )
     render_chart(
@@ -306,7 +308,7 @@ def _keyword_stats(kw_lists: pd.Series, all_keywords: list[str]) -> None:
     kw_counts = kw_lists.apply(len)
     metric_row(
         [
-            ("️", f"{len(all_keywords):,}", None),
+            ("🔤 Keyword occurrences", f"{len(all_keywords):,}", None),
             ("📊 Average terms per article", f"{kw_counts.mean():.1f}", None),
             ("🚫 Articles without keywords", f"{(kw_counts == 0).mean():.0%}", None),
         ]
@@ -316,15 +318,15 @@ def _keyword_stats(kw_lists: pd.Series, all_keywords: list[str]) -> None:
 def _zipf_analysis(articles_df: pd.DataFrame) -> None:
     st.subheader("📖 Zipf Law of the Technical Vocabulary")
     st.caption(
-        "The Zipf Law states that the frequency of a word is inversely proportional to its rank"
-        "($f \\propto 1/r^\\gamma$)."
-        "approaches $\\gamma \\approx 1.0$, indicating a balanced linguistic vocabulary between central terms"
+        "The Zipf Law states that the frequency of a word is inversely proportional to its rank "
+        "($f \\propto 1/r^\\gamma$). "
+        "approaches $\\gamma \\approx 1.0$, indicating a balanced linguistic vocabulary between central terms "
         "and long tail of specialization."
     )
 
     zipf_res = zipf_law_analysis(articles_df)
     if not zipf_res["valid"]:
-        st.info("Texto insuficiente para avaliar a Lei de Zipf.")
+        st.info("Not enough text to evaluate Zipf's law.")
         return
 
     metric_row(
@@ -389,8 +391,8 @@ def _zipf_analysis(articles_df: pd.DataFrame) -> None:
 def _dynamic_ctfidf_analysis(articles_df: pd.DataFrame) -> None:
     st.subheader("🧬 Dynamic Vocabulary by Theme and Time (c-TF-IDF)")
     st.caption(
-        "The c-TF-IDF (Class-based TF-IDF) algorithm extracts the terms that most differentiate each thematic theme"
-        "reveals the evolution of technological topics"
+        "The c-TF-IDF (Class-based TF-IDF) algorithm extracts the terms that most differentiate each thematic theme "
+        "reveals the evolution of technological topics "
         "in the literature of distribution planning."
     )
 
@@ -431,7 +433,7 @@ def _keyword_explorer(
     article_table(
         filtered,
         ["title", "year", "venue", "source", "citation_count", "reference_count", "doi"],
-        download_key="artigos_por_palavra_chave",
+        download_key="articles_by_keyword",
     )
 
 
@@ -468,7 +470,7 @@ def _topic_share_area(kw_year: pd.DataFrame) -> None:
     fig.update_layout(
         xaxis_title=f"Publication year (since {TREND_MIN_YEAR})",
         yaxis_title="Participation among the mentions of the year (%)",
-        legend_title_text="Palavra-chave",
+        legend_title_text="Keyword",
     )
     render_chart(
         fig,
@@ -503,7 +505,7 @@ def _rising_falling(kw_year: pd.DataFrame) -> None:
     slope_series = pd.Series(slopes).sort_values()
     top_slopes = pd.concat([slope_series.head(7), slope_series.tail(7)]).drop_duplicates()
     df = top_slopes.rename_axis("keyword").reset_index(name="slope")
-    df["direction"] = df["slope"].apply(lambda s: "Em Alta" if s >= 0 else "Em Queda")
+    df["direction"] = df["slope"].apply(lambda s: "Rising" if s >= 0 else "Falling")
     df = df.sort_values("slope")
 
     fig = px.bar(
@@ -512,11 +514,11 @@ def _rising_falling(kw_year: pd.DataFrame) -> None:
         y="keyword",
         orientation="h",
         color="direction",
-        color_discrete_map={"Em Alta": TREND_UP_COLOR, "Em Queda": TREND_DOWN_COLOR},
+        color_discrete_map={"Rising": TREND_UP_COLOR, "Falling": TREND_DOWN_COLOR},
         title="Incline annual participation (linear regression)",
         labels={
             "slope": "Annual variation in participation (p.p./year)",
-            "keyword": "Palavra-chave",
+            "keyword": "Keyword",
             "direction": "Trend",
         },
     )
@@ -528,34 +530,49 @@ def _rising_falling(kw_year: pd.DataFrame) -> None:
         "occurrences in the period), estimated by simple linear regression.",
     )
 
-    from lake_research_map.dashboard.analytics import mann_kendall_trend
+    from lake_research_map.dashboard.analytics import benjamini_hochberg, mann_kendall_trend
 
+    # The test family is every eligible keyword, not the extremes plotted above.
+    # Adjusting only the top/bottom slopes would correct a set already chosen for
+    # being extreme, which inflates significance instead of controlling it -- so
+    # Mann-Kendall runs over the full family, Benjamini-Hochberg is applied there,
+    # and only then is the table narrowed to the terms on the chart.
     pivoted = kw_year.groupby(["year", "keyword"]).size().unstack(fill_value=0)
     mk_records = []
-    for kw in df["keyword"]:
+    for kw in eligible:
         if kw in pivoted.columns:
             series = pivoted[kw].to_numpy()
             res = mann_kendall_trend(series)
             mk_records.append(
                 {
-                    "Palavra-chave": kw,
-                    "Trend (Mann-Kendall)": res["trend"].title(),
-                    "P-value": round(res["p_value"], 4),
-                    "Significativo (p < 0.05)": "✅ Sim" if res["p_value"] < 0.05 else "No",
-                    "Sen inclination": round(res["slope"], 3),
+                    "Keyword": kw,
+                    "Trend": res["trend"].title(),
+                    "Raw p-value": float(res["p_value"]),
+                    "Sen slope": round(res["slope"], 3),
                 }
             )
     if mk_records:
-        st.markdown("#### 🔬 Nonparametric Tendency Test (Mann-Kendall & Sen)")
+        family = pd.DataFrame(mk_records)
+        family["Adjusted p-value"] = benjamini_hochberg(family["Raw p-value"])
+        family["FDR significant"] = family["Adjusted p-value"] < 0.05
+        displayed = set(df["keyword"])
+        trends = family[family["Keyword"].isin(displayed)].copy()
+        trends[["Raw p-value", "Adjusted p-value"]] = trends[
+            ["Raw p-value", "Adjusted p-value"]
+        ].round(4)
+        trends = trends.sort_values("Sen slope")
+        st.markdown("#### Nonparametric trend test")
         st.caption(
-            "The Mann-Kendall test verifies if the monotonous temporal evolution is statistically"
-            "significant (p < 0.05) and free of residual normality assumptions."
+            "Mann-Kendall and Sen slopes use zero-filled annual series. Benjamini-Hochberg "
+            f"adjustment controls the false-discovery rate across all {len(family)} keywords "
+            f"with at least {MIN_KEYWORD_OCCURRENCES} occurrences; the table shows the "
+            f"{len(trends)} terms charted above, with their family-adjusted values."
         )
-        st.dataframe(pd.DataFrame(mk_records), hide_index=True, width="stretch")
+        st.dataframe(trends, hide_index=True, width="stretch")
 
 
 def _first_appearance(kw_year: pd.DataFrame) -> None:
-    st.markdown("* New vocabulary vs. foundational**")
+    st.markdown("**New vocabulary vs. foundational**")
     counts = kw_year["keyword"].value_counts()
     eligible = counts[counts >= MIN_KEYWORD_OCCURRENCES]
     if eligible.empty:
@@ -607,9 +624,9 @@ def _first_appearance(kw_year: pd.DataFrame) -> None:
 
     render_chart(
         fig,
-        caption="Terms in the upper right corner are recent vocabulary that has already gained volume; terms to the"
-        "Left with high counting are the foundational vocabulary of the area."
-        "to see the term; fixed labels highlight only the most extreme points (higher volume and debut"
+        caption="Terms in the upper right corner are recent vocabulary that has already gained volume; terms to the "
+        "Left with high counting are the foundational vocabulary of the area. "
+        "to see the term; fixed labels highlight only the most extreme points (higher volume and debut "
         "more recent), not to overlap the others.",
     )
 
@@ -667,17 +684,21 @@ def _qualis_table(
         [
             ("📚 Periodicals classified", f"{n_classified}/{len(match_df)}", None),
             ("🥇 Periodics A1", f"{len(a1_venues)}", None),
-            ("📄 Articles in A1 journals", f"{len(a1_articles_df):,}", f"{pct_a1:.1f}% do corpus"),
+            (
+                "📄 Articles in A1 journals",
+                f"{len(a1_articles_df):,}",
+                f"{pct_a1:.1f}% of the corpus",
+            ),
         ]
     )
 
     st.caption(
         f"Official CAPES/Qualis classification (2017–2020 cycle, area **{QUALIS_AREA}** — the "
-        "last evaluation per journal; from 2025-2028 CAPES starts to evaluate by article, no"
-        "more per vehicle)."
-        f"text similarity (threshold {MATCH_THRESHOLD:.0f}%), because venue spellings vary across sources "
-        "(e.g. `&` vs. `and`, `(Print)`/`(Online)` suffixes)."
-        f'suficiente aparece como "{NOT_CLASSIFIED}" -- nunca como uma nota adivinhada.'
+        "last per-journal evaluation; from 2025-2028 CAPES evaluates by article rather than by "
+        "venue). Venues are matched to the official list by normalised title similarity "
+        f"(threshold {MATCH_THRESHOLD:.0f}%), because venue spellings vary across sources "
+        "(e.g. `&` vs. `and`, `(Print)`/`(Online)` suffixes). A venue with no confident match "
+        f'appears as "{NOT_CLASSIFIED}" -- never as a guessed grade.'
     )
     st.dataframe(
         match_df.rename(
@@ -707,16 +728,16 @@ def _qualis_totals_chart(totals_by_estrato: pd.Series, estrato_order: list[str])
     fig.update_layout(showlegend=False)
     render_chart(
         fig,
-        caption="Total articles of the corpus by classification CAPES/Qualis, ordered the best"
-        f'("A1") para a pior, com "{NOT_CLASSIFIED}" ao final.',
+        caption="Total corpus articles by CAPES/Qualis classification, ordered from best "
+        f'("A1") to worst, with "{NOT_CLASSIFIED}" last.',
     )
 
 
 def _qualis_cumulative_chart(with_estrato: pd.DataFrame, estrato_order: list[str]) -> None:
-    st.subheader("Accumulated by classification")
+    st.subheader("Cumulative by classification")
     cum_by_estrato = cumulative_by_category(with_estrato, "estrato", top_n=10)
     if cum_by_estrato.empty:
-        st.info("No valid years for the accumulated by classification.")
+        st.info("No valid years for the cumulative by classification.")
         return
 
     fig = stacked_area(
@@ -726,12 +747,12 @@ def _qualis_cumulative_chart(with_estrato: pd.DataFrame, estrato_order: list[str
         color="estrato",
         color_map=venue_color_map(estrato_order, others_label=NOT_CLASSIFIED),
         category_orders={"estrato": estrato_order},
-        title="Articles accumulated by CAPES/Qualis classification",
+        title="Articles cumulative by CAPES/Qualis classification",
     )
     fig.update_traces(
-        hovertemplate="Year %{x}<br>%{data.name}: %{y:,.0f} accumulated articles<extra></extra>"
+        hovertemplate="Year %{x}<br>%{data.name}: %{y:,.0f} cumulative articles<extra></extra>"
     )
-    fig.update_layout(xaxis_title="Year of publication", yaxis_title="Accumulated articles")
+    fig.update_layout(xaxis_title="Year of publication", yaxis_title="Cumulative articles")
     render_chart(
         fig,
         caption="Cumulative corpus composition by CAPES/Qualis stratum (area"
@@ -741,7 +762,7 @@ def _qualis_cumulative_chart(with_estrato: pd.DataFrame, estrato_order: list[str
 
 
 def _qualis_a1_a3_combined(with_estrato: pd.DataFrame) -> None:
-    st.subheader("Periodics A1-A3 — Accumulated")
+    st.subheader("Periodics A1-A3 — Cumulative")
     combined_df = with_estrato[with_estrato["estrato"].isin(("A1", "A2", "A3"))]
     if combined_df.empty:
         st.info("No journal articles classified A1, A2 or A3 in this layer/filter.")
@@ -786,7 +807,7 @@ def _qualis_a1_a3_combined(with_estrato: pd.DataFrame) -> None:
         )
         render_chart(
             fig,
-            caption="Periodicals more published by the corpus, adding the strata A1, A2 and A3,"
+            caption="Periodicals more published by the corpus, adding the strata A1, A2 and A3, "
             "colored by source.",
         )
 
@@ -806,8 +827,8 @@ def _qualis_a1_a3_combined(with_estrato: pd.DataFrame) -> None:
         fig.update_traces(hovertemplate="<b>%{y}</b><br>%{x:,} articles<extra></extra>")
         render_chart(
             fig,
-            caption="The same most published journals of the A1-A3 set, now colored by"
-            "CAPES/Qualis classification itself — shows which category each journal of the ranking"
+            caption="The same most published journals of the A1-A3 set, now colored by "
+            "CAPES/Qualis classification itself — shows which category each journal of the ranking "
             "pertence.",
         )
     with col_source_tier:
@@ -844,7 +865,7 @@ def _qualis_a1_a3_combined(with_estrato: pd.DataFrame) -> None:
 def _bradford_analysis(articles_df: pd.DataFrame) -> None:
     st.subheader("🎯 Bradford Dispersal Zones")
     st.caption(
-        "Bradford's Law divides the journals into 3 concentric zones of equal productivity (~1/3 of the articles each)."
+        "Bradford's Law divides the journals into 3 concentric zones of equal productivity (~1/3 of the articles each). "
         "The theoretical proportion of the number of journals in each zone follows approximately 1 : k : k2."
     )
     from lake_research_map.dashboard.analytics import bradford_zones
@@ -896,17 +917,17 @@ def _bradford_analysis(articles_df: pd.DataFrame) -> None:
     fig.update_layout(showlegend=False)
     render_chart(
         fig,
-        caption="Zone 1 (nucleus) concentrates the mandatory reference journals for planning of data."
+        caption="Zone 1 (nucleus) concentrates the mandatory reference journals for planning of data. "
         "The zones 2 and 3 reveal the wide dispersion in general vehicles.",
     )
 
 
 def _semantic_venues_analysis(articles_df: pd.DataFrame) -> None:
-    st.subheader("️")
+    st.subheader("🗺️ Semantic positioning of venues")
     st.caption(
-        "Positioning of journals in the vectorial space from the centroid of articles"
-        "allows viewing the thematic overlap of vehicles independently"
-        "de sua editora comercial (IEEE vs. Elsevier)."
+        "Positioning of journals in the vectorial space from the centroid of articles "
+        "allows viewing the thematic overlap of vehicles independently "
+        "of their commercial publisher (IEEE vs. Elsevier)."
     )
     signals = loaders.semantics()
     if signals.empty or "map_x" not in signals.columns or "map_y" not in signals.columns:
@@ -973,8 +994,8 @@ def _semantic_venues_analysis(articles_df: pd.DataFrame) -> None:
 def _conceptual_atypicality_tab(articles_df: pd.DataFrame) -> None:
     st.subheader("Unusual combinations of keywords")
     st.caption(
-        "Exploratory diagnosis of co-occurrences in relation to the marginal independence of keywords."
-        "It describes rare combinations in this corpus and its association with citations; it does not reproduce the model"
+        "Exploratory diagnosis of co-occurrences in relation to the marginal independence of keywords. "
+        "It describes rare combinations in this corpus and its association with citations; it does not reproduce the model "
         "null by pairs of periodicals by Uzzi et al."
     )
     res = conceptual_atypicality_analysis(articles_df)
@@ -990,7 +1011,7 @@ def _conceptual_atypicality_tab(articles_df: pd.DataFrame) -> None:
                 f"Baseline: {res['hit_rate_baseline']:.1f}%",
             ),
             (
-                "⭐ Top 5% Limit Quotations",
+                "⭐ Top 5% citation threshold",
                 f"≥ {res['cite_p95_threshold']} citations",
                 "Articles in the 95th percentile",
             ),
@@ -1000,7 +1021,7 @@ def _conceptual_atypicality_tab(articles_df: pd.DataFrame) -> None:
                 "Expected for Independence",
             ),
             (
-                "📊 Pares Raros Mapeados",
+                "📊 Rare pairs mapped",
                 f"{len(res['atypical_pairs'])} combinations",
                 "Z-score < 0 vs modelo nulo",
             ),
@@ -1018,7 +1039,7 @@ def _conceptual_atypicality_tab(articles_df: pd.DataFrame) -> None:
         labels={
             "median_z": "Convencionalidade (Mediana de Z)",
             "min_z": "Atypicality (Minimum Z)",
-            "is_hit": "Top 5% Quotations?",
+            "is_hit": "Top 5% by citations?",
         },
         title="Dispersion: Conventionality vs. Extreme Atypicality by Article",
     )
@@ -1027,7 +1048,7 @@ def _conceptual_atypicality_tab(articles_df: pd.DataFrame) -> None:
     )
     render_chart(
         fig,
-        caption="Articles in the right lower quadrant (high conventionality and minimum negative Z)"
+        caption="Articles in the right lower quadrant (high conventionality and minimum negative Z) "
         "incorporate innovative combinations on mature theoretical ground.",
     )
 
@@ -1038,7 +1059,7 @@ def _conceptual_atypicality_tab(articles_df: pd.DataFrame) -> None:
 def _structural_breaks_tab(articles_df: pd.DataFrame) -> None:
     st.subheader("Structural Crack Detection and Inflection Points (Changepoints)")
     st.caption(
-        "It applies the Chow test and minimization of the sum of the residue squares to detect the historical moment"
+        "It applies the Chow test and minimization of the sum of the residue squares to detect the historical moment "
         "in which the average rate of publication suffered a statistically significant regime transition (p < 0.05)."
     )
     if "year" not in articles_df.columns:
@@ -1064,8 +1085,8 @@ def _structural_breaks_tab(articles_df: pd.DataFrame) -> None:
                 f"+{res['relative_jump_pct']:.1f}%",
                 f"{res['pre_mean']} → {res['post_mean']} articles/year",
             ),
-            ("🧪 Chow F statistics", f"{res['f_stat']:.2f}", f"p-valor: {res['p_value']:.4f}"),
-            ("️", "Estatisticamente Significante", "p < 0.05"),
+            ("🧪 Chow F statistic", f"{res['f_stat']:.2f}", f"p-value: {res['p_value']:.4f}"),
+            ("📏 Significance", "Statistically significant", "p < 0.05"),
         ]
     )
 

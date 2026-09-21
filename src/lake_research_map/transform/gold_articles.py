@@ -294,9 +294,9 @@ def build_gold_articles(silver_session: Session, gold_session: Session) -> dict:
                         char_len=len(chunk["text"]),
                         # `null()`, not None: on a JSON column SQLAlchemy
                         # persists a bare None as JSON `null`, which is not SQL
-                        # NULL -- and `build_embeddings` picks up its work with
-                        # `WHERE embedding IS NULL`, so those chunks would never
-                        # be re-embedded.
+                        # NULL. The JSON mirror is no longer written or read,
+                        # but clearing it correctly keeps this legacy live-table
+                        # path from leaving a stale vector behind changed text.
                         embedding=null(),
                         embedding_bin=None,
                         embed_model=None,

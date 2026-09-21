@@ -128,13 +128,13 @@ def _relevance_screening(scored: pd.DataFrame) -> None:
         (
             "🚩 Out of scope (margin < 0)",
             f"{len(low):,}",
-            f"{100 * len(low) / len(scored):.1f}% do corpus",
+            f"{100 * len(low) / len(scored):.1f}% of the corpus",
         ),
     ]
     if len(title_only) > 0:
         metrics.append(
             (
-                "",
+                "📝 Title-only articles",
                 f"{len(title_only):,}",
                 "excluded from margin statistics",
             )
@@ -155,11 +155,11 @@ def _relevance_screening(scored: pd.DataFrame) -> None:
     )
     render_chart(
         fig,
-        caption="Each summary is compared with two anchors: the theme of review and reading"
-        "The margin is the difference, and the *zero is the cut**: to the left of it"
-        "are the articles that the text itself puts closer to supply chain than to supply chain."
-        "With one anchor, the two distributions overlapped and"
-        "In order to apply the cut-off method, any percentile also discarded work within the scope."
+        caption="Each summary is compared with two anchors: the theme of review and reading "
+        "The margin is the difference, and the *zero is the cut**: to the left of it "
+        "are the articles that the text itself puts closer to supply chain than to supply chain. "
+        "With one anchor, the two distributions overlapped and "
+        "In order to apply the cut-off method, any percentile also discarded work within the scope. "
         "**All** the graphs, use the filter in the sidebar.",
     )
 
@@ -192,8 +192,8 @@ def _relevance_screening(scored: pd.DataFrame) -> None:
     st.divider()
     st.subheader("🤖 Active-learning-assisted screening (uncertainty sampling)")
     st.caption(
-        "Articles where the contrasting margin is closer to zero (|Δ| ≈ 0) represent the"
-        "Prioritizing the manual inspection of these cases accelerates the decision-making of maximum ambiguity."
+        "Articles where the contrasting margin is closer to zero (|Δ| ≈ 0) represent the "
+        "Prioritizing the manual inspection of these cases accelerates the decision-making of maximum ambiguity. "
         "Systematic screening refinement (SLR) with the lowest human reading effort."
     )
     uncertain = scored[scored["relevance_margin"].notna()].copy()
@@ -225,7 +225,7 @@ def _screening_calibration_panel(scored: pd.DataFrame) -> None:
     st.subheader("Calibration with human review")
     st.caption(
         "The uncertainty queue prioritizes reading; the stratified sample below serves a different "
-        "question: to estimate the threshold performance in the entire margin range."
+        "question: to estimate the threshold performance in the entire margin range. "
         "records labels or applies exclusions automatically."
     )
 
@@ -249,7 +249,7 @@ def _screening_calibration_panel(scored: pd.DataFrame) -> None:
     )
     if not uploaded:
         st.info(
-            "Send independent decisions of reviewers to calculate agreement and validate"
+            "Send independent decisions of reviewers to calculate agreement and validate "
             "a candidate threshold."
         )
         return
@@ -282,8 +282,8 @@ def _screening_calibration_panel(scored: pd.DataFrame) -> None:
         st.dataframe(agreement.round(3), hide_index=True, width="stretch")
         if agreement["status"].ne("ok").any():
             st.caption(
-                "κ is only reported with at least 20 binary shared decisions and presence"
-                "das duas classes; os demais pares permanecem como suporte insuficiente."
+                "κ is only reported with at least 20 binary shared decisions and presence "
+                "of both classes; the remaining pairs stay flagged as insufficient support."
             )
 
     resolved = resolve_review_consensus(labels)
@@ -301,7 +301,7 @@ def _screening_calibration_panel(scored: pd.DataFrame) -> None:
     calibration = calibrate_screening_threshold(resolved, scored, seed=42)
     if not calibration["valid"]:
         st.warning(
-            "There is still no support for holdout validation."
+            "There is still no support for holdout validation. "
             "Solved with 10 inclusions and 10 exclusions."
         )
         return
@@ -354,7 +354,7 @@ def _screening_calibration_panel(scored: pd.DataFrame) -> None:
     fig.update_layout(xaxis_tickformat=".0%", yaxis_tickformat=".0%")
     render_chart(
         fig,
-        caption="The highlighted point is evidence of validation, non-authorization for exclusion"
+        caption="The highlighted point is evidence of validation, non-authorization for exclusion "
         "Broad intervals indicate the need to expand the human review.",
     )
 
@@ -363,7 +363,7 @@ def _legacy_relevance_screening(scored: pd.DataFrame) -> None:
     """The percentile view, for a database that predates the contrastive anchor."""
     st.subheader("Relevancy score distribution")
     st.info(
-        "This layer was generated before the contrastive anchor — `--stage semantic` to use the"
+        "This layer was generated before the contrastive anchor — `--stage semantic` to use the "
         "margin, whose zero cutoff replaces the percentile below."
     )
     threshold = float(scored["relevance_score"].quantile(LOW_RELEVANCE_PERCENTILE / 100))
@@ -374,7 +374,7 @@ def _legacy_relevance_screening(scored: pd.DataFrame) -> None:
             ("📄 Articles with score", f"{len(scored):,}", None),
             ("📉 Score mediano", f"{scored['relevance_score'].median():.3f}", None),
             (
-                f"🚩 Abaixo do percentil {LOW_RELEVANCE_PERCENTILE}",
+                f"🚩 Below percentile {LOW_RELEVANCE_PERCENTILE}",
                 f"{len(low):,}",
                 f"corte em {threshold:.3f}",
             ),
@@ -402,14 +402,14 @@ def _legacy_relevance_screening(scored: pd.DataFrame) -> None:
     )
     render_chart(
         fig,
-        caption="The score is the cosine between the abstract and an anchor text that describes the scope of the"
+        caption="The score is the cosine between the abstract and an anchor text that describes the scope of the "
         "The tail to the left concentrates the false positives of the search.",
     )
 
     st.divider()
     st.subheader(f"Low-relevance tail — {len(low):,} articles for manual review")
     st.caption(
-        "Ordered from the least relevant to the most relevant."
+        "Ordered from the least relevant to the most relevant. "
         "not a verdict: review before discarding."
     )
     review = low.sort_values("relevance_score").head(TOP_REVIEW_ROWS).copy()
@@ -509,7 +509,7 @@ def _semantic_map(scored: pd.DataFrame) -> None:
             )
         with sub_c2:
             show_theme_labels = st.checkbox(
-                "️",
+                "🏷️ Theme labels",
                 value=True,
                 key="sem_show_theme_labels",
                 help="Shows the names of the themes on the median centroids of the clusters in the foreground.",
@@ -552,12 +552,12 @@ def _semantic_map(scored: pd.DataFrame) -> None:
     fig.update_traces(
         marker=dict(size=6),
         hovertemplate=(
-            "<b>%{customdata[0]}</b><br><br>"
-            "🏛️ <b>Venue:</b> %{customdata[1]}<br>"
-            "📅 <b>Year:</b> %{customdata[2]}  •  🏷️ <b>Source:</b> %{customdata[3]}<br>"
-            "🎯 <b>Theme:</b> %{customdata[4]}<br>"
-            "📊 <b>Relevance:</b> %{customdata[5]:.3f} (Margin Δ:%{customdata[6]:.3f})<br>"
-            "🚦 <b>Screening:</b> %{customdata[7]}"
+            "<b>%{customdata[0]}</b><br><br> "
+            "🏛️ <b>Venue:</b> %{customdata[1]}<br> "
+            "📅 <b>Year:</b> %{customdata[2]}  •  🏷️ <b>Source:</b> %{customdata[3]}<br> "
+            "🎯 <b>Theme:</b> %{customdata[4]}<br> "
+            "📊 <b>Relevance:</b> %{customdata[5]:.3f} (Margin Δ:%{customdata[6]:.3f})<br> "
+            "🚦 <b>Screening:</b> %{customdata[7]} "
             "<extra></extra>"
         ),
     )
@@ -661,13 +661,70 @@ def _semantic_map(scored: pd.DataFrame) -> None:
         fig,
         height=650,
         margin=chart_margin,
-        caption="T-SNE projection of the embeddings of the abstracts, calculated in the**same space** in which the"
-        "Themes are discovered — that is what makes the color of a point agree with where it fell."
-        "**The axes do not have absolute numerical meaning**: only the relative distance between points matters."
-        "The corpus forms a dense continuum of electrical network planning with**a** detached island"
-        "(a of operational logistics/research, contamination of the search for the word *distribution*);"
-        "The themes are clippings of this continuum revealed by dense semantic grouping.",
+        caption="t-SNE projection of the abstract embeddings, computed in the **same space** in which "
+        "the themes are discovered — that is what makes a point's colour agree with where it falls. "
+        "**The axes carry no absolute numerical meaning**: only relative distance between points matters. "
+        "The corpus forms a dense continuum of distribution-network planning with **one detached island** "
+        "(operational logistics research, a contamination from the word *distribution* in the search); "
+        "the themes are slices of that continuum revealed by semantic clustering.",
     )
+
+    _projection_stability(plot_df)
+
+
+def _projection_stability(plot_df: pd.DataFrame) -> None:
+    """Say how much of the map is structure and how much is presentation.
+
+    PRD section 8.3 requires a projection to report neighbourhood preservation
+    and a cluster solution to report stability; without them a 2D picture reads
+    as stronger evidence than the high-dimensional geometry supports.
+    """
+    if "theme_label" not in plot_df.columns:
+        return
+    points = plot_df.dropna(subset=["doi", "map_x", "map_y", "theme_label"])
+    points = points.drop_duplicates(subset=["doi"])
+    if len(points) < 10:
+        return
+
+    result = loaders.semantic_stability(
+        tuple(
+            (str(row.doi), str(row.theme_label), float(row.map_x), float(row.map_y))
+            for row in points.itertuples()
+        )
+    )
+    if not result or not result.get("valid"):
+        return
+
+    with st.expander("Projection and cluster stability", expanded=False):
+        metric_row(
+            [
+                (
+                    "\U0001f504 Bootstrap ARI (mean)",
+                    f"{result['bootstrap_ari_mean']:.2f}",
+                    f"worst of {result['n_bootstrap']} resamples: "
+                    f"{result['bootstrap_ari_min']:.2f}",
+                ),
+                (
+                    "\U0001f9ed Projection trustworthiness",
+                    f"{result['projection_trustworthiness']:.2f}",
+                    "Share of 2D neighbours that are also neighbours in the clustering space",
+                ),
+                (
+                    "\U0001f3af Themes compared",
+                    f"{result['clusters']}",
+                    f"over {len(points):,} embedded abstracts",
+                ),
+            ]
+        )
+        st.caption(
+            "ARI near 1 means the same articles group together when the sample and the seed "
+            "change; a low value means the theme boundaries are a property of this particular "
+            "run. Trustworthiness below roughly 0.9 means the map places points next to each "
+            "other that are far apart in the space the themes were built in \u2014 read clusters, "
+            "not distances. Both are measured in that shared PCA space rather than the raw "
+            "384-dimensional one, because that is where the clustering actually happened. "
+            "Theme numbering is not stable across runs and carries no ontological claim."
+        )
 
 
 def _add_theme_labels(fig, plot_df: pd.DataFrame) -> None:
@@ -697,8 +754,8 @@ def _add_theme_labels(fig, plot_df: pd.DataFrame) -> None:
 def _semantic_novelty_panel(scored: pd.DataFrame) -> None:
     st.subheader("Semantic isolation in embedding space")
     st.caption(
-        "It measures the mean distance to the nearest $k$-neighbors in the 384D vector space."
-        "High values indicate documents isolated from the neighbors of the corpus."
+        "It measures the mean distance to the nearest $k$-neighbors in the 384D vector space. "
+        "High values indicate documents isolated from the neighbors of the corpus. "
         "only, innovation or interdisciplinarity."
     )
 
@@ -941,14 +998,14 @@ def _themes(scored: pd.DataFrame) -> None:
     )
 
     hovertemplate = (
-        "<b>%{fullData.name}</b><br>"
+        "<b>%{fullData.name}</b><br> "
         "📅 <b>Year:</b> %{x}<br>"
         + (
             "📊 <b>Participation (softened):</b> %{y:.1f}%<br>"
             if is_relative
             else "📚 <b>Volume (smooth):</b> %{y:.1f} articles<br>"
         )
-        + "📚 <b>Real volume of the year:</b> %{customdata[0]:.0f} articles (%{customdata[1]:.1f}%)"
+        + "📚 <b>Real volume of the year:</b> %{customdata[0]:.0f} articles (%{customdata[1]:.1f}%) "
         "<extra></extra>"
     )
     fig.update_traces(hovertemplate=hovertemplate)
@@ -983,11 +1040,11 @@ def _themes(scored: pd.DataFrame) -> None:
     )
 
     chart_caption = (
-        "Thematic evolution with continuous filling and moving average: eliminates distortions of sparse years"
-        "and reveals where the scientific attention migrated."
+        "Thematic evolution with continuous filling and moving average: eliminates distortions of sparse years "
+        "and reveals where the scientific attention migrated. "
         "of topics such as electrical mobility and distributed storage."
         if is_relative
-        else "Absolute volume of articles per theme in each year: reveals the growth of the corpus as a whole"
+        else "Absolute volume of articles per theme in each year: reveals the growth of the corpus as a whole "
         "and the accelerated expansion of scientific production in the last two decades."
     )
 
@@ -1001,8 +1058,8 @@ def _themes(scored: pd.DataFrame) -> None:
     st.divider()
     st.subheader("🧭 Thematic Drift")
     st.caption(
-        "Change of the center of mass of each theme over three historical times"
-        "(1990–2010, 2011–2018, 2019-2026)."
+        "Change of the center of mass of each theme over three historical times "
+        "(1990–2010, 2011–2018, 2019-2026). "
         "Conceptual of each line of research shifted in the semantic plan."
     )
     if (
@@ -1072,9 +1129,9 @@ def _duplicates() -> None:
         else pd.Series(dtype="object")
     )
     st.caption(
-        "The DOI is the only reliable deduplication key of this corpus (see `CLAUDE.md`), then the"
+        "The DOI is the only reliable deduplication key of this corpus (see `CLAUDE.md`), then the "
         "the same work published under two DOIs may survive as two records. These pairs "
-        "were detected by the similarity of the summary and wait for a human decision."
+        "were detected by the similarity of the summary and wait for a human decision. "
         "remains only read; register the decision with `lake-research-map duplicates`."
     )
 

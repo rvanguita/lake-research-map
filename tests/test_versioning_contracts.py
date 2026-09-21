@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import os
-from datetime import UTC, datetime
+from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -39,7 +41,7 @@ from lake_research_map.quality import (
     semantic_contract,
 )
 from lake_research_map.transform.bronze_articles import build_bronze_articles
-from lake_research_map.transform.embeddings import EMBED_MODEL_NAME
+from lake_research_map.transform.embeddings import EMBED_MODEL_NAME, EMBED_MODEL_REVISION
 from lake_research_map.transform.versioned_gold import (
     build_dataset_embeddings,
     build_dataset_gold,
@@ -267,6 +269,11 @@ def _candidate(session, version_id: str, doi: str, value: float) -> None:
             embedding=vector.tolist(),
             embedding_bin=vector.tobytes(),
             embed_model=EMBED_MODEL_NAME,
+            text_sha256=hashlib.sha256(doi.encode("utf-8")).hexdigest(),
+            embed_revision=EMBED_MODEL_REVISION,
+            embedding_dim=384,
+            embedding_dtype="float32",
+            embedding_normalized=True,
         )
     )
     session.add(
@@ -334,6 +341,12 @@ def test_publication_and_reactivation_restore_exact_gold_snapshot(gold_session):
     assert [row.doi for row in gold_session.scalars(select(Semantics)).all()] == ["10.1/first"]
     state = gold_session.get(PublicationState, 1)
     assert state.active_version_id == first_id
+
+
+@contextmanager
+def _null_lock(execution_id):
+    """SQLite has no advisory lock; the recovery path takes one unconditionally."""
+    yield
 
 
 def test_versions_cli_dispatches_without_starting_pipeline(monkeypatch):
@@ -492,6 +505,11 @@ def test_full_pipeline_correlates_stages_and_publishes_only_after_gates(monkeypa
             row.embedding = vector.tolist()
             row.embedding_bin = vector.tobytes()
             row.embed_model = EMBED_MODEL_NAME
+            row.text_sha256 = hashlib.sha256(row.text.encode("utf-8")).hexdigest()
+            row.embed_revision = EMBED_MODEL_REVISION
+            row.embedding_dim = 384
+            row.embedding_dtype = "float32"
+            row.embedding_normalized = True
         session.flush()
         return {"embedded": len(rows), "already_embedded": 0, "total_chunks": len(rows)}
 
@@ -640,6 +658,11 @@ def test_golden_corpus_add_edit_rename_remove_and_reactivate(monkeypatch, tmp_pa
             row.embedding = vector.tolist()
             row.embedding_bin = vector.tobytes()
             row.embed_model = EMBED_MODEL_NAME
+            row.text_sha256 = hashlib.sha256(row.text.encode("utf-8")).hexdigest()
+            row.embed_revision = EMBED_MODEL_REVISION
+            row.embedding_dim = 384
+            row.embedding_dtype = "float32"
+            row.embedding_normalized = True
         session.flush()
         return {"embedded": len(rows), "already_embedded": 0, "total_chunks": len(rows)}
 
@@ -755,3 +778,57 @@ def test_golden_corpus_add_edit_rename_remove_and_reactivate(monkeypatch, tmp_pa
         assert revised.title == "First planning study revised"
     finally:
         gold_session.close()
+
+
+def test_recover_stale_clears_executions_with_no_heartbeat(monkeypatch, gold_session):
+    """An abandoned run usually has NO heartbeat at all, not an old one.
+
+    Requiring `heartbeat_at IS NOT NULL` made the recovery silently skip every
+    execution killed before its first batch (and every one predating the
+    column), which is exactly the population it exists to clear.
+    """
+    from lake_research_map.db.gold_models import PipelineExecution, PipelineRun
+
+    stale_start = datetime.now(UTC).replace(tzinfo=None) - timedelta(hours=6)
+    gold_session.add(
+        PipelineExecution(
+            execution_id="abandoned",
+            requested_stage="all",
+            trigger="cli",
+            status="running",
+            started_at=stale_start,
+            heartbeat_at=None,
+        )
+    )
+    gold_session.add(
+        PipelineRun(
+            execution_id="abandoned",
+            stage="embed",
+            status="running",
+            started_at=stale_start,
+            # The model declares these NOT NULL, so an in-flight row carries
+            # placeholders until the stage finishes; recovery must overwrite them.
+            finished_at=stale_start,
+            duration_seconds=0.0,
+            sequence=1,
+            attempt=1,
+        )
+    )
+    gold_session.commit()
+
+    monkeypatch.setattr(pipeline, "bootstrap", lambda: None)
+    monkeypatch.setattr(pipeline, "get_session", lambda layer: gold_session)
+    monkeypatch.setattr(pipeline, "_pipeline_lock", _null_lock)
+    monkeypatch.setattr(gold_session, "close", lambda: None)
+
+    pipeline._run_maintenance_command(
+        SimpleNamespace(maintenance_action="recover-stale", older_than_minutes=30)
+    )
+
+    execution = gold_session.get(PipelineExecution, "abandoned")
+    assert execution.status == "error"
+    assert execution.error_message == "recovered after stale heartbeat"
+    run_row = gold_session.scalars(
+        select(PipelineRun).where(PipelineRun.execution_id == "abandoned")
+    ).one()
+    assert run_row.status == "error"
