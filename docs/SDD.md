@@ -1,295 +1,358 @@
 # System Design Document — lake-research-map
 
-See [`../README.md`](../README.md) for a quick orientation, [`PRD.md`](PRD.md) for domain motivation, and
-[`ROADMAP.md`](ROADMAP.md) for the strategic research and improvement backlog.
-`../CLAUDE.md` remains the canonical reference for source-data quirks (BibTeX parsing gotchas, IEEE/Elsevier
-field differences, DOI format normalization) — this document cross-references it rather than repeating it.
+**Status:** Current architecture plus approved target design, including versioned publication and executable contracts delivered on 2026-09-21
 
-## 1. Architecture overview
+**Evidence cutoff:** 2026-09-21
 
+**Related documents:** [PRD.md](PRD.md), [ROADMAP.md](ROADMAP.md), [METHODOLOGY.md](METHODOLOGY.md)
+
+This document distinguishes facts about the running implementation from approved changes that remain on the roadmap. Statements marked **Current** describe code in the repository. Statements marked **Target** are design decisions whose delivery is tracked in `ROADMAP.md`.
+
+## 1. System context
+
+`lake-research-map` converts manually collected publisher exports into an auditable literature corpus and a read-only analytical application.
+
+```text
+IEEE CSV/BibTeX ─┐
+Elsevier BibTeX ─┼─> Raw -> Bronze -> Silver -> Gold -> Embed -> Semantic
+Local PDFs ──────┘                    │         │                  │
+                                     │         └─ curated chunks ┘
+OpenAlex ----------------------------┘
+                                                │
+CLI <-------------------------------------------┤
+Airflow ----------------------------------------┤
+Streamlit dashboard ----------------------------┘
 ```
-                 ┌──────────────┐       ┌──────────────┐
-data/ieee/   ──▶ │              │       │  Streamlit   │──▶ browser (dashboard)
-data/elsevier/──▶│  CLI stages  │──MySQL│  dashboard   │
-data/articles/──▶│ (pipeline.py)│       │              │──▶ Airflow REST API (trigger/poll)
-                 └──────────────┘       └──────────────┘
-                        ▲                      │
-                        └──── BashOperator ────┘
-                          (Airflow DAGs)
-```
 
-- **Storage**: one MySQL database per medallion layer (`raw`, `bronze`, `silver`, `gold` — named plainly
-  after the layer, no prefix), same table names reused across databases where the schema carries forward.
-  These databases are **shared with unrelated projects** on the same MySQL server (e.g. `bronze` also holds
-  `fastf1_results`, `personal_expenses`); the pipeline only ever creates/touches its own `lit_`-prefixed
-  tables within them. SQLAlchemy 2.0 declarative models, one `Base`/module set per layer under
-  `src/lake_research_map/db/`.
-- **Compute**: pure Python/pandas transforms, no Spark or distributed processing — the corpus is 1,831
-  articles and 6,235 chunks (measured 2026-09-17), so single-process batch jobs are sufficient. Embeddings
-  use local ONNX-accelerated inference (`fastembed`), and vector representations are serialized as raw
-  float32 bytes (`LargeBinary`), eliminating JSON parsing overhead.
-- **Stages**: `raw → bronze → silver → gold → embed → semantic`, each a `run_<stage>()` in `pipeline.py`
-  wrapped by `_record_run()` to persist execution metadata into `gold.lit_pipeline_runs`. Each stage maps
-  1:1 to an Airflow DAG.
-- **Orchestration**: Apache Airflow (`airflow/dags/lake_research_map_dags.py`), used purely as a scheduler/UI
-  layer over the same CLI the developer runs locally — DAG tasks are `BashOperator` calls to
-  `uv run lake-research-map --stage <stage>`, so pipeline logic has zero Airflow import dependency and behaves
-  identically whether triggered from a terminal or from Airflow. Verified in CI via `tests/test_dag_import.py`.
-- **UI**: Streamlit multipage app (`src/lake_research_map/dashboard/`), read-only against the four MySQL
-  databases except for pipeline trigger actions routed through Airflow's REST API.
-- **Deployment**: Docker Compose with two services (`dashboard`, `airflow`), see §6.
+### 1.1 Architectural boundaries
 
-## 2. Data model
+- MySQL contains four databases named `raw`, `bronze`, `silver`, and `gold`.
+- Those databases are shared with unrelated projects. This application may access only `lit_*` tables.
+- Pipeline stages are Python functions invoked by the same CLI locally and through Airflow.
+- Dashboard pages read MySQL and trigger controlled Airflow DAGs; they do not write analytical tables directly.
+- Mathematical functions live outside page controllers and must not import Streamlit.
+- The current corpus is small enough for single-process pandas/NumPy/scikit-learn execution. Distributed compute is not justified without measured pressure.
 
-### 2.1 Layer-by-layer schema
+## 2. Current component architecture
 
-**raw** (database `raw`, `src/lake_research_map/db/raw_models.py`) — verbatim ingestion, one table per source
-artifact type, nothing normalized or deduplicated:
-
-| Table | Purpose | Key fields |
+| Component | Responsibility | Writes |
 |---|---|---|
-| `lit_source_files` | Manifest of every ingested file, for idempotent re-runs | `path` (unique), `source`, `kind`, `sha256`, `size_bytes`, `mtime` |
-| `lit_config` | Parsed provenance from each source's `config.csv` | `source` (unique), `query_string`, `filters`, `year_range`, `search_url`, `raw_text` |
-| `lit_ieee_csv_rows` | One row per line of `data/ieee/export*.csv` | `fields` (JSON blob of all CSV columns), `doi`, unique on `(source_file, row_index)` |
-| `lit_bib_entries` | One row per BibTeX entry (either source) | `source`, `bib_key`, `entry_type`, `fields` (JSON), `doi`, unique on `(source, bib_key, source_file)` |
-| `lit_pdf_files` | Inventory of `data/articles/*.pdf` | `filename` (unique), `path`, `sha256`, `size_bytes` |
+| `ingest/` | Parse publisher files, source configuration, PDF inventory, and enrichment cache | Raw tables and enrichment cache |
+| `transform/bronze_articles.py` | Harmonize IEEE and Elsevier records | `bronze.lit_articles` |
+| `transform/silver_articles.py` | DOI deduplication, rejection audit, non-article flags, PDF matching | Silver tables |
+| `transform/gold_articles.py` | Apply approved merges; build curated articles and reconcile chunks | Gold articles/chunks |
+| `transform/embeddings.py` | Embed pending chunks locally | Chunk vector fields |
+| `transform/semantics.py` | Contrastive scoring, themes, projection, duplicate candidates | Semantic tables |
+| `transform/duplicate_resolution.py` | Validate persistent merge/keep/undo decisions | Duplicate overrides |
+| `pipeline.py` | Bootstrap, stage routing, CLI, and run telemetry | Pipeline-run records |
+| Airflow DAGs | Schedule/trigger the same CLI commands | Airflow metadata only |
+| `dashboard/data.py` | Fault-tolerant SQL reads returning DataFrames | None |
+| `dashboard/loaders.py` | Cached normalization, joins, and filtered datasets | Streamlit cache only |
+| `dashboard/analytics.py`, `forecasting.py` | Pure analytical computation | None |
+| `dashboard/charts.py` | Plotly figure construction and chart contracts | None |
+| `dashboard/pages/` | Portuguese presentation controllers | None |
 
-**bronze** (database `bronze`, `db/bronze_models.py`) — cross-source consolidation begins here: IEEE
-(csv+bib) and Elsevier (bib) unioned into one common, typed `lit_articles` schema. Pure pagination
-duplicates within a source are collapsed; there is no cross-source dedup or quality filtering yet.
-Automatic enrichment from OpenAlex API is applied to backfill citation counts and reference counts.
+## 3. Data architecture and contracts
 
-`lit_articles`: `source`, `source_id`, `record_type`, `doi`, `title`, `authors[]` (JSON), `year`, `venue`,
-`volume`, `issue`, `pages`, `issn`, `url`, `abstract`, `keywords[]` (JSON), `citation_count`,
-`reference_count`, `raw_bib_id`/`raw_csv_id` (back-references into raw), unique on `(source, source_id)`.
+### 3.1 Contract conventions
 
-**silver** (database `silver`, `db/silver_models.py`) — cleaned, conformed, deduplicated: one row per
-normalized DOI (the reliable cross-source join key — normalize by stripping the `https://doi.org/` prefix and
-casefolding, per `CLAUDE.md`), with quality flags, explicit non-article tagging, and a fuzzy-matched PDF link.
+Every durable dataset must define:
 
-`lit_articles`: `doi` (unique), `sources[]` (JSON — which publisher(s) contributed), `record_type`, `title`,
-`authors[]`, `year`, `venue`, `volume`, `issue`, `pages`, `url`, `abstract`, `keywords[]`, `citation_count`,
-`reference_count`, quality flags (`has_abstract`, `has_doi`, `is_duplicate_merge`), `is_non_article` (boolean,
-flagging front matter, prefaces, and book chapters), PDF link (`has_pdf`, `pdf_path`, `pdf_match_score`),
-`bronze_ids[]` (JSON provenance list).
+- **Grain:** what one row represents.
+- **Logical key:** the fields that uniquely identify the row.
+- **Time semantics:** source event/publication time, ingestion time, and observation time where applicable.
+- **Lineage:** input dataset version and producing run.
+- **Quality gates:** invariants required before publication.
+- **Change behavior:** insert, update, removal, backfill, and rollback rules.
 
-`lit_rejected`: audit log of dropped bronze records lacking a valid DOI: `bronze_id`, `source`, `source_id`,
-`title`, `reason` (e.g. `'no_doi'`), `rejected_at`.
+JSON list fields are convenient at current scale but are not substitutes for identity resolution or relational constraints. A future normalized table is justified only when it enables a required query, override workflow, or integrity rule.
 
-**gold** (database `gold`, `db/gold_models.py`) — curated, RAG-ready: `lit_articles` is what a human or agent
-scans to decide which paper to cite; `lit_chunks` is the RAG ingestion unit.
+### 3.2 Raw database
 
-`lit_articles`: `doi` (unique), `sources[]`, `title`, `authors[]`, `year`, `venue`, `keywords[]`, `abstract`,
-`citation_count`, `reference_count`, `url`, `has_pdf`, `pdf_path`, `is_non_article`, `silver_id` (back-reference).
+| Table | Grain and key | Current contract | Known limitation |
+|---|---|---|---|
+| `lit_source_files` | One active path; unique `path` | SHA-256 plus dataset/revision lineage | Active projection only; immutable history is held by revisions and manifests |
+| `lit_config` | One source; unique `source` | Parsed search provenance plus raw text | Multiple searches/versions per source cannot coexist |
+| `lit_ieee_csv_rows` | One active CSV row; `(source_file, row_index)` | Original fields retained as JSON with version/revision lineage | Historical parsed rows are replayed from archived source bytes rather than retained inline |
+| `lit_bib_entries` | One parsed entry; `(source, bib_key, source_file)` | Robust BibTeX parsing, including adjacent IEEE entries | Parser output is preserved, but not the exact byte range per entry |
+| `lit_pdf_files` | One active file; unique `filename` | Original path, archive path, hash, size, and lineage | Filename uniqueness still assumes a flat PDF directory |
 
-`lit_chunks`: `doi` (value-FK to `lit_articles.doi`), `seq`, `chunk_type` (`abstract` | `fulltext`), `text`,
-`char_len`, `embedding` (JSON, legacy compatibility), `embedding_bin` (LargeBinary, raw float32 bytes for
-fast vector search), `embed_model` (String(128)).
+**Current:** every consumed CSV, BibTeX, configuration, enrichment cache, and PDF is retained once in `data/.lake_research_map/objects` by SHA-256. `lit_source_blobs`, `lit_source_revisions`, `lit_dataset_source_files`, and `lit_source_changes` preserve immutable manifests and add/modify/rename/remove events. Raw child rows reference their version and revision; missing paths and children are removed transactionally from the active projection.
 
-`lit_semantics` (one row per article, written by the `semantic` stage): `doi` (unique),
-`relevance_score` (cosine to the review's topic anchor), `offtopic_score` (cosine to the logistics
-anchor), `theme_id`, `theme_label`, `map_x`/`map_y` (2D coordinates), `embed_model`. The screening signal
-is the derived contrastive margin `relevance_score - offtopic_score`, whose zero marks the boundary between
-distribution planning and logistics.
+### 3.3 Bronze database
 
-`lit_duplicate_pairs`: `doi_a`, `doi_b`, `similarity` — distinct DOIs whose abstracts are near-identical
-(cosine ≥ 0.95).
+`bronze.lit_articles` has one harmonized source record, keyed by `(source, source_id)`. It normalizes DOI, authors, keywords, numeric fields, and publication metadata while retaining Raw back-references. IEEE-only metadata is nullable/not applicable for Elsevier.
 
-`lit_pipeline_runs`: execution history table written by `pipeline.py`: `id`, `stage`, `started_at`,
-`finished_at`, `duration_seconds`, `stats` (JSON), `status` (`'success'` | `'error'`), `error_message`.
+Current enrichment fills missing citation/reference counts from `data/enrichment_cache.json`; IEEE values take precedence when present.
 
-### 2.2 Provenance chain
+**Current contract:**
 
-```
-raw.lit_bib_entries / raw.lit_ieee_csv_rows
-        │  (raw_bib_id / raw_csv_id)
-        ▼
-bronze.lit_articles ──▶ data/enrichment_cache.json (OpenAlex enrichment)
-        │  (bronze_ids[])
-        ├──▶ silver.lit_rejected (audit of dropped rows with no DOI)
-        ▼
-silver.lit_articles  (one row per normalized DOI, carries is_non_article)
-        │  (silver_id)
-        ▼
-gold.lit_articles  ──▶  gold.lit_chunks  ──▶  lit_chunks.embedding_bin (embed stage)
-        ▲                      │                 (LargeBinary float32)
-        │                      ▼
-lit_pipeline_runs     gold.lit_semantics + gold.lit_duplicate_pairs
-(run tracking)                 (semantic stage: UMAP/PCA/t-SNE & drift)
-```
+- Each row references its Raw source revision and output dataset version.
+- Rows absent from the active Raw snapshot are removed during a transactional rebuild.
+- Citation/reference enrichment is stored as an observation with provider, `observed_at`, work identifier, response status, and optional raw response hash.
+- Precedence is deterministic and separately documented for identity fields, descriptive metadata, and time-varying metrics.
 
-## 3. Ingestion & transform components
+### 3.4 Silver database
 
-### `ingest/` (raw layer, `src/lake_research_map/ingest/`)
+`silver.lit_articles` has one row per normalized DOI. `silver.lit_rejected` has one rejected Bronze record with its reason and timestamp. Silver is currently delete-and-rebuild derived state.
 
-- `raw_csv.py` — parses `data/ieee/export*.csv` into `lit_ieee_csv_rows`.
-- `raw_bib.py` — parses all `.bib` files from both sources using `bibtexparser`, handling IEEE's no-separator
-  entries cleanly.
-- `raw_config.py` — parses search provenance from `config.csv`.
-- `raw_pdfs.py` — inventories `data/articles/*.pdf`.
-- `hashing.py` — sha256 helper for `lit_source_files` manifest idempotency.
-- `enrichment.py` — loads `data/enrichment_cache.json` for bronze upsert backfill.
-- `openalex.py` — automated client fetching citation and reference counts from OpenAlex REST API.
+Required invariants:
 
-### `transform/` (bronze/silver/gold/embed/semantic, `src/lake_research_map/transform/`)
+- DOI is non-empty, normalized, and unique.
+- Every active Bronze row is either represented through `bronze_ids` or present in `lit_rejected`.
+- `has_abstract`, `has_pdf`, and `is_non_article` agree with their supporting fields.
+- PDF links reference active Raw PDF inventory rows.
+- Source-specific fields carry explicit applicability/coverage semantics.
 
-- `bronze_articles.py` — normalizes raw records into `bronze.lit_articles`.
-- `silver_articles.py` — dedup by DOI, sets quality flags, identifies non-articles (`_is_non_article`),
-  persists dropped rows into `silver.lit_rejected`, and fuzzy-matches PDFs via `rapidfuzz`.
-- `gold_articles.py` — writes curated `gold.lit_articles` and reconciles `gold.lit_chunks` (invalidation-aware,
-  nulling `embedding` and `embedding_bin` only when chunk text changed).
-- `embeddings.py` — embeds missing chunks via `fastembed` (`BAAI/bge-small-en-v1.5`), writing both `embedding`
-  (JSON) and `embedding_bin` (`np.ndarray.tobytes()`).
-- `semantics.py` — reads binary embeddings first; calculates contrastive relevance margins; discovers themes;
-  projects coordinates via t-SNE, UMAP (`project_umap`), or PCA (`project_pca_2d`); computes thematic
-  centroids (`compute_thematic_centroids`) and chronological drift trajectories (`compute_temporal_drift`);
-  and scores semantic novelty (`compute_semantic_novelty`). Accepts injected anchor vectors for tests.
-- `screening_calibration.py` — generates stratified evaluation samples (`generate_stratified_screening_sample`)
-  across 4 margin strata and evaluates threshold sensitivity/specificity for SLR auditability.
+PDF matching currently uses `rapidfuzz.fuzz.token_sort_ratio` with threshold 85. The project guideline that specifies `token_set_ratio` conflicts with the implementation; `WP-05` requires benchmarking both on a reviewed match set before one becomes the canonical contract.
 
-## 4. Idempotency & re-run model
+### 3.5 Gold database
 
-- **Raw layer**: `lit_source_files.sha256` + unique `path` skips unchanged files.
-- **Bronze/silver/gold**: `build_*` functions use natural keys (`(source, source_id)` for bronze, `doi` for
-  silver/gold) with `UniqueConstraint`s.
-- **Gold chunks**: reconciled against text hash, so unchanged text keeps its vector and avoids re-embedding.
-- **Embed**: processes only `embedding_bin IS NULL` or `embedding IS NULL`.
-- **Semantic**: rewrites `lit_semantics` and `lit_duplicate_pairs` atomically.
-- **Bootstrap**: `db/bootstrap.py` creates missing tables and applies additive columns defined in
-  `_ADDITIVE_COLUMNS` (`is_non_article`, `embedding_bin`, etc.) across all databases.
+| Table | Grain | Current logical key | Required target constraint |
+|---|---|---|---|
+| `lit_articles` | One curated work after approved merges | `doi` | Unique DOI plus dataset-version lineage |
+| `lit_chunks` | One passage | `(doi, chunk_type, seq)` by convention | Database uniqueness, text hash, parent integrity |
+| `lit_semantics` | One semantic record per article/run | `doi` | `(dataset_version, semantic_run, doi)` or versioned replacement |
+| `lit_duplicate_pairs` | One unresolved unordered pair | Pair by convention | Ordered unique pair and semantic-run lineage |
+| `lit_duplicate_overrides` | One reviewed unordered pair | Unique ordered pair | Existing checks plus reviewer/version provenance |
+| `lit_pipeline_runs` | One stage attempt | Auto-increment ID | Parent execution, input/output versions, sequence, attempt, metrics, and outcome |
+| `lit_dataset_*` snapshots | One Gold output row per version/logical key | Composite version key | Candidate and historical Gold state used for atomic publication and rollback |
+| `lit_dataset_versions` | One logical corpus state | Deterministic SHA-256 | Source/config/code/curation hashes and candidate/active/superseded/failed state |
+| `lit_quality_results` | One contract result per stage attempt/check | `(stage_run_id, check_id)` | Severity, observed/expected values, details, and pass/fail |
 
-## 5. Orchestration
+Gold articles are rebuilt, while chunks are reconciled by comparing stored and desired text. Documentation must not call this a “text-hash comparison” until a hash column exists. Unchanged text retains its vector; changed text nulls vector fields; stale chunks are removed.
 
-`airflow/dags/lake_research_map_dags.py` defines seven DAGs, all `schedule=None` (manual/API trigger only):
-- `lake_research_map_raw/bronze/silver/gold/embed/semantic` and `lake_research_map_all`.
-- Executed via `BashOperator` invoking `uv run lake-research-map --stage <stage>`.
-- Client integration via `dashboard/airflow_client.py` and `dashboard/pipeline_control.py`.
+**Current:** Gold is the canonical input for corpus-level dashboard analyses when its minimum readiness contract passes: the table must be non-empty; DOI must be populated and unique; and the common analytical columns must exist. If that contract fails, the selector falls back to Silver and then Bronze, and every analytical page displays a degraded-mode warning with the reason. This protects approved Gold merges without turning incomplete initialization into a hard dashboard failure.
 
-## 6. Deployment topology
+**Current extension:** the pipeline only materializes a candidate into the live Gold projection after persisted blocking checks pass. `WP-04` still needs to make every analytical loader verify the publication pointer explicitly rather than relying on the materialized projection plus the legacy structural readiness check.
 
-`docker-compose.yml` defines two services:
-- **`dashboard`**: Streamlit on `:8501`, connecting to MySQL and Airflow REST API.
-- **`airflow`**: Standalone Airflow on `:8080`, running DAGs with bind-mounted repo codebase.
+### 3.6 Embedding contract
 
-## 7. Retrieval & Advanced Analytics
+Current versioned embeddings use `BAAI/bge-small-en-v1.5`, float32 vectors, binary BLOB storage, and a JSON compatibility copy. Candidate work is selected when the binary vector is absent or its model contract differs. The legacy direct transform still selects by the JSON field and remains scheduled for removal under `WP-06`.
 
-The analytical engine separates pure statistical/mathematical computation (`analytics.py`, `forecasting.py`)
-from the UI layer (`pages/`), enabling independent unit testing without a Streamlit or MySQL runtime:
+The target embedding contract requires:
 
-### 7.1 Retrieval, Embeddings & Manifold Geometry
-- `dashboard/search.py`:
-  - `semantic_search`: in-process vector similarity search supporting both `gold.lit_chunks.embedding_bin`
-    (zero-copy `np.frombuffer(dtype=np.float32)`) and JSON fallbacks.
-  - `build_vector_index` and `search_vector_index`: Faiss (IndexFlatIP / IndexFlatL2) and accelerated linear retrieval.
-  - `bm25_search`: pure NumPy/Python BM25 Okapi lexical search for exact acronym and network name matching.
-  - `hybrid_search_rrf`: Reciprocal Rank Fusion ($RRF(d) = \sum \frac{1}{60 + \text{rank}(d)}$) combining dense vectors and BM25.
-- `dashboard/loaders.py`:
-  - `abstract_embeddings`: cached zero-copy matrix loading ($\mathbb{R}^{N \times 384}$) directly from database binary BLOBs.
-  - `alternative_projections`: cached PCA 2D and UMAP manifold coordinates for interactive projection toggling.
-  - `semantic_novelty_scores`: Cosine Outlier Factor measuring distance to global corpus centroid and k-NN dispersion.
+- `text_sha256`, model name, immutable model revision, vector dimension, dtype, normalization mode, and embedded timestamp.
+- Pending means binary vector absent, text hash changed, or model contract incompatible.
+- Binary length equals `dimension * 4`; non-finite vectors fail the stage.
+- JSON fallback is transitional and can be retired only after a verified migration.
 
-### 7.2 Core Bibliometrics & Heavy-Tail Distribution Fitting
-- `analytics.py`:
-  - `valid_years`, `source_counts_by`, `cumulative_by_source`, `cumulative_by_category`, `cumulative_by_venue`, `source_means`: foundational data transforms.
-  - `fit_heavy_tail_distributions`: MLE fits for Power-Law (Pareto), Log-Normal, and Exponential distributions with Kolmogorov-Smirnov goodness-of-fit testing.
-  - `age_normalized_citations`: annualized citation velocity ($c / \text{age}$) and cohort-relative z-scores/percentiles.
-  - `mann_kendall_trend`: vectorized non-parametric monotonic trend test ($S, z, p$) with Sen's robust slope estimator.
-  - `lotka_law_analysis`: author productivity distribution fitted via Weighted Least Squares (WLS) on log-log coordinates ($f(x) = C / x^\alpha$).
-  - `bradford_zones`: concentric scattering zone partitioning ($1 : k : k^2$) across journal venues.
-  - `zipf_law_analysis`: word frequency-rank power-law regression on technical vocabulary ($\gamma \approx -1$, $R^2$).
-  - `citation_determinants_glm`: Poisson GLM regression estimating Incidence Rate Ratio (IRR) for publication year, team size, references, and venue prestige.
+### 3.7 Semantic and screening contract
 
-### 7.3 Complex Networks, Author Trajectories & Collaboration
-- `analytics.py`:
-  - `author_year_matrix`, `researchers_by_year`, `cumulative_researchers`: longitudinal author presence and influx tracking.
-  - `author_productivity_trend`: linear trend slope fitted over contiguous career horizons (inactivity gaps filled with zeros to avoid artificial positive bias).
-  - `output_impact_correlation`: Pearson and Spearman correlations between author publication volume and mean citation impact.
-  - `coauthorship_community_detection`: Louvain modularity clustering utilizing edge weights (`weight="weight"`) reflecting collaboration intensity.
-  - `graph_advanced_metrics`: Betweenness and Closeness centralities computed with inverted weights ($d = 1/w$) reflecting communication efficiency, alongside PageRank, density, clustering, and Small-World topology ($\sigma = \frac{C/C_{rand}}{L/L_{rand}}$).
-  - `analyze_coauthorship_partners`: breakdown of local vs. global recurrent and occasional coauthors.
+Semantic outputs derive from abstract embeddings. The current stage calculates two anchor similarities, KMeans themes in a shared PCA space, t-SNE coordinates, and near-duplicate pairs.
 
-### 7.4 Strategic Scientometrics, Semantic Space & Topic Dynamics
-- `analytics.py`:
-  - `callon_strategic_diagram`: Callon's Strategic Diagram (1991) positioning themes by internal density (cohesion) vs. external centrality across 4 quadrants.
-  - `keyword_cooccurrence_graph`: Jaccard-weighted keyword co-occurrence network with Louvain semantic communities and Fruchterman-Reingold layout.
-  - `thematic_centroids_similarity`: vectorized cosine similarity matrix ($C \cdot C^T$) between thematic centroids in $\mathbb{R}^{384}$.
-  - `thematic_radar_metrics`: 5-axis normalized maturity profiles (Recent Momentum, Theoretical Density, Citation Impact, Scope Adherence, Team Size).
-  - `multivariate_correlation_matrix`: pairwise Spearman rank correlation matrix across 7 bibliometric and semantic dimensions.
-  - `shannon_thematic_entropy`: longitudinal Shannon information entropy ($H = -\sum p_i \log_2 p_i$) and Gini-Simpson diversity.
-  - `geographic_collaboration_stats`: country productivity ranking, international coauthorship share, and bilateral collaboration matrices.
-  - `dynamic_topic_ctfidf`: class-based dynamic TF-IDF with shared global vocabulary tracking distinctive topic terminology across historical epochs.
-  - `detect_bibliometric_anomalies`: Isolation Forest outlier detection across multidimensional features with automated diagnostic rationales.
-  - `detect_structural_breaks`: CUSUM and Chow F-test changepoint detection uncovering historic regime shifts and inflection points.
-  - `conceptual_atypicality_analysis`: Brian Uzzi et al. (Science 2013) atypicality model quantifying rare keyword pairings and correlating with top 5% citations.
-  - `venue_semantic_clusters`: k-means ontological clustering of publication venues based on average $\mathbb{R}^{384}$ embeddings.
+The current quality gate rejects publication unless all candidate chunks have compatible finite binary embeddings and every eligible abstract has a semantic row. Semantic rows and duplicate candidates are versioned and materialized atomically with articles/chunks. Persisting the full parameter/model-revision manifest remains in `WP-06`.
 
-### 7.5 Methodological Synthesis, Solvers & Optimization Taxonomies
-- `analytics.py`:
-  - `optimization_methods_taxonomy`: pre-compiled regex identification and longitudinal tracking of 9 mathematical paradigms.
-  - `objective_functions_taxonomy`: extraction of 6 objective families (Costs, Losses, Reliability, Voltage, Emissions, Resilience), co-optimization matrix, and mono vs. multi-objective temporal ratio.
-  - `uncertainty_paradigms_analysis`: categorization of uncertainty modeling (Stochastic, Robust, Fuzzy, DRO, Chance-Constrained) cross-referenced with DER physical resources.
-  - `planning_time_horizons_analysis`: taxonomy of planning horizons (Multi-Stage Dynamic Expansion, Co-Optimization with Representative Days, Static).
-  - `computational_solvers_analysis`: mapping of algebraic modelers (GAMS, AMPL, Pyomo), exact solvers (CPLEX, Gurobi, MOSEK), scripting environments, and power simulators (OpenDSS, DIgSILENT).
-  - `mathematical_complexity_spectrum`: classification of formulation complexity (MILP, SOCP/SDP, MINLP/NLP, Metaheuristics, AI/RL).
-  - `benchmark_feeders_analysis`: IEEE benchmark feeder usage (33, 69, 123-bus, real utility grids) cross-referenced with DER resources.
-  - `author_impact_advanced_indices`: Hirsch $h$-index, Egghe $g$-index, Zhang $e$-index excess, and $i10$-index.
-  - `author_m_quotient_analysis`: Hirsch career velocity ($m = h / \Delta \text{years}$) evaluating academic trajectory pace.
-  - `text_readability_and_stylometrics`: linguistic complexity via Flesch Reading Ease (FRE), Flesch-Kincaid Grade Level (FKGL), and Type-Token Ratio (TTR).
-  - `citation_longevity_and_decay`: citation half-life calculation and identification of Evergreen fundamental papers.
+The current dashboard can export a deterministic four-stratum review sample and ingest one or more long-form CSV files in memory. It normalizes labels, rejects invalid/unknown decisions, preserves raw reviewers, gives explicit adjudication precedence, reports pairwise agreement when support is sufficient, and selects a candidate threshold on a 70% calibration split before evaluating it on a 30% holdout with stratified bootstrap intervals. Fewer than 40 resolved decisions or fewer than 10 observations in either class disables threshold recommendation. The result never changes filters or database state.
 
-### 7.6 Technological Frontiers, Disruption & Predictive Modeling
-- `analytics.py`:
-  - `price_index_analysis`: Derek de Solla Price's (1965) Index of theoretical youth (% references $\le 5$ years old).
-  - `sleeping_beauties_detection`: delayed recognition detection and Beauty Coefficient ($B$) computation (Ke et al., 2015).
-  - `disruption_index_estimation`: $CD$ disruption index calculation and team size correlation testing (Wu, Wang & Evans, Nature 2019).
-  - `open_access_impact_analysis`: Open Access Citation Advantage (OACA) and licensing dynamics.
-  - `technological_burst_detection`: Jon Kleinberg's (2002) burst detection modeling technology surges, peaks, and contemporary active frontiers.
-- `dashboard/forecasting.py`:
-  - `fit_and_forecast`: candidate regression benchmarking with expanding prediction intervals ($\sigma \sqrt{h}$) and rolling-origin cross-validation.
-  - `fit_quantile_forecast`: asymmetric Quantile Regression for P10, P50 (median), and P90 uncertainty bounds.
-  - `fit_bass_diffusion_nls`: continuous Non-Linear Least Squares Bass diffusion fitting via `scipy.optimize.curve_fit` with physical parameter bounds ($p, q > 0, m \ge \max Y$).
+Screening labels remain target governed data rather than dashboard session state. A durable label records DOI, reviewer, decision, reason, protocol version, timestamps, dataset version, and assignment. Adjudicated labels and calibrated thresholds remain distinct from raw reviewer labels.
 
-### 7.7 Dashboard UI Architecture & Visual Contracts
-- **Zero Chart Duplication Contract**: All 13 pages adhere to a strict non-repetition policy across tabs:
-  - `overview.py`: Executive macro overview; does not repeat exhaustive analytical charts from deep-dive pages.
-  - `production.py`: 3 chronological tabs (`Volume Anual`, `Crescimento Acumulado`, `Estratos CAPES/Qualis`).
-  - `topics.py`: Unified venue ranking with volume/impact toggle, unified CAPES/Qualis selector, Bradford zones, Semantic centroids, Zipf's law, c-TF-IDF, conceptual atypicality, and Chow structural breaks.
-  - `highlights.py`: 2 tabs (`Fundamentação Teórica` and `Dinâmica de Citações & Econometria`).
-  - `researchers.py`: Author Hub with 6 tabs (`Produtividade & Ranking`, `Liderança Científica`, `Trajetória Temporal`, `Colaboração & Redes`, `Linhas de Pesquisa`, `Leis Bibliométricas`).
-  - `synthesis.py`: 7 engineering optimization tabs (MILP/SOCP, Pareto Objectives, Uncertainty vs DERs, Planning Horizons, IEEE Feeders, Solvers/Simulators, Citation Longevity).
-  - `frontiers.py`: 5 innovation tabs (Price Index, Sleeping Beauties, CD Disruption Index, OACA, Kleinberg Bursts).
-  - `forecasting.py`: Volume forecasts, topic trajectories, and continuous Bass NLS diffusion.
-  - `semantics.py`: Screening margin, multi-projection 2D map, discovered themes, novelty score, duplicate pairs.
-- **Visual & Polar Chart Theme Contract**:
-  - All Plotly charts implement dynamic theme tokens (`theme_color`, `chart_theme_tokens`, `apply_chart_theme`).
-  - Polar and Radar charts (`thematic_radar_chart`) explicitly configure `paper_bgcolor="rgba(0,0,0,0)"` and `polar_bgcolor="rgba(0,0,0,0)"`, ensuring 100% transparent backgrounds and eliminating unsightly white bounding boxes in Streamlit dark mode.
-  - All layout containers and components enforce `width="stretch"`.
+## 4. Data flow, idempotency, and recovery
 
-## 8. Testing
+### 4.1 Current stage behavior
 
-`tests/` (pytest, `uv run pytest`) executes against in-memory SQLite sessions (one per medallion layer,
-defined in `tests/conftest.py`), requiring zero MySQL server connectivity:
+| Stage | Current behavior | Gap |
+|---|---|---|
+| Raw | Content-addressed scan, immutable manifest/revisions, transactional active reconciliation | Archive garbage collection is not automated |
+| Bronze | Transactional rebuild with file-qualified natural keys and dataset lineage | Enrichment observations are not yet independently versioned |
+| Silver | Transactional DOI rebuild/rejection audit with dataset lineage | PDF matcher validation remains in `WP-05` |
+| Gold | Build immutable candidate article/chunk snapshot; reuse compatible unchanged vectors | Database uniqueness for legacy live chunk keys remains application-enforced |
+| Embed | Fill candidate binary/JSON vectors and block incompatible/non-finite output | Immutable model revision/text hash remain in `WP-06` |
+| Semantic | Build candidate signals only at complete embedding coverage; publish all Gold outputs atomically | Full semantic-run parameter manifest remains in `WP-06` |
 
-**186 tests across 22 test files**:
-1. `test_raw_bib.py` — BibTeX parsing without separators, hash manifest idempotency.
-2. `test_bronze_articles.py` — DOI normalization, author/keyword splitting, type coercion.
-3. `test_silver_articles.py` — Title normalization, primary record merging, non-article flagging, PDF linking.
-4. `test_gold_articles.py` — Text chunking, overlap boundaries, chunk reconciliation, embedding retention.
-5. `test_semantics.py` — Relevance scores, contrastive margin, near-duplicates, theme discovery, injected anchors.
-6. `test_advanced_semantics.py` — PCA 2D, UMAP fallback, thematic centroids, temporal drift, semantic novelty / COF.
-7. `test_advanced_statistics.py` — Heavy-tail MLE & KS, age normalization, Mann-Kendall, Lotka, Bradford, Zipf's law, Louvain, PageRank, Closeness, Small-World, GLM.
-8. `test_advanced_ml.py` — Dynamic topic c-TF-IDF, Isolation Forest bibliometric anomaly detection, Quantile forecasting bounds, Bass diffusion parameter estimation.
-9. `test_strategic_analytics.py` — Callon's strategic diagram, keyword co-occurrence, centroid similarity, radar metrics, Spearman matrix, Shannon entropy, geographic collaboration.
-10. `test_synthesis_analytics.py` — Optimization taxonomy, IEEE benchmark feeders, author h/g/e/m-indices, stylometrics, citation longevity, objective functions, uncertainty paradigms, planning horizons, solvers, and complexity spectrum.
-11. `test_frontiers_analytics.py` — Price's index, sleeping beauties, disruption CD index, open access citation advantage, and Kleinberg burst detection.
-12. `test_screening_calibration.py` — Stratified sampling across margin strata, threshold sensitivity/specificity.
-13. `test_openalex_enrichment.py` — OpenAlex REST response parsing, incremental cache updates.
-14. `test_dag_import.py` — Airflow DAG module import and structural validation with mocked SDK.
-15. `test_bootstrap.py` — Additive column map validation and SQLite table generation.
-16. `test_analytics.py` — Core aggregation contracts, layer funnels, and data transformations.
-17. `test_analytics_authors.py` — Author identity canonicalization, matrix pivoting, and productivity slopes.
-18. `test_search.py` — Binary vector parsing, ranking order, null exclusion, top-k truncation, vector index building and retrieval.
-19. `test_forecasting.py` — Candidate model fitting, rolling-origin cross-validation, and Bass diffusion.
-20. `test_qualis.py` — CAPES/Qualis venue fuzzy matching, stratification tiers, and color mappings.
-21. `test_charts.py` — Plotly chart axis naming contracts, Lorenz curves, and polymorphic metric rows.
-22. `test_theme.py` — Dark/Light theme token contracts, contrast rules, transparent polar background contracts, and CSS chrome isolation.
+### 4.2 Current versioned run protocol
+
+1. Create or resume a parent execution shared by CLI/Airflow stage attempts; project-scoped advisory locking remains an operational hardening item.
+2. Create a parent run containing code revision, configuration hash, trigger, and requested stages.
+3. Scan inputs into a candidate dataset version and reconcile additions, changes, and removals.
+4. Execute each stage in a transaction or staging tables appropriate to its size.
+5. Run schema, uniqueness, referential, coverage, range, and business-rule checks.
+6. Publish the new version only if required gates pass; otherwise retain the previous active version.
+7. Record stage metrics, quality results, lineage, duration, and error details against the parent run.
+8. Invalidate dashboard caches after successful publication.
+
+Retry policy is stage-specific. Pure derived stages may retry safely; external enrichment uses bounded retries, timeouts, and durable response status; a failed batch does not masquerade as “not found.” Backfills create new versions rather than rewriting the evidential history.
+
+## 5. Additive schema evolution
+
+All unattended bootstrap changes remain additive. New columns are nullable during deployment, backfilled and validated, then enforced through application checks; destructive or non-null migrations require a separately reviewed migration path.
+
+| Proposed dataset | Purpose | Minimum fields |
+|---|---|---|
+| `gold.lit_dataset_versions` | Identify reproducible corpus states | **Implemented:** version ID, source/config/code/curation hashes, parent, status, timestamps |
+| `gold.lit_quality_results` | Persist contract outcomes | **Implemented:** version/run, check ID, severity, observed/expected, pass/fail, details |
+| `gold.lit_pipeline_executions` | Correlate stage attempts | **Implemented:** execution/workflow/trigger/version/status/timestamps |
+| `gold.lit_publication_state` | Separate published and working state | **Implemented:** active and working version pointers plus publishing execution |
+| `raw.lit_source_*` | Preserve source evidence and reconciliation | **Implemented:** blobs, revisions, version manifests, and per-file changes |
+| `gold.lit_screening_labels` | Preserve independent review evidence | DOI, reviewer, label, reason, protocol/version, timestamps |
+| `gold.lit_screening_models` | Preserve calibrated decisions | dataset/label version, anchors, threshold, metrics/CIs, validation split |
+| `bronze.lit_enrichment_observations` | Version time-varying external metadata | DOI, provider, observed time, counts, status, response hash |
+
+Existing tables gain version/run references only when their producer and readers can populate them coherently. No table should carry a decorative lineage column that remains null indefinitely.
+
+## 6. Analytical architecture
+
+### 6.1 Separation of concerns
+
+- `data.py`: parameterized/read-only SQL and graceful absence handling.
+- `loaders.py`: the only `@st.cache_data` layer; normalization, compatible joins, and cache bounds.
+- `analytics.py` and `forecasting.py`: deterministic pure functions with explicit inputs and outputs.
+- `charts.py`: theme-aware figure construction without data access.
+- `components.py`: reusable Streamlit presentation and controlled Airflow actions.
+- `pages/*.py`: one zero-argument `render()` controller per registered page, as required by this repository's established architecture.
+
+The repository intentionally retains callable `render()` page controllers even though generic Streamlit guidance favors direct page scripts; changing that convention would require coordinated navigation and test refactoring with no current product benefit.
+
+### 6.2 Page ownership
+
+The 10-page ownership matrix in `PRD.md` is a design constraint. Before adding a chart, the implementer records its question, decision, population, metric, and owner page. If another view already answers the question, the new view replaces or becomes a selector alternative to the old one.
+
+High-cost tab bodies use dynamic `st.tabs(..., on_change="rerun")` and render only the open branch. Cached functions must have a freshness or size bound when their key space can grow. Stable UI renders before slow queries; expensive independent panels may use parallel fragments after thread-safety review.
+
+### 6.3 Analytical validity
+
+Method-specific requirements are defined in `PRD.md` and elaborated in `METHODOLOGY.md`. The system enforces common output metadata:
+
+- analytical question and population;
+- `n_total`, `n_eligible`, `n_used`, and exclusions;
+- dataset/as-of version;
+- effect/estimate and uncertainty;
+- method diagnostics and warnings;
+- exploratory versus confirmatory status.
+
+Hard-coded observation years and cluster-name assignments are transitional. Time comes from dataset metadata, and semantic labels must be derived/reviewed independently of unstable numeric cluster IDs.
+
+### 6.4 Delivered quality and screening interfaces
+
+| Interface | Grain/output | Methodological contract |
+|---|---|---|
+| Metadata coverage matrix | One field/source pair | Explicit source denominator; empty lists/strings count as absent; source-exclusive fields stay outside the common matrix |
+| PDF selection-bias diagnostic | One metric | PDF-minus-non-PDF standardized mean difference; `log1p` for skewed counts; pairwise missing-value exclusion; stratified 95% bootstrap interval with seed 42 |
+| Screening review validator | One reviewer/DOI decision | DOI normalization; controlled label vocabulary; duplicate/conflict audit; unknown DOI rejection |
+| Consensus resolver | One DOI | Adjudication, then unanimous binary consensus; uncertainty/disagreement excluded from fitting |
+| Threshold calibration | One candidate threshold and holdout report | Minimum support, stratified 70/30 split, recall target 0.98, specificity/precision/conservative tie-breaks, held-out metrics and bootstrap intervals |
+
+## 7. Observability and service objectives
+
+### 7.1 Required telemetry
+
+- Parent/stage run status, duration, attempts, and triggering identity.
+- Input additions/changes/removals and row counts by layer/source.
+- Rejection reasons, duplicate decisions, chunk invalidation, and embedding coverage.
+- External enrichment success/not-found/error/rate-limit counts and observation age.
+- Data-quality check outcomes and active dataset version.
+- Dashboard query/cache latency for expensive loaders and search latency by retrieval mode.
+
+Logs use structured fields with parent run ID, stage run ID, and dataset version. A telemetry-write failure is surfaced; it must not be silently downgraded to debug-only information for a production run.
+
+### 7.2 Initial SLOs
+
+- 100% of successful published versions pass required quality gates.
+- 100% of active source files reconcile to Raw manifest revisions.
+- 100% abstract embedding compatibility before Semantic publication.
+- Zero duplicate normalized DOI in Silver/Gold.
+- Zero unreviewed data mutation initiated directly by dashboard page code.
+- Full test suite under the repository's five-second target on the reference environment; performance regressions are measured separately from correctness.
+
+## 8. Security and privacy
+
+- Create separate database roles for bootstrap/migration, pipeline writes, and dashboard reads. Grants are limited to `lit_*` tables even though databases are shared.
+- Credentials remain in environment/secrets facilities and are never rendered or included in exported DataFrames.
+- SQL identifiers are fixed allowlisted values; user values use parameter binding.
+- Airflow's current “all admins” simple-auth setup is acceptable only for an isolated local environment. Binding it to a non-loopback or shared network requires authentication, authorization, TLS/reverse-proxy controls, and removal of unauthenticated admin access.
+- Pipeline trigger actions require an audit identity and rate/concurrency controls in any shared deployment.
+- PDF text may be copyrighted; access and redistribution remain local and controlled. Retrieval returns short evidence passages and DOI provenance rather than bulk document export.
+
+## 9. Testing strategy
+
+### 9.1 Current baseline
+
+The repository has 212 pytest tests across 26 files. They run with isolated in-memory SQLite sessions and additionally cover deterministic fingerprints, content-addressed retention, rename detection, Bronze deletion propagation, isolated Gold candidates, embedding contract failures, atomic materialization, exact Gold reactivation, an end-to-end correlated pipeline fixture, Airflow parent correlation, and the persisted-contract dashboard state. Ruff lint and format checks pass.
+
+SQLite tests are fast but do not validate MySQL collation, JSON/NULL behavior, BLOBs, DDL, transaction isolation, or advisory locks.
+
+### 9.2 Target test layers
+
+1. **Unit tests:** pure parsing, normalization, statistics, and edge cases.
+2. **Property tests:** idempotency, uniqueness, monotonic cumulative counts, vector dimensions, and deterministic seeded outputs.
+3. **Contract tests:** each dataset invariant and quality gate, including deletion propagation.
+4. **MySQL integration tests:** migrations, JSON SQL NULL behavior, constraints, transactions, locks, and binary vectors.
+5. **Golden-corpus tests:** a small fixture with duplicates, removals, missing DOI, changed text, PDF ambiguity, and partial enrichment.
+6. **Statistical validation tests:** simulated known effects/nulls, bootstrap coverage, leakage checks, and baseline comparisons.
+7. **Streamlit tests:** `st.testing.v1.AppTest` smoke tests for navigation, filters, degraded states, and conditional heavy tabs.
+8. **Browser tests:** only for behavior AppTest cannot simulate, such as rendered theme/CSS or chart selection events.
+
+## 10. Scaling and extension points
+
+Current in-process computation remains the default while measured refresh time, memory, and search latency meet targets. External vector infrastructure, distributed transforms, or materialized analytical tables require an ADR supported by benchmarks and operational cost.
+
+Planned data extensions have explicit prerequisites:
+
+- Citation histories before Sleeping Beauty or longevity analysis.
+- Forward/backward citation graph before CD disruption.
+- Reference publication years before Price's index.
+- Verified access observations and confounders before OACA.
+- Persistent author identifiers/overrides before person-level longitudinal claims.
+
+## 11. Architecture decisions
+
+### `ADR-01` — Four physical medallion databases
+
+**Decision:** Retain the current databases and enforce the `lit_*` namespace plus least-privilege roles.
+
+**Alternative:** One database with schemas or one project-specific database.
+
+**Rationale:** Migration risk outweighs current benefit, but shared-database isolation must be treated as a security contract.
+
+### `ADR-02` — Gold is the canonical analytical layer
+
+**Decision:** Dashboard research analyses consume a readiness-validated Gold version.
+
+**Alternative:** Continue preferring Silver for richer quality fields.
+
+**Rationale:** Silver omits approved cross-DOI curation. Needed quality fields should be propagated or joined explicitly, not used to bypass Gold.
+
+### `ADR-03` — Versioned publication, not in-place evidential mutation
+
+**Decision:** Source scans, enrichment observations, labels, and analytical outputs resolve to a dataset/run version.
+
+**Alternative:** Keep only the latest state.
+
+**Rationale:** The SLR and time-varying citation metrics require reproducible historical evidence.
+
+### `ADR-04` — Local single-process compute by default
+
+**Decision:** Retain pandas/NumPy/scikit-learn/ONNX at current scale.
+
+**Alternative:** Spark, a feature platform, or remote vector database.
+
+**Rationale:** They add operational complexity without demonstrated current benefit.
+
+### `ADR-05` — Human authority for exclusion and cross-DOI identity
+
+**Decision:** Models prioritize and measure; reviewers decide.
+
+**Alternative:** Automatic semantic exclusion/merge.
+
+**Rationale:** False exclusion and identity errors directly threaten SLR validity.
+
+### `ADR-06` — Read-only dashboard
+
+**Decision:** Data mutations remain in audited CLI/Airflow workflows.
+
+**Alternative:** Direct page writes.
+
+**Rationale:** Controlled workflows provide clearer permissions, recovery, and audit trails.
+
+## 12. Known technical debt
+
+- Dashboard selection is Gold-first, but `WP-04` still needs to bind loader readiness explicitly to `lit_publication_state`.
+- The legacy direct embedding transform still privileges the JSON field; the versioned pipeline uses binary readiness.
+- Parent correlation and dataset versions are implemented; cross-process advisory locking and automatic retry policy remain open.
+- OpenAlex observations lack time and response provenance.
+- Chunk and duplicate-candidate logical keys are not fully constrained in the database.
+- Several retired analytical functions and inactive page helpers remain in source/tests.
+- Expensive tabs are only conditionally rendered on some pages.
+- Statistical functions need the validation improvements defined in `PRD.md` before confirmatory interpretation.
+
+The ordered resolution of this debt is defined in `ROADMAP.md`.

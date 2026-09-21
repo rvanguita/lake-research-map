@@ -80,7 +80,7 @@ When working on `ingest/`, `transform/`, or `loaders.py`, adhere strictly to kno
 
 ## 4. Dashboard Architecture & Streamlit Guidelines
 
-The dashboard is structured into 13 dedicated pages in `src/lake_research_map/dashboard/`:
+The dashboard is structured into 10 workflow-oriented pages in `src/lake_research_map/dashboard/`:
 
 ### 4.1 Strict Separation of Concerns
 1. **`data.py`**: Raw SQL queries returning pandas DataFrames. Must fail gracefully if tables do not exist.
@@ -95,13 +95,14 @@ The dashboard is structured into 13 dedicated pages in `src/lake_research_map/da
 - **Role of Visão Geral**: `overview.py` displays high-level macro summaries only. Deep-dive analytical charts belong exclusively to their respective analytical pages.
 - **Logical Tab Grouping**:
   - `production.py`: Strictly chronological views (Volume Anual, Crescimento Acumulado, Estratos CAPES/Qualis).
-  - `topics.py`: Unified venue ranking (Volume vs Impact toggle), Bradford Zones, Semantic Centroids, Zipf's Law, c-TF-IDF, Conceptual Atypicality (Uzzi), Structural Breaks (Chow).
-  - `highlights.py`: 2 tabs — *Fundamentação Teórica* (Distribution viewer, Reference vs Citations, Top Referenced) & *Dinâmica de Citações & Econometria* (Top Cited, Citations by Year, Heavy-Tail MLE, Age-Normalized, GLM Poisson).
-  - `researchers.py`: Author Hub with 6 tabs (Produtividade, Liderança Científica h/g/e/m, Trajetória Temporal, Colaboração & Redes, Linhas de Pesquisa, Leis Bibliométricas).
-  - `synthesis.py`: 7 engineering optimization tabs (MILP/SOCP, Pareto Objectives, Uncertainty vs DERs, Planning Horizons, IEEE Test Feeders, Solvers/Simulators, Longevity & Stylometrics).
-  - `frontiers.py`: 5 innovation tabs (Price Index, Sleeping Beauties, CD Disruption Index, OACA, Kleinberg Bursts).
-  - `forecasting.py`: Volume forecasting with dynamic expanding error bands ($\sigma \sqrt{h}$), Topic trajectories, and continuous Bass NLS diffusion.
-  - `semantics.py`: Screening margin distribution, Multi-projection 2D map, Discovered themes, Semantic novelty, and Duplicate pairs.
+  - `topics.py`: Venue ranking, Bradford Zones, semantic structure, Zipf's Law, c-TF-IDF, descriptive conceptual atypicality, and structural breaks.
+  - `highlights.py`: 2 tabs — *Fundamentação Teórica* and *Dinâmica de Citações & Econometria*, including heavy-tail diagnostics, age normalization, and exposure-adjusted count GLM.
+  - `researchers.py`: Author productivity, scientific leadership, temporal trajectories, collaboration networks, research lines, and bibliometric laws.
+  - `synthesis.py`: 6 selectable engineering-evidence dimensions covering methods, objectives, uncertainty, planning horizons, test systems, and solvers.
+  - `forecasting.py`: Complete-year volume forecasts with rolling validation and conformal bands, topic trajectories, Bass diagnostics, and Kleinberg bursts.
+  - `semantics.py`: Screening calibration, multi-projection semantic space, themes, semantic isolation, and persistent duplicate-review history.
+  - `quality.py`: Metadata/PDF diagnostics, content readiness, anomaly audit, and hybrid retrieval.
+  - `pipeline_layers.py`: Medallion flow, quality gates, audit history, source provenance, and Airflow operations.
 
 ### 4.3 Visual & Theme Standards
 - **Responsive Width**: Always use `width="stretch"` for charts, tables, and containers. **NEVER use deprecated `use_container_width=True`**.
@@ -114,7 +115,7 @@ The dashboard is structured into 13 dedicated pages in `src/lake_research_map/da
 
 ## 5. Testing & Verification Standards
 
-- **Suíte Size**: The test suite consists of **186 automated tests across 22 test files** in `tests/`.
+- **Suíte Size**: The test suite consists of **212 automated tests across 26 test files** in `tests/`.
 - **Zero Live MySQL Dependency**: All tests run against in-memory SQLite fixtures (`tests/conftest.py`), creating one isolated session per layer (`raw_session`, `bronze_session`, `silver_session`, `gold_session`).
 - **Fast Execution**: The complete suite must pass in under 5 seconds:
   ```bash
@@ -145,7 +146,7 @@ uv run streamlit run main.py               # Launch Streamlit app on http://loca
 docker compose up -d                       # Airflow (:8080) + Streamlit (:8501)
 
 # Testing & Verification
-uv run pytest                              # Run full test suite (186 tests)
+uv run pytest                              # Run full test suite (212 tests)
 uv run ruff check --fix && uv run ruff format  # Format and lint codebase
 ```
 

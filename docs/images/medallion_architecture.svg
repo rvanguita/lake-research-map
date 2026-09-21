@@ -187,14 +187,14 @@
   <!-- Flow Downward to Dashboard -->
   <path d="M600,420 L600,448" fill="none" stroke="#ea580c" stroke-width="2" marker-end="url(#arrow-orange)"/>
 
-  <!-- ==================== DASHBOARD LAYER (13 PAGES) ==================== -->
+  <!-- ==================== DASHBOARD LAYER (10 PAGES) ==================== -->
   <g filter="url(#shadow)">
     <!-- Dashboard Container -->
     <rect x="41" y="452" width="1118" height="220" rx="10" fill="#ffffff" stroke="#ea580c" stroke-width="1.8"/>
     <!-- Header Banner -->
     <path d="M42,453 L1158,453 A9,9 0 0 1 1158,488 L42,488 Z" fill="#fff7ed"/>
     <text x="600" y="476" text-anchor="middle" font-size="14.5" font-weight="800" fill="#9a3412" letter-spacing="-0.2">
-      📊 Interactive Streamlit Analytical Research Dashboard (13 Specialized Pages — Zero Chart Redundancy)
+      📊 Interactive Streamlit Analytical Research Dashboard (10 Workflow Pages — Zero Chart Redundancy)
     </text>
 
     <!-- Sub-Panel 1: Bibliometrics & Econometrics -->
@@ -213,7 +213,7 @@
     <rect x="331" y="498" width="262" height="160" rx="6" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1"/>
     <rect x="331" y="498" width="262" height="26" rx="6" fill="#f1f5f9"/>
     <text x="462" y="516" text-anchor="middle" font-size="11.5" font-weight="700" fill="#1e293b">Methodological Synthesis</text>
-    <text x="343" y="540" font-size="10.5" fill="#334155">• 8 engineering optimization tabs</text>
+    <text x="343" y="540" font-size="10.5" fill="#334155">• Engineering evidence taxonomy</text>
     <text x="343" y="557" font-size="10.5" fill="#334155">• MILP, SOCP, MINLP &amp; AI complexity</text>
     <text x="343" y="574" font-size="10.5" fill="#334155">• Multi-objective co-optimization</text>
     <text x="343" y="591" font-size="10.5" fill="#334155">• Uncertainty modeling vs DERs</text>
@@ -221,17 +221,17 @@
     <text x="343" y="625" font-size="10.5" fill="#334155">• Solvers: GAMS, CPLEX, OpenDSS</text>
     <text x="343" y="642" font-size="10" font-weight="600" fill="#64748b">Pages: synthesis, researchers</text>
 
-    <!-- Sub-Panel 3: Frontiers & Disruption -->
+    <!-- Sub-Panel 3: Trends & Fronts -->
     <rect x="607" y="498" width="262" height="160" rx="6" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1"/>
     <rect x="607" y="498" width="262" height="26" rx="6" fill="#f1f5f9"/>
-    <text x="738" y="516" text-anchor="middle" font-size="11.5" font-weight="700" fill="#1e293b">Frontiers &amp; Disruption</text>
-    <text x="619" y="540" font-size="10.5" fill="#334155">• 5 innovation &amp; temporal tabs</text>
-    <text x="619" y="557" font-size="10.5" fill="#334155">• Price's index (theoretical youth)</text>
-    <text x="619" y="574" font-size="10.5" fill="#334155">• Sleeping Beauties (B coefficient)</text>
-    <text x="619" y="591" font-size="10.5" fill="#334155">• CD disruption index (Nature 2019)</text>
-    <text x="619" y="608" font-size="10.5" fill="#334155">• Open Access Citation Advantage</text>
+    <text x="738" y="516" text-anchor="middle" font-size="11.5" font-weight="700" fill="#1e293b">Trends &amp; Fronts</text>
+    <text x="619" y="540" font-size="10.5" fill="#334155">• Complete-year volume forecasts</text>
+    <text x="619" y="557" font-size="10.5" fill="#334155">• Rolling-origin model validation</text>
+    <text x="619" y="574" font-size="10.5" fill="#334155">• Conformal uncertainty bands</text>
+    <text x="619" y="591" font-size="10.5" fill="#334155">• Keyword topic trajectories</text>
+    <text x="619" y="608" font-size="10.5" fill="#334155">• Bass diffusion diagnostics</text>
     <text x="619" y="625" font-size="10.5" fill="#334155">• Kleinberg burst detection</text>
-    <text x="619" y="642" font-size="10" font-weight="600" fill="#64748b">Pages: frontiers, strategic, forecasting</text>
+    <text x="619" y="642" font-size="10" font-weight="600" fill="#64748b">Page: forecasting</text>
 
     <!-- Sub-Panel 4: Semantics & Hybrid RAG -->
     <rect x="883" y="498" width="262" height="160" rx="6" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1"/>
@@ -239,10 +239,10 @@
     <text x="1014" y="516" text-anchor="middle" font-size="11.5" font-weight="700" fill="#1e293b">Semantic Space &amp; Search</text>
     <text x="895" y="540" font-size="10.5" fill="#334155">• Contrastive screening distribution</text>
     <text x="895" y="557" font-size="10.5" fill="#334155">• 2D projections: t-SNE, UMAP, PCA</text>
-    <text x="895" y="574" font-size="10.5" fill="#334155">• Thematic drift across epochs</text>
+    <text x="895" y="574" font-size="10.5" fill="#334155">• Semantic isolation and themes</text>
     <text x="895" y="591" font-size="10.5" fill="#334155">• Hybrid BM25 Okapi + dense RRF</text>
     <text x="895" y="608" font-size="10.5" fill="#334155">• Duplicate abstract pair auditor</text>
     <text x="895" y="625" font-size="10.5" fill="#334155">• Stratified screening calibration</text>
-    <text x="895" y="642" font-size="10" font-weight="600" fill="#64748b">Pages: semantics, quality, search</text>
+    <text x="895" y="642" font-size="10" font-weight="600" fill="#64748b">Pages: semantics, quality, pipeline</text>
   </g>
 </svg>
