@@ -77,6 +77,37 @@ def test_build_silver_articles_dedupes_by_doi_and_skips_missing_doi(
     assert silver_rows[0].is_duplicate_merge is True
 
 
+def test_build_silver_preserves_highest_precedence_category_for_duplicate_doi(
+    bronze_session, silver_session, raw_session
+):
+    bronze_session.add_all(
+        [
+            _bronze(
+                source="ieee",
+                source_id="csv:review",
+                title="A systematic review of distribution planning",
+                publication_category="review",
+                publication_category_basis="title_review",
+            ),
+            _bronze(
+                source="elsevier",
+                source_id="bib:journal",
+                publication_category="journal",
+                publication_category_basis="journal_record_type",
+            ),
+        ]
+    )
+    bronze_session.commit()
+
+    build_silver_articles(bronze_session, silver_session, raw_session)
+
+    row = silver_session.query(SilverArticle).one()
+    assert (row.publication_category, row.publication_category_basis) == (
+        "review",
+        "title_review",
+    )
+
+
 def test_build_silver_articles_links_matching_pdf(bronze_session, silver_session, raw_session):
     bronze_session.add(
         _bronze(

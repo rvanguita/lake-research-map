@@ -29,6 +29,24 @@ def test_conference_uses_record_type_or_proceedings_metadata():
     assert metadata.basis == "conference_venue_metadata"
 
 
+def test_review_metadata_and_unicode_whitespace_are_normalized():
+    result = classify_publication(
+        record_type=" Article ",
+        title="A DISTRIBUTION REVIEW",
+        venue="Applied Energy",
+        document_type="Revisión",
+    )
+    assert (result.category, result.basis) == ("review", "title_review")
+
+    metadata = classify_publication(
+        record_type="article",
+        title="Planning method",
+        venue="Applied Energy",
+        document_type="Review",
+    )
+    assert (metadata.category, metadata.basis) == ("review", "review_metadata")
+
+
 def test_journal_and_other_are_deterministic_fallbacks():
     journal = classify_publication(
         record_type="article", title="Planning method", venue="Applied Energy"
@@ -50,3 +68,18 @@ def test_preferred_classification_uses_review_first_precedence():
         [Row("journal", "journal_record_type"), Row("review", "title_review")]
     )
     assert (category, basis) == ("review", "title_review")
+
+
+def test_preferred_classification_has_deterministic_basis_tiebreak():
+    class Row:
+        def __init__(self, category, basis):
+            self.publication_category = category
+            self.publication_category_basis = basis
+
+    category, basis = preferred_classification(
+        [
+            Row("conference", "conference_venue_metadata"),
+            Row("conference", "conference_record_type"),
+        ]
+    )
+    assert (category, basis) == ("conference", "conference_record_type")

@@ -202,6 +202,8 @@ def test_versioned_gold_build_does_not_mutate_live_publication(silver_session, g
             doi="10.1/candidate",
             sources=["ieee"],
             record_type="article",
+            publication_category="journal",
+            publication_category_basis="journal_record_type",
             title="Candidate",
             authors=[],
             keywords=[],
@@ -222,6 +224,11 @@ def test_versioned_gold_build_does_not_mutate_live_publication(silver_session, g
 
     assert stats["articles"] == 1
     assert gold_session.query(DatasetArticle).count() == 1
+    snapshot = gold_session.query(DatasetArticle).one()
+    assert (snapshot.publication_category, snapshot.publication_category_basis) == (
+        "journal",
+        "journal_record_type",
+    )
     assert gold_session.query(Article).count() == 0
 
     version = gold_session.get(DatasetVersion, "v1")
