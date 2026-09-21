@@ -32,7 +32,12 @@ from lake_research_map.ingest.snapshots import (
     diff_manifests,
     scan_sources,
 )
-from lake_research_map.quality import assert_contract, embed_contract, semantic_contract
+from lake_research_map.quality import (
+    ContractViolation,
+    assert_contract,
+    embed_contract,
+    semantic_contract,
+)
 from lake_research_map.transform.bronze_articles import build_bronze_articles
 from lake_research_map.transform.embeddings import EMBED_MODEL_NAME
 from lake_research_map.transform.versioned_gold import (
@@ -286,6 +291,19 @@ def test_quality_gates_reject_incompatible_embedding(gold_session):
         assert "embed.compatible" in str(exc)
     else:
         raise AssertionError("incompatible embeddings must block publication")
+
+
+def test_materialization_rechecks_publication_contract(gold_session):
+    version_id = "a" * 64
+    _candidate(gold_session, version_id, "10.1/a", 0.1)
+    chunk = gold_session.scalar(select(DatasetChunk))
+    chunk.embedding_bin = b"invalid"
+
+    with pytest.raises(ContractViolation, match="embed.compatible"):
+        materialize_version(gold_session, version_id, "execution-invalid")
+
+    assert gold_session.query(Article).count() == 0
+    assert gold_session.get(DatasetVersion, version_id).status == "candidate"
 
 
 def test_publication_and_reactivation_restore_exact_gold_snapshot(gold_session):
