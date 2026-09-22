@@ -2460,7 +2460,10 @@ def optimization_methods_taxonomy(df: pd.DataFrame) -> dict:
         )
 
         # Yearly counts for articles >= 2005
-        yearly = df[matched & (years >= 2005)].groupby("year")["id"].count()
+        # Counting rows needs no particular column: keying this on the `id`
+        # surrogate coupled the taxonomy to a primary key it never uses,
+        # and broke on any frame assembled without one.
+        yearly = df[matched & (years >= 2005)].groupby("year").size()
         temporal_dict[m_label] = yearly
 
     summary_df = pd.DataFrame(summary_rows).sort_values(by="articles", ascending=False)
@@ -2763,7 +2766,7 @@ def uncertainty_paradigms_analysis(df: pd.DataFrame) -> dict:
     for p_label, p_m in p_matches.items():
         filt = p_m & (years >= 2005) & (years <= 2026)
         if filt.any():
-            yearly = df[filt].groupby(years[filt].astype(int))["id"].count()
+            yearly = df[filt].groupby(years[filt].astype(int)).size()
             temporal_dict[p_label] = yearly
 
     temporal_paradigms = pd.DataFrame(temporal_dict).fillna(0).astype(int)
@@ -2913,7 +2916,7 @@ def mathematical_complexity_spectrum(df: pd.DataFrame) -> dict:
 
         filt = m & (years >= 2005) & (years <= 2026)
         if filt.any():
-            yearly = df[filt].groupby(years[filt].astype(int))["id"].count()
+            yearly = df[filt].groupby(years[filt].astype(int)).size()
             temporal_dict[c_label] = yearly
 
     spectrum_df = pd.DataFrame(rows).sort_values(by="articles", ascending=False)

@@ -128,17 +128,17 @@ def _reference_distribution_intro(articles_df: pd.DataFrame) -> pd.DataFrame | N
         [
             (
                 "📘 Mean Refs (IEEE)",
-                f"{means['ieee']:.1f}" if means["ieee"] is not None else "N/D",
-                f"Mediana: {ieee_med:.0f}"
+                f"{means['ieee']:.1f}" if means["ieee"] is not None else "n/a",
+                f"Median: {ieee_med:.0f}"
                 if ieee_med == ieee_med and ieee_med is not None
                 else None,
             ),
             (
                 "📙 Average Refs (Elsevier)",
-                f"{means['elsevier']:.1f}" if means["elsevier"] is not None else "N/D",
-                f"Mediana: {els_med:.0f}" if els_med == els_med and els_med is not None else None,
+                f"{means['elsevier']:.1f}" if means["elsevier"] is not None else "n/a",
+                f"Median: {els_med:.0f}" if els_med == els_med and els_med is not None else None,
             ),
-            ("📊 Mean Refs (Total)", f"{means['total']:.1f}", f"Mediana: {tot_med:.0f}"),
+            ("📊 Mean Refs (Total)", f"{means['total']:.1f}", f"Median: {tot_med:.0f}"),
             ("🔝 Largest bibliography", f"{max_refs:,} refs", f"{len(ref_df):,} articles analyzed"),
         ]
     )
@@ -716,6 +716,6 @@ def _glm_specification_diagnostics(glm_res: dict) -> None:
         else:
             st.caption(
                 "A positive zero-inflation gap means the model under-predicts articles with "
-                "zero citations. No zero-inflated candidate converged on this cut, so a large "
+                "zero citations. No zero-inflated candidate converged under the current filters, "
                 "gap marks these estimates as exploratory rather than being corrected for."
             )

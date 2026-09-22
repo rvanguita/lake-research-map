@@ -262,7 +262,7 @@ def _headline_metrics(funnel_df: pd.DataFrame) -> None:
             (
                 "🥈 Silver",
                 f"{int(totals['silver']):,}",
-                f"−{dropped} sem DOI" if dropped else "without losses",
+                f"−{dropped} without DOI" if dropped else "no losses",
             ),
             ("🥇 Gold", f"{int(totals['gold']):,}", None),
         ]
@@ -412,7 +412,7 @@ def _metadata_coverage_by_layer() -> None:
     fields = ["doi", "abstract", "keywords", "citation_count", "has_pdf"]
     field_labels = {
         "doi": "DOI",
-        "abstract": "Resumo",
+        "abstract": "Abstract",
         "keywords": "Keywords",
         "citation_count": "Citations",
         "has_pdf": "PDF vinculado",

@@ -242,7 +242,7 @@ def _render_objectives_tab(df: pd.DataFrame) -> None:
     summary_card_row(
         [
             ("🏆 Most frequent objective", top_obj, f"{summary_df.iloc[0]['articles']} articles"),
-            ("🌐 Taxa Multi-Objetivo", f"{multi_ratio:.1f}%", "Estudos com ≥ 2 objetivos"),
+            ("🌐 Multi-objective rate", f"{multi_ratio:.1f}%", "Studies with ≥ 2 objectives"),
             ("💡 Highest citation impact", top_cites, "Average citations/article"),
             ("📐 Objective Families", str(len(summary_df)), "Fundamental criteria"),
         ]
@@ -320,7 +320,7 @@ def _render_objectives_tab(df: pd.DataFrame) -> None:
                 y=temporal_multiobj["pct_multi"],
                 yaxis="y2",
                 mode="lines+markers",
-                name="% Multi-Objetivo",
+                name="% multi-objective",
                 line={"color": "#FFA15A", "width": 2.5},
             )
         )
@@ -386,7 +386,7 @@ def _render_uncertainty_tab(df: pd.DataFrame) -> None:
                 f"{paradigms_df.iloc[0]['articles']} articles",
             ),
             (
-                "🚀 Paradigma Mais Recente",
+                "🚀 Most recent paradigm",
                 paradigms_df.sort_values(by="pct_recent", ascending=False).iloc[0]["paradigm"],
                 "Higher % post-2021",
             ),
@@ -609,7 +609,7 @@ def _render_feeders_tab(df: pd.DataFrame) -> None:
     summary_card_row(
         [
             (
-                "🔌 Benchmark Mais Utilizado",
+                "🔌 Most used benchmark",
                 top_feeder,
                 f"{feeders_df.iloc[0]['articles']} articles",
             ),

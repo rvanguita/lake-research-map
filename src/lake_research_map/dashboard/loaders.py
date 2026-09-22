@@ -435,7 +435,7 @@ def require_articles() -> pd.DataFrame:
     if all_articles.empty:
         st.warning(
             "No data found in the `lit_bronze`, `lit_silver`, or `lit_gold` layers yet.\n\n"
-            "Perform the pipeline (handbar or sidebar buttons) "
+            "Run the pipeline (from the sidebar, or with "
             "`uv run lake-research-map --stage all`) and reload this page."
         )
         st.stop()

@@ -111,7 +111,7 @@ def _render_bursts(df: pd.DataFrame) -> None:
     result = technological_burst_detection(df)
     bursts = result["burst_timeline"]
     if bursts.empty:
-        st.info("No sustained burst was detected in this cut.")
+        st.info("No sustained burst was detected under the current filters.")
         return
     metric_row(
         [
@@ -269,7 +269,7 @@ def _render_series_forecast(label: str, color: str, result: ForecastResult) -> N
     fig.add_bar(
         x=result.history.index,
         y=result.history.values,
-        name=f"{label} (observado)",
+        name=f"{label} (observed)",
         marker_color=color,
         opacity=0.85,
     )
@@ -452,32 +452,36 @@ def _keyword_growth_ranking() -> None:
     ranking["model"] = ranking["model"].map(lambda value: _MODEL_LABELS.get(value, value))
     top = ranking.head(min(TOP_KEYWORDS_FORECAST, len(ranking))).sort_values("variation")
 
-    sub_trend, sub_rank = st.tabs(["📈 Trajectories", "🏆 Growth ranking"])
-    with sub_trend:
-        _keyword_trend_lines(
-            ranking.head(TOP_KEYWORD_TRENDS)["keyword"].tolist(), results_by_keyword
-        )
-    with sub_rank:
-        fig = go.Figure()
-        fig.add_bar(
-            x=top["variation"],
-            y=top["keyword"],
-            orientation="h",
-            marker_color=[
-                TOTAL_COLOR if v >= 0 else SOURCE_COLORS["ieee"] for v in top["variation"]
-            ],
-            hovertemplate=f"<b>%{{y}}</b><br>Projected change through {final_forecast_year}: %{{x:+.1f}} articles/year<extra></extra>",
-        )
-        fig.update_layout(
-            xaxis_title=f"Projected change ({TRAIN_END_YEAR} → {final_forecast_year}, articles/year)",
-            yaxis_title="Keyword",
-        )
-        render_chart(
-            fig,
-            caption=f"The same forecasting engine used for publication volume, applied to each keyword with at "
-            f"least {MIN_KEYWORD_OCCURRENCES} occurrences in the corpus. The same caveat applies: {HOLDOUT_YEAR} is a "
-            "Partial year and corpus is incomplete — read as a directional sign, not as an exact number.",
-        )
+    sub_trend, sub_rank = st.tabs(
+        ["📈 Trajectories", "🏆 Growth ranking"], on_change="rerun", key="forecast_keyword_tab"
+    )
+    if sub_trend.open:
+        with sub_trend:
+            _keyword_trend_lines(
+                ranking.head(TOP_KEYWORD_TRENDS)["keyword"].tolist(), results_by_keyword
+            )
+    if sub_rank.open:
+        with sub_rank:
+            fig = go.Figure()
+            fig.add_bar(
+                x=top["variation"],
+                y=top["keyword"],
+                orientation="h",
+                marker_color=[
+                    TOTAL_COLOR if v >= 0 else SOURCE_COLORS["ieee"] for v in top["variation"]
+                ],
+                hovertemplate=f"<b>%{{y}}</b><br>Projected change through {final_forecast_year}: %{{x:+.1f}} articles/year<extra></extra>",
+            )
+            fig.update_layout(
+                xaxis_title=f"Projected change ({TRAIN_END_YEAR} → {final_forecast_year}, articles/year)",
+                yaxis_title="Keyword",
+            )
+            render_chart(
+                fig,
+                caption=f"The same forecasting engine used for publication volume, applied to each keyword with at "
+                f"least {MIN_KEYWORD_OCCURRENCES} occurrences in the corpus. The same caveat applies: {HOLDOUT_YEAR} is a "
+                "Partial year and corpus is incomplete — read as a directional sign, not as an exact number.",
+            )
 
     with st.expander("📋 Complete table of topics evaluated"):
         st.dataframe(ranking.reset_index(drop=True), hide_index=True, width="stretch")
