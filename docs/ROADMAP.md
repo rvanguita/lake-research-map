@@ -257,18 +257,18 @@ This baseline does not imply that every analytical method is confirmatory. The l
 
 ### `WP-21` — Integrate validated analyses into existing pages
 
-- **Status:** Partially delivered; the Impact, Screening, Researchers, and Trends increments landed on 2026-09-21. Retrieval benchmark, taxonomy validation, identity audit, and temporal tie dynamics remain blocked on their evidence packages.
+- **Status:** Partially delivered; the Impact, Screening, Researchers, and Trends increments landed on 2026-09-21, and temporal tie dynamics shipped with `WP-19` on 2026-09-22 -- it never depended on an evidence package. Retrieval benchmark, taxonomy validation and identity audit remain blocked on theirs.
 - **Objective:** Add knowledge without adding pages or decorative charts.
 - **Justification:** New methods should extend established workflows and preserve navigation stability.
 - **Dependencies:** `WP-10` through `WP-19`, `WP-20`.
 - **Deliverable:**
-  - **Qualidade e RAG:** missingness pattern and PDF-selection-bias diagnostics; retrieval benchmark.
-  - **Triagem e descoberta:** reviewer agreement, threshold validation, cluster/projection stability.
-  - **Impacto e citações:** tail and count-model diagnostics.
-  - **Pesquisadores e colaboração:** identity audit and temporal tie dynamics.
-  - **Evidências de engenharia:** taxonomy validation coverage.
-  - **Tendências e frentes:** baseline skill and interval coverage.
-  - **Pipeline e proveniência:** active version, freshness, quality gates, and removal reconciliation.
+  - **Quality and RAG:** missingness pattern and PDF-selection-bias diagnostics; retrieval benchmark.
+  - **Screening and discovery:** reviewer agreement, threshold validation, cluster/projection stability.
+  - **Impact and citations:** tail and count-model diagnostics.
+  - **Researchers and collaboration:** identity audit and temporal tie dynamics.
+  - **Engineering evidence:** taxonomy validation coverage.
+  - **Trends and fronts:** baseline skill and interval coverage.
+  - **Pipeline and provenance:** active version, freshness, quality gates, and removal reconciliation.
 - **Completion:** Each addition references one `RQ-*`, exposes population/coverage/limitations, and has no equivalent view elsewhere.
 
 ### `WP-22` — Streamlit performance, behavior, and accessibility
