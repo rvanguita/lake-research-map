@@ -558,7 +558,14 @@ def semantic_stability(points: tuple[tuple[str, str, float, float], ...]) -> dic
     reduced = reduced_space(matrix[rows])
     if reduced.ndim != 2 or reduced.shape[1] < 2:
         return None
-    return semantic_stability_diagnostics(reduced, labels, projection)
+    result = semantic_stability_diagnostics(reduced, labels, projection)
+    if result.get("valid"):
+        # The sweep runs on the same reduced space the themes were found in,
+        # so the numbers on the page describe the search that actually chose k.
+        from lake_research_map.transform.semantics import theme_sweep
+
+        result["k_sweep"] = theme_sweep(reduced)
+    return result
 
 
 @st.cache_data(ttl=300)
