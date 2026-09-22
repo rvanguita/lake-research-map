@@ -14,7 +14,6 @@ import pandas as pd
 from sqlalchemy import MetaData, Table, and_, exists, inspect, or_, select, text
 from sqlalchemy.exc import SQLAlchemyError
 
-from lake_research_map.config import ConfigurationError
 from lake_research_map.db.engines import get_engine
 
 logger = logging.getLogger(__name__)
@@ -61,7 +60,7 @@ def table_exists(layer: str, table: str) -> bool:
     try:
         engine = get_engine(layer)
         return inspect(engine).has_table(table)
-    except (SQLAlchemyError, ConfigurationError) as exc:
+    except SQLAlchemyError as exc:
         logger.warning("table_exists(%r, %r): database unreachable (%s)", layer, table, exc)
         return False
 
@@ -81,7 +80,7 @@ def layer_row_counts() -> pd.DataFrame:
                 else:
                     count = 0
                     status = "no table yet"
-            except (SQLAlchemyError, ConfigurationError) as exc:
+            except SQLAlchemyError as exc:
                 logger.warning(
                     "layer_row_counts(%r, %r): database unreachable (%s)", layer, table, exc
                 )
@@ -387,7 +386,7 @@ def raw_funnel_counts() -> dict[str, dict[str, int]]:
                 ):
                     counts.setdefault(source, {"csv_rows": 0, "bib_entries": 0})
                     counts[source]["bib_entries"] = n
-    except (SQLAlchemyError, ConfigurationError) as exc:
+    except SQLAlchemyError as exc:
         logger.warning("raw_funnel_counts: database unreachable (%s)", exc)
     return counts
 
@@ -411,7 +410,7 @@ def bronze_doi_dropped_counts() -> dict[str, int]:
                 )
             ):
                 result[source] = n
-    except (SQLAlchemyError, ConfigurationError) as exc:
+    except SQLAlchemyError as exc:
         logger.warning("bronze_doi_dropped_counts: database unreachable (%s)", exc)
     return result
 
