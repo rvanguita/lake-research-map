@@ -8,6 +8,7 @@ the reported holdout metrics.
 
 from __future__ import annotations
 
+import hashlib
 from itertools import combinations
 
 import numpy as np
@@ -150,7 +151,7 @@ def validate_review_labels(
     issue_columns = ["severity", "code", "doi", "detail"]
     if labels.empty:
         issue = pd.DataFrame(
-            [["error", "empty_file", None, "O arquivo não contém decisões."]],
+            [["error", "empty_file", None, "the file carries no decisions"]],
             columns=issue_columns,
         )
         return pd.DataFrame(), issue
@@ -189,7 +190,7 @@ def validate_review_labels(
                 "severity": "error",
                 "code": "invalid_doi",
                 "doi": None,
-                "detail": f"linha {index + 2}",
+                "detail": f"line {index + 2}",
             }
         )
     invalid_label = normalized["manual_label"].isna()
@@ -213,7 +214,7 @@ def validate_review_labels(
                     "severity": "warning",
                     "code": "unknown_doi",
                     "doi": doi,
-                    "detail": "fora do corpus atual",
+                    "detail": "outside the current corpus",
                 }
             )
         normalized = normalized.loc[~unknown].copy()
@@ -496,3 +497,53 @@ def calibrate_screening_threshold(
         "confidence_intervals": intervals,
         "curve": screening_threshold_curve(holdout["y_true"], holdout["relevance_margin"]),
     }
+
+
+def label_set_digest(labels: pd.DataFrame) -> str:
+    """Hash the exact human decisions a threshold was measured against.
+
+    `review_workflows.approve_model` stores a `label_set_sha256` so a recorded
+    threshold can later be shown to belong to one specific body of human
+    judgement. Nothing computed that digest, which left the column to be filled
+    in by hand -- and a hand-typed hash binds an approval to nothing at all.
+
+    The digest covers the validated raw reviewer rows rather than the resolved
+    consensus: two different label sets can resolve to the same consensus, and
+    an approval that cannot tell them apart has not recorded its evidence.
+    """
+    columns = ("doi", "reviewer", "manual_label")
+    if labels.empty or not set(columns).issubset(labels.columns):
+        return hashlib.sha256(b"").hexdigest()
+    frame = labels[list(columns)].astype(str)
+    canonical = "\n".join(
+        "\t".join(row) for row in sorted(frame.itertuples(index=False, name=None))
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def screening_model_digest(
+    *,
+    embed_model: str,
+    anchor_text: str,
+    off_anchor_text: str,
+    threshold: float,
+    min_recall: float,
+) -> str:
+    """Identify the screening rule an approval applies to.
+
+    The "model" being approved is not a fitted artifact -- it is the embedding
+    model, the two anchors whose difference defines the margin, and the cut
+    taken through it. Change any one of them and the approved sensitivity no
+    longer describes what the dashboard would do, so all of them are in the
+    identity.
+    """
+    canonical = "\n".join(
+        (
+            embed_model,
+            hashlib.sha256(anchor_text.encode("utf-8")).hexdigest(),
+            hashlib.sha256(off_anchor_text.encode("utf-8")).hexdigest(),
+            f"{float(threshold):.6f}",
+            f"{float(min_recall):.6f}",
+        )
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
