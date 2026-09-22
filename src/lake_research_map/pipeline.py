@@ -987,6 +987,87 @@ def _run_enrichment_command(args: argparse.Namespace) -> None:
         gold_session.close()
 
 
+def _configure_evidence_commands(subparsers) -> None:
+    evidence = subparsers.add_parser(
+        "evidence", help="Generate stratified candidate sets for human review"
+    )
+    actions = evidence.add_subparsers(dest="evidence_action", required=True)
+    for name, helptext in (
+        ("pdf-matches", "PDF-to-article pairings, banded around the linking threshold"),
+        ("rejections", "Records excluded at silver, sampled per rejection reason"),
+        ("authors", "Author-name pairs at risk of a wrong merge or split"),
+        ("taxonomy", "Articles per taxonomy class, plus an unclassified stratum"),
+        ("retrieval", "Pooled top-k results for the versioned technical query set"),
+    ):
+        action = actions.add_parser(name, help=helptext)
+        action.add_argument("--output", required=True, help="CSV path to write the subjects to")
+        action.add_argument("--limit", type=int, default=None, help="Cap on subjects per stratum")
+        action.add_argument("--seed", type=int, default=0)
+
+
+def _run_evidence_command(args: argparse.Namespace) -> None:
+    """Write a labelled-ready CSV of review subjects.
+
+    Read-only against the corpus: generating a sample must never mutate what
+    it is sampling. The output feeds `reviews setup --subject-id-file`, or is
+    labelled directly and imported.
+    """
+    import csv
+    from pathlib import Path
+
+    from lake_research_map.db.engines import get_session
+    from lake_research_map.transform import evidence_samples
+
+    action = args.evidence_action
+    limit = args.limit
+    with get_session("silver") as silver:
+        if action == "pdf-matches":
+            subjects, stats = evidence_samples.pdf_match_candidates(
+                silver, per_band=limit or 15, seed=args.seed
+            )
+            workflow = "pdf"
+        elif action == "rejections":
+            subjects, stats = evidence_samples.rejection_candidates(
+                silver, limit=limit or 30, seed=args.seed
+            )
+            workflow = "screening"
+        elif action == "authors":
+            subjects, stats = evidence_samples.author_ambiguity_candidates(
+                silver, limit=limit or 40
+            )
+            workflow = "author"
+        elif action == "taxonomy":
+            subjects, stats = evidence_samples.taxonomy_candidates(
+                silver, per_class=limit or 12, seed=args.seed
+            )
+            workflow = "taxonomy"
+        else:
+            # Retrieval pools the live search modes, so it needs the embedded
+            # corpus rather than the silver metadata the others read.
+            from lake_research_map.dashboard import loaders
+
+            def _retrieve(text: str, depth: int) -> list[str]:
+                frame = loaders.chunk_search_data()
+                from lake_research_map.dashboard.search import hybrid_search
+
+                hits = hybrid_search(text, frame, top_k=depth)
+                return [str(doi) for doi in hits.get("doi", [])]
+
+            subjects, stats = evidence_samples.retrieval_candidates(_retrieve, depth=limit or 10)
+            workflow = "retrieval"
+
+    output = Path(args.output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with output.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=("workflow", "subject_id", "label", "rationale"))
+        writer.writeheader()
+        for subject in subjects:
+            writer.writerow(
+                {"workflow": workflow, "subject_id": subject, "label": "", "rationale": ""}
+            )
+    logger.info("evidence %s: %d subjects -> %s (%s)", action, len(subjects), output, stats)
+
+
 def _configure_audit_commands(subparsers) -> None:
     audit = subparsers.add_parser("audit", help="Run read-only corpus acceptance audits")
     actions = audit.add_subparsers(dest="audit_action", required=True)
@@ -1247,6 +1328,7 @@ def main(argv: list[str] | None = None) -> None:
     _configure_version_commands(subparsers)
     _configure_review_commands(subparsers)
     _configure_enrichment_commands(subparsers)
+    _configure_evidence_commands(subparsers)
     _configure_audit_commands(subparsers)
     _configure_maintenance_commands(subparsers)
     args = parser.parse_args(argv if argv is not None else sys.argv[1:])
@@ -1272,6 +1354,11 @@ def main(argv: list[str] | None = None) -> None:
             try:
                 _run_enrichment_command(args)
             except ValueError as exc:
+                parser.error(str(exc))
+        elif args.command == "evidence":
+            try:
+                _run_evidence_command(args)
+            except (OSError, ValueError) as exc:
                 parser.error(str(exc))
         elif args.command == "audit":
             try:
