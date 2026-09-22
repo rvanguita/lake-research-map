@@ -1214,11 +1214,11 @@ def _configure_enrichment_commands(subparsers) -> None:
     actions = enrichment.add_subparsers(dest="enrichment_action", required=True)
     refresh = actions.add_parser("refresh-openalex", help="Refresh the active DOI population")
     refresh.add_argument("--max-fetch", type=int, default=100)
-    # 0.1s is exactly OpenAlex's stated 10 req/s ceiling, so a live crawl of
-    # the corpus on 2026-09-22 collected 23 rate-limited observations once
-    # retries were exhausted. Leaving headroom costs a few minutes over
-    # 3,115 DOIs and avoids re-fetching the throttled ones on a later run.
-    refresh.add_argument("--delay", type=float, default=0.15)
+    # 0.1s is exactly OpenAlex's stated 10 req/s ceiling, so a live crawl on
+    # 2026-09-22 was throttled outright after ~1,100 requests and never
+    # recovered. Headroom costs minutes over 3,115 DOIs; being blocked costs
+    # the whole run.
+    refresh.add_argument("--delay", type=float, default=0.25)
     refresh.add_argument(
         "--refresh-all",
         action="store_true",
@@ -1295,7 +1295,15 @@ def _run_enrichment_command(args: argparse.Namespace) -> None:
         # for it would fail with "no active dataset version", which says
         # nothing about the command the operator actually ran.
         if args.enrichment_action == "refresh-citations":
-            print(_refresh_citation_edges(bronze_session, args))
+            citing_stats = _refresh_citation_edges(bronze_session, args)
+            print(citing_stats)
+            if citing_stats.get("stopped_early"):
+                print(
+                    "Stopped early: five consecutive works came back throttled. Progress is "
+                    "committed and a re-run resumes from the first uncrawled work."
+                )
+            elif citing_stats["remaining"]:
+                print(f"{citing_stats['remaining']} works still uncrawled. Re-run to continue.")
             return
         state = gold_session.get(PublicationState, 1)
         if state is None or not state.active_version_id:
@@ -1315,7 +1323,16 @@ def _run_enrichment_command(args: argparse.Namespace) -> None:
             store_payload=args.store_payload,
         )
         print(stats)
-        if stats["remaining"]:
+        if stats.get("stopped_early"):
+            print(
+                f"Stopped early: OpenAlex returned {stats['stopped_early']} five times in a "
+                "row, so the run halted instead of spending the rest of the batch on an API "
+                "that had stopped answering. Everything fetched is committed. Check the "
+                "logged X-RateLimit headers above: when the limit is a per-window quota "
+                "rather than a rate, a larger --delay buys nothing and the only fix is to "
+                "wait for the reset. Re-running then resumes from here."
+            )
+        elif stats["remaining"]:
             print(
                 f"{stats['remaining']} DOIs still unobserved. Re-run the same command to "
                 "continue; it resumes from where this run stopped."
@@ -1343,6 +1360,7 @@ def _refresh_citation_edges(bronze_session, args: argparse.Namespace) -> dict:
     from lake_research_map.db.bronze_models import ExternalWork
     from lake_research_map.ingest.openalex import (
         CITING_MAX_PAGES,
+        CONSECUTIVE_FAILURE_LIMIT,
         fetch_openalex_citing_works,
         persist_incoming_edges,
     )
@@ -1377,7 +1395,9 @@ def _refresh_citation_edges(bronze_session, args: argparse.Namespace) -> dict:
     )
 
     max_pages = args.max_pages or CITING_MAX_PAGES
-    edges = truncated = crawled = 0
+    edges = truncated = crawled = throttled = 0
+    consecutive_throttles = 0
+    stopped_early = None
     for position, work in enumerate(batch, start=1):
         work_id = work.provider_work_id
         result = fetch_openalex_citing_works(work_id, max_pages=max_pages)
@@ -1388,6 +1408,27 @@ def _refresh_citation_edges(bronze_session, args: argparse.Namespace) -> dict:
         work.citing_truncated = bool(result["truncated"])
         truncated += int(result["truncated"])
         crawled += 1
+
+        # Same policy as the backward pass: a work whose forward set was cut
+        # short by throttling is not evidence that the crawl succeeded, and
+        # five in a row means the API has stopped answering.
+        if result.get("throttled"):
+            throttled += 1
+            consecutive_throttles += 1
+        else:
+            consecutive_throttles = 0
+        if consecutive_throttles >= CONSECUTIVE_FAILURE_LIMIT:
+            stopped_early = "rate_limited"
+            bronze_session.commit()
+            logger.warning(
+                "openalex citing crawl: stopping after %d consecutive throttled works at "
+                "%d/%d; progress is committed and the next run resumes here",
+                consecutive_throttles,
+                position,
+                len(batch),
+            )
+            break
+
         commit_every = getattr(args, "commit_every", 25)
         if commit_every and position % commit_every == 0:
             bronze_session.commit()
@@ -1399,7 +1440,9 @@ def _refresh_citation_edges(bronze_session, args: argparse.Namespace) -> dict:
         "works_known": len(works),
         "already_crawled": len(works) - len(pending),
         "works_crawled": crawled,
-        "remaining": max(len(pending) - len(batch), 0),
+        "remaining": max(len(pending) - crawled, 0),
+        "throttled_works": throttled,
+        "stopped_early": stopped_early,
         "edges_inserted": edges,
         "truncated_works": truncated,
         "observed_at": observed_at.isoformat(),
