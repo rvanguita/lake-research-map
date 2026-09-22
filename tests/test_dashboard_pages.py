@@ -61,8 +61,47 @@ loaders.chunks = lambda: chunks
 loaders.chunk_search_data = lambda: chunks
 loaders.semantics = lambda: pd.DataFrame()
 loaders.with_semantics = lambda frame: frame
-loaders.author_year_matrix_cached = lambda *a, **k: pd.DataFrame()
 loaders.all_venue_qualis_map = lambda: pd.DataFrame({"venue": [], "estrato": []})
+
+author_rows = pd.DataFrame({
+    "doi": [f"10.1000/{i}" for i in range(n)],
+    "author": [f"Author {chr(65 + i % 6)}" for i in range(n)],
+    "author_display": [f"Author {chr(65 + i % 6)}" for i in range(n)],
+    "author_key": [f"author {chr(97 + i % 6)}" for i in range(n)],
+    "year": [2011 + (i % 14) for i in range(n)],
+    "source": ["ieee", "elsevier"] * (n // 2),
+    "position": [1] * n,
+    "citation_count": rng.integers(0, 90, size=n),
+})
+
+# Every loader that would otherwise open a MySQL connection. Without these the
+# suite still passes in isolation but each page spends ~30 s waiting for a
+# connection to time out, which is both slow and a false green: the page would
+# be rendering the degraded path, not the one under test.
+_empty = pd.DataFrame()
+loaders.articles_by_layer = lambda: {}
+loaders.author_table = lambda *a, **k: author_rows
+loaders.author_year_matrix_cached = lambda *a, **k: _empty
+loaders.alternative_projections = lambda *a, **k: {}
+loaders.chunk_search_data = lambda: chunks
+loaders.dataset_versions = lambda: _empty
+loaders.duplicate_overrides = lambda: _empty
+loaders.duplicate_pairs = lambda: _empty
+loaders.keyword_forecasts = lambda *a, **k: {}
+loaders.layer_funnel = lambda: _empty
+loaders.pipeline_executions = lambda: _empty
+loaders.pipeline_runs = lambda: _empty
+loaders.publication_state = lambda: _empty
+loaders.quality_results = lambda: _empty
+loaders.rejected_records = lambda: _empty
+loaders.row_counts = lambda: _empty
+loaders.search_configs = lambda: _empty
+loaders.semantic_novelty_scores = lambda *a, **k: _empty
+loaders.semantic_stability = lambda *a, **k: None
+loaders.source_changes = lambda: _empty
+from lake_research_map.dashboard.forecasting import fit_and_forecast, yearly_counts
+_forecast = fit_and_forecast(yearly_counts(articles))
+loaders.volume_forecast = lambda *a, **k: _forecast
 """
 
 _EMPTY_FIXTURE = """
@@ -83,8 +122,29 @@ loaders.chunks = lambda: empty
 loaders.chunk_search_data = lambda: empty
 loaders.semantics = lambda: empty
 loaders.with_semantics = lambda frame: frame
-loaders.author_year_matrix_cached = lambda *a, **k: empty
 loaders.all_venue_qualis_map = lambda: pd.DataFrame({"venue": [], "estrato": []})
+loaders.articles_by_layer = lambda: {}
+loaders.author_table = lambda *a, **k: empty
+loaders.author_year_matrix_cached = lambda *a, **k: empty
+loaders.alternative_projections = lambda *a, **k: {}
+loaders.dataset_versions = lambda: empty
+loaders.duplicate_overrides = lambda: empty
+loaders.duplicate_pairs = lambda: empty
+loaders.keyword_forecasts = lambda *a, **k: {}
+loaders.layer_funnel = lambda: empty
+loaders.pipeline_executions = lambda: empty
+loaders.pipeline_runs = lambda: empty
+loaders.publication_state = lambda: empty
+loaders.quality_results = lambda: empty
+loaders.rejected_records = lambda: empty
+loaders.row_counts = lambda: empty
+loaders.search_configs = lambda: empty
+loaders.semantic_novelty_scores = lambda *a, **k: empty
+loaders.semantic_stability = lambda *a, **k: None
+loaders.source_changes = lambda: empty
+from lake_research_map.dashboard.forecasting import fit_and_forecast
+_forecast = fit_and_forecast(pd.Series(dtype=float))
+loaders.volume_forecast = lambda *a, **k: _forecast
 """
 
 
