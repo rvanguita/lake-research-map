@@ -1311,6 +1311,7 @@ def network_null_model_diagnostics(graph, *, n_simulations: int = 100, seed: int
         return {"valid": False, "reason": "insufficient_network"}
     observed = float(nx.average_clustering(graph))
     null_values: list[float] = []
+    null_assortativity: list[float] = []
     rng = np.random.default_rng(seed)
     swaps = max(graph.number_of_edges() * 5, 1)
     for _ in range(max(1, n_simulations)):
@@ -1325,10 +1326,20 @@ def network_null_model_diagnostics(graph, *, n_simulations: int = 100, seed: int
         except (nx.NetworkXAlgorithmError, nx.NetworkXError):
             continue
         null_values.append(float(nx.average_clustering(candidate)))
+        null_assortativity.append(float(nx.degree_assortativity_coefficient(candidate)))
     if not null_values:
         return {"valid": False, "reason": "rewiring_failed"}
     null_array = np.asarray(null_values)
     null_std = float(null_array.std(ddof=1)) if len(null_array) > 1 else 0.0
+
+    # Assortativity rides along on the same rewired ensemble: the null is
+    # already built, and a bare assortativity coefficient says nothing without
+    # one -- degree sequence alone forces some of it.
+    observed_assortativity = float(nx.degree_assortativity_coefficient(graph))
+    assort_array = np.asarray([value for value in null_assortativity if np.isfinite(value)])
+    assort_std = float(assort_array.std(ddof=1)) if len(assort_array) > 1 else 0.0
+    assort_mean = float(assort_array.mean()) if len(assort_array) else float("nan")
+
     return {
         "valid": True,
         "observed_clustering": observed,
@@ -1337,7 +1348,119 @@ def network_null_model_diagnostics(graph, *, n_simulations: int = 100, seed: int
         "z_score": (observed - float(null_array.mean())) / null_std if null_std > 0 else None,
         "empirical_p_value": float((1 + np.sum(null_array >= observed)) / (len(null_array) + 1)),
         "simulations": len(null_array),
+        "observed_assortativity": observed_assortativity
+        if np.isfinite(observed_assortativity)
+        else None,
+        "assortativity_null_mean": assort_mean if np.isfinite(assort_mean) else None,
+        "assortativity_z_score": (
+            (observed_assortativity - assort_mean) / assort_std
+            if assort_std > 0 and np.isfinite(observed_assortativity) and np.isfinite(assort_mean)
+            else None
+        ),
+        **_robustness_under_removal(graph),
     }
+
+
+def _robustness_under_removal(graph, *, fraction: float = 0.1, seed: int = 42) -> dict:
+    """How much of the network survives losing its hubs versus random nodes.
+
+    A collaboration network held together by a few hub authors fragments under
+    targeted removal while barely noticing random loss. The gap between the two
+    is the structural claim; either number alone is just a graph size.
+    """
+    import networkx as nx
+
+    total = graph.number_of_nodes()
+    remove = max(1, int(round(total * fraction)))
+    if total - remove < 2:
+        return {"robustness_targeted": None, "robustness_random": None, "robustness_removed": 0}
+
+    def giant_share(candidate) -> float:
+        components = list(nx.connected_components(candidate))
+        return float(max(len(c) for c in components) / total) if components else 0.0
+
+    hubs = [node for node, _ in sorted(graph.degree, key=lambda kv: -kv[1])[:remove]]
+    targeted = graph.copy()
+    targeted.remove_nodes_from(hubs)
+
+    rng = np.random.default_rng(seed)
+    random_shares = []
+    for _ in range(20):
+        victim = graph.copy()
+        victim.remove_nodes_from(rng.choice(list(graph.nodes), size=remove, replace=False).tolist())
+        random_shares.append(giant_share(victim))
+
+    return {
+        "robustness_targeted": giant_share(targeted),
+        "robustness_random": float(np.mean(random_shares)),
+        "robustness_removed": remove,
+    }
+
+
+def periodized_collaboration_ties(author_rows: pd.DataFrame, *, n_periods: int = 3) -> pd.DataFrame:
+    """Split coauthor ties into periods and count new versus repeated ones.
+
+    The existing recurrent-edge count is static: it says how many pairs ever
+    published twice, which cannot distinguish a field that keeps recruiting new
+    collaborators from one that has closed into fixed teams. Splitting by the
+    year a tie first appears is what makes that visible.
+    """
+    required = {"doi", "year"}
+    author_column = "author_display" if "author_display" in author_rows.columns else "author"
+    if author_rows.empty or not required.issubset(author_rows.columns):
+        return pd.DataFrame()
+
+    rows = author_rows.dropna(subset=["doi", "year", author_column]).copy()
+    rows["year"] = pd.to_numeric(rows["year"], errors="coerce")
+    rows = rows.dropna(subset=["year"])
+    if rows.empty:
+        return pd.DataFrame()
+
+    # Every unordered author pair on each paper, with that paper's year.
+    ties: dict[tuple[str, str], list[int]] = {}
+    for (_doi, year), group in rows.groupby(["doi", "year"]):
+        names = sorted({str(name) for name in group[author_column]})
+        if len(names) < 2:
+            continue
+        for i, left in enumerate(names):
+            for right in names[i + 1 :]:
+                ties.setdefault((left, right), []).append(int(year))
+    if not ties:
+        return pd.DataFrame()
+
+    years = np.sort(rows["year"].unique())
+    if len(years) < n_periods:
+        n_periods = max(1, len(years))
+    edges = np.array_split(years, n_periods)
+
+    records = []
+    for block in edges:
+        if not len(block):
+            continue
+        low, high = int(block.min()), int(block.max())
+        new_ties = 0
+        repeated = 0
+        for appearances in ties.values():
+            within = [y for y in appearances if low <= y <= high]
+            if not within:
+                continue
+            # "New" means the pair's first-ever collaboration falls in this
+            # period; anything earlier makes it a returning partnership.
+            if min(appearances) >= low:
+                new_ties += 1
+            else:
+                repeated += 1
+        total = new_ties + repeated
+        records.append(
+            {
+                "period": f"{low}–{high}",
+                "new_ties": new_ties,
+                "repeated_ties": repeated,
+                "total_ties": total,
+                "new_share": float(new_ties / total) if total else float("nan"),
+            }
+        )
+    return pd.DataFrame(records)
 
 
 def _knn_overlap(matrix: np.ndarray, projection: np.ndarray, k: int) -> float:
