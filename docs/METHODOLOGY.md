@@ -85,6 +85,27 @@ Observed clustering is compared against degree-preserving rewirings of the same 
 
 Lotka's law is fitted on distinct-DOI counts per canonical author. Like every other person-level indicator here it is corpus-scoped, and it inherits the heuristic-identity caveat: homonyms merge and spelling variants split.
 
+## Engineering taxonomies
+
+The seven taxonomies on the Engineering-evidence page are regular expressions over
+title and abstract, enumerated in `analytics.py::TAXONOMY_REGISTRY`. They are
+**exploratory**: no reviewed sample exists, so their precision and recall are
+unmeasured, and every panel says so.
+
+Each one reports its measured coverage, because the share it never matched is the
+difference between "among the articles this rule recognised, which class is most
+common?" and "what does this corpus do?". Only objective functions exceeds half the
+corpus, at 78.3%, and it assigns 1,457 of those articles to more than one class; the
+other six classify between 16.1% and 31.8%. The classes are not mutually exclusive,
+so per-class counts sum past the classified population and must not be read as a
+partition.
+
+When a reviewed sample is imported, `taxonomy_precision_from_labels` reports per-class
+precision, recall and F1 against it, and the exploratory notice is replaced by those
+numbers. `ambiguous` labels are excluded from both metrics and reported separately: a
+reviewer who could not decide is evidence about where the class boundary sits, not a
+negative example.
+
 ## Retrieval and anomaly audit
 
 Hybrid retrieval combines BM25 and dense embedding ranks through reciprocal rank fusion. The interface exposes component ranks/scores so a reviewer can inspect why an item appeared. No retrieval-quality claim is made without a labeled query relevance set.

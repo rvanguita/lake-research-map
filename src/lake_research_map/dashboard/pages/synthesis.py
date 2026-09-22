@@ -21,6 +21,7 @@ from lake_research_map.dashboard.components import (
     page_header,
     render_chart,
     summary_card_row,
+    taxonomy_disclosure,
 )
 from lake_research_map.dashboard.theme import CATEGORICAL_PALETTE
 
@@ -75,6 +76,8 @@ def _render_methods_tab(df: pd.DataFrame) -> None:
     )
 
     res = optimization_methods_taxonomy(df)
+
+    taxonomy_disclosure(df, "Optimization methods")
     summary_df = res["summary_df"]
     temporal_df = res["temporal_df"]
 
@@ -83,6 +86,8 @@ def _render_methods_tab(df: pd.DataFrame) -> None:
         return
 
     spec_res = mathematical_complexity_spectrum(df)
+
+    taxonomy_disclosure(df, "Mathematical complexity")
     spectrum_df = spec_res["spectrum_df"]
     temp_spec = spec_res["temporal_spectrum"]
 
@@ -227,6 +232,8 @@ def _render_objectives_tab(df: pd.DataFrame) -> None:
     )
 
     obj_res = objective_functions_taxonomy(df)
+
+    taxonomy_disclosure(df, "Objective functions")
     summary_df = obj_res["summary_df"]
     co_matrix = obj_res["co_matrix"]
     multi_ratio = obj_res["multi_obj_ratio"]
@@ -367,6 +374,8 @@ def _render_uncertainty_tab(df: pd.DataFrame) -> None:
     )
 
     unc_res = uncertainty_paradigms_analysis(df)
+
+    taxonomy_disclosure(df, "Uncertainty paradigms")
     paradigms_df = unc_res["paradigms_df"]
     cross_resources = unc_res["cross_resources"]
     temp_paradigms = unc_res["temporal_paradigms"]
@@ -491,6 +500,8 @@ def _render_horizons_tab(df: pd.DataFrame) -> None:
     )
 
     h_res = planning_time_horizons_analysis(df)
+
+    taxonomy_disclosure(df, "Planning horizons")
     horizons_df = h_res["horizons_df"]
 
     if horizons_df.empty:
@@ -596,6 +607,8 @@ def _render_feeders_tab(df: pd.DataFrame) -> None:
     )
 
     res = benchmark_feeders_analysis(df)
+
+    taxonomy_disclosure(df, "Benchmark feeders")
     feeders_df = res["feeders_df"]
     cross_matrix = res["cross_matrix"]
 
@@ -686,6 +699,8 @@ def _render_solvers_tab(df: pd.DataFrame) -> None:
     )
 
     s_res = computational_solvers_analysis(df)
+
+    taxonomy_disclosure(df, "Computational solvers")
     solvers_df = s_res["solvers_df"]
     ecosystem_df = s_res["ecosystem_df"]
 

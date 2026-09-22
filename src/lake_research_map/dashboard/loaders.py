@@ -606,3 +606,11 @@ def semantic_novelty_scores() -> pd.DataFrame:
     dois, matrix = embs
     scores = compute_semantic_novelty(matrix)
     return pd.DataFrame({"doi": dois, "novelty_score": scores})
+
+
+@st.cache_data(ttl=60)
+def review_labels(workflow: str) -> pd.DataFrame:
+    """Latest-revision reviewed labels for one evidence workflow."""
+    from lake_research_map.dashboard.data import load_review_labels
+
+    return load_review_labels(workflow)

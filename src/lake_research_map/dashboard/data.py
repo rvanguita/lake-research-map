@@ -434,3 +434,39 @@ def load_abstract_embeddings_data() -> pd.DataFrame:
         table.c.embedding_bin.is_not(None),
     )
     return pd.read_sql_query(query, engine)
+
+
+def load_review_labels(workflow: str) -> pd.DataFrame:
+    """Reviewed labels for one human-evidence workflow, newest revision per pair.
+
+    Labels are append-only: a reviewer changing their mind adds a row rather
+    than overwriting one, so reading the raw table double-counts. The latest
+    revision per (assignment, reviewer) is the decision that stands, and the
+    superseded rows remain the audit trail.
+    """
+    if not table_exists("gold", "lit_review_labels") or not table_exists(
+        "gold", "lit_review_assignments"
+    ):
+        return pd.DataFrame()
+    engine = get_engine("gold")
+    try:
+        return pd.read_sql_query(
+            text(
+                # The reviewer lives on the assignment, not the label; a label
+                # only knows which assignment it answers.
+                "SELECT a.workflow, a.subject_id, a.reviewer_id, l.label, l.rationale, "
+                "       l.label_revision, l.imported_at "
+                "FROM lit_review_labels l "
+                "JOIN lit_review_assignments a ON a.id = l.assignment_id "
+                "WHERE a.workflow = :workflow "
+                "  AND l.label_revision = ("
+                "      SELECT MAX(l2.label_revision) FROM lit_review_labels l2 "
+                "      WHERE l2.assignment_id = l.assignment_id"
+                "  )"
+            ),
+            engine,
+            params={"workflow": workflow},
+        )
+    except SQLAlchemyError as exc:
+        logger.warning("load_review_labels(%r): %s", workflow, exc)
+        return pd.DataFrame()

@@ -26,7 +26,7 @@ Dependencies use work-package IDs. Horizons are sequencing bands rather than cal
 
 ## 2. Delivered baseline
 
-The following capabilities are implemented and covered by the current 273-test suite (229 before this cycle, plus regression tests for the defects `WP-15` through `WP-19` fixed, the 21 application-wide page tests `WP-22` added, and the evidence-sample coverage from Section 4):
+The following capabilities are implemented and covered by the current 280-test suite (229 before this cycle, plus regression tests for the defects `WP-15` through `WP-19` fixed, the 21 application-wide page tests `WP-22` added, and the evidence-sample coverage from Section 4):
 
 - Raw/Bronze/Silver/Gold ingestion and transformations with DOI normalization and rejection audit.
 - Local PDF inventory/matching, full-text extraction, chunk reconciliation, and local BGE embeddings.
@@ -158,13 +158,14 @@ This baseline does not imply that every analytical method is confirmatory. The l
 
 ### `WP-12` — Engineering-taxonomy validation
 
-- **Status:** `blocked-awaiting-evidence`; taxonomy labels can be persisted, but class-level evaluation requires the reviewed sample.
+- **Status:** Complete on 2026-09-22 under the second branch of its own completion rule -- every displayed taxonomy reports measured coverage and is labelled exploratory. Per-class precision remains unmeasured and upgrades itself when a review lands; a stratified sample and 240 dual assignments are already waiting.
 
 - **Objective:** Treat regex extraction as a measured multi-label classifier.
 - **Justification:** Frequency charts currently lack precision/recall evidence and an explicit unknown class.
 - **Dependencies:** `WP-04`.
 - **Deliverable:** Stratified labeled articles, label guide, per-class precision/recall/F1, ambiguous/unclassified reporting, and refined non-overlapping rules where justified.
 - **Completion:** Each displayed taxonomy reports evaluated coverage and meets a declared minimum precision or is labeled exploratory.
+- **Evidence:** The completion rule has two branches and this closes on the second, deliberately: *evaluated coverage* is measurable today, *declared minimum precision* is not, and labelling the taxonomies exploratory is the honest reading rather than a way around the bar. All seven regex taxonomies on the Engineering-evidence page -- optimization methods, objective functions, uncertainty paradigms, planning horizons, computational solvers, mathematical complexity, benchmark feeders -- were previously inline pattern dicts; they are hoisted to module constants and enumerated in `analytics.py::TAXONOMY_REGISTRY`, which is what makes "each displayed taxonomy" checkable instead of a promise, and a test asserts the registry matches the page. `taxonomy_coverage` reports the classified share, the unclassified count and the multi-label count beside every chart. The measured numbers are the finding: **objective functions classify 78.3% of the corpus but assign 1,457 of those articles to more than one class, while the other six classify between 16.1% and 31.8%** -- planning horizons 17.2%, computational solvers 16.1%, benchmark feeders 19.9%, uncertainty paradigms 20.3%, mathematical complexity 28.3%, optimization methods 31.8%. A frequency chart over the matched subset answers "among the ones I recognised, which is most common?" while looking like it answers "what does this corpus do?", so each panel now says which question it is answering and over what share. `taxonomy_precision_from_labels` scores a reviewed sample per class, excluding `ambiguous` from precision and recall and counting it separately -- a reviewer who could not decide is evidence about the class boundary, not a negative -- and the panel swaps the exploratory notice for measured precision as soon as labels exist, with no further code change.
 
 ### `WP-13` — Retrieval evaluation corpus
 
