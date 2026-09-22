@@ -331,7 +331,7 @@ def _zipf_analysis(articles_df: pd.DataFrame) -> None:
 
     metric_row(
         [
-            ("📐 Incline Coefficient (γ)", f"{zipf_res['gamma']:.2f}", "Theoretical target: ~1.0"),
+            ("📐 Slope coefficient (γ)", f"{zipf_res['gamma']:.2f}", "Theoretical target: ~1.0"),
             (
                 "Determination (R2)",
                 f"{zipf_res['r_squared']:.3f}",
@@ -480,7 +480,7 @@ def _topic_share_area(kw_year: pd.DataFrame) -> None:
 
 
 def _rising_falling(kw_year: pd.DataFrame) -> None:
-    st.markdown("**Ascented vs. declining terms**")
+    st.markdown("**Rising vs. declining terms**")
     counts = kw_year["keyword"].value_counts()
     eligible = counts[counts >= MIN_KEYWORD_OCCURRENCES].index
 
@@ -1072,14 +1072,14 @@ def _conceptual_atypicality_tab(articles_df: pd.DataFrame) -> None:
         hover_data=["title", "citations", "year"],
         color_discrete_map={True: "#e34948", False: "#2a78d6"},
         labels={
-            "median_z": "Convencionalidade (Mediana de Z)",
+            "median_z": "Conventionality (median Z)",
             "min_z": "Atypicality (Minimum Z)",
             "is_hit": "Top 5% by citations?",
         },
         title="Dispersion: Conventionality vs. Extreme Atypicality by Article",
     )
     fig.update_layout(
-        xaxis_title="Convencionalidade (Mediana Z)", yaxis_title="Atypicality (Minimum Z)"
+        xaxis_title="Conventionality (median Z)", yaxis_title="Atypicality (Minimum Z)"
     )
     render_chart(
         fig,

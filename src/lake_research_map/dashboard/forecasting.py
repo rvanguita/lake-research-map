@@ -226,7 +226,7 @@ def fit_and_forecast(
             baseline_skill=None,
             empirical_interval_coverage=None,
             insufficient_data=True,
-            notes=["Years of insufficient training (minimum 4) to adjust a model."],
+            notes=["Not enough training years (minimum 4) to fit a model."],
         )
 
     train_years = train.index.to_numpy()
@@ -350,8 +350,8 @@ def fit_and_forecast(
         train_only_predict = _fit_model(chosen_model, train_years, train_values)
         holdout_predicted = float(train_only_predict([holdout_year])[0])
         notes.append(
-            f"{holdout_year} is partial: it is shown only for monitoring and is not used "
-            "of selection or final adjustment."
+            f"{holdout_year} is partial: it is shown for monitoring only and takes no part "
+            "in model selection or the final fit."
         )
     if (train_values.max() if len(train_values) else 0) < 20:
         notes.append("Low volume series — the confidence band is proportionally wider.")
