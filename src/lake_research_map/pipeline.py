@@ -1615,8 +1615,56 @@ def _audit_citation_graph() -> None:
                 "Below 80% in both directions: the disruption index stays unavailable, which is "
                 "WP-24's documented outcome for inadequate coverage, not a failure to fix in code."
             )
+        observed_dois = session.scalars(
+            select(ExternalWork.doi).where(ExternalWork.provider == "openalex")
+        ).all()
+        _print_registrant_coverage(observed_dois, "Citation-graph coverage")
     finally:
         session.close()
+
+
+def _print_registrant_coverage(observed_dois, label: str) -> None:
+    """Break external-data coverage out by publisher, against the whole corpus.
+
+    An aggregate percentage over a single-publisher sample is precisely the
+    number that hid the sampling bias found on 2026-09-22: the crawl had
+    observed 989 Elsevier works and zero IEEE ones, and every coverage figure
+    still read as a statement about the corpus. Reporting the corpus as the
+    denominator per registrant makes a source sitting at zero impossible to
+    miss.
+    """
+    from lake_research_map.db.gold_models import DatasetArticle, PublicationState
+    from lake_research_map.ingest.openalex import registrant_label, registrant_prefix
+
+    gold = get_session("gold")
+    try:
+        state = gold.get(PublicationState, 1)
+        if state is None or not state.active_version_id:
+            return
+        corpus = gold.scalars(
+            select(DatasetArticle.doi).where(
+                DatasetArticle.dataset_version_id == state.active_version_id
+            )
+        ).all()
+    finally:
+        gold.close()
+    if not corpus:
+        return
+
+    totals: dict[str, int] = {}
+    for doi in corpus:
+        totals[registrant_prefix(doi)] = totals.get(registrant_prefix(doi), 0) + 1
+    seen: dict[str, int] = {}
+    for doi in observed_dois:
+        if doi:
+            prefix = registrant_prefix(doi)
+            seen[prefix] = seen.get(prefix, 0) + 1
+
+    print(f"\n{label} by publisher (denominator is the corpus, not the crawl):")
+    for prefix, total in sorted(totals.items(), key=lambda item: -item[1])[:6]:
+        got = seen.get(prefix, 0)
+        flag = "   <- not reached" if got == 0 else ""
+        print(f"  {registrant_label(prefix):10} {got:5} / {total:5} ({got / total:5.1%}){flag}")
 
 
 def _audit_citation_years() -> None:
@@ -1671,6 +1719,10 @@ def _audit_citation_years() -> None:
                 "Below 80%: Price's index, citation longevity and Sleeping Beauty stay "
                 "unavailable, which is WP-23's documented outcome for inadequate coverage."
             )
+        observed_dois = session.scalars(
+            select(ExternalWork.doi).where(ExternalWork.provider == "openalex")
+        ).all()
+        _print_registrant_coverage(observed_dois, "Annual-count coverage")
     finally:
         session.close()
 
