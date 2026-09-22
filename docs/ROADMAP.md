@@ -190,14 +190,14 @@ This baseline does not imply that every analytical method is confirmatory. The l
 
 ### `WP-15` — Citation count-model diagnostics
 
-- **Status:** Partially delivered; the diagnostics are computed and now rendered, while a fitted zero-inflated model and alternative age specifications remain open.
+- **Status:** Complete on 2026-09-22; the family is selected by AIC across four candidates and the age specification is reported as a sensitivity rather than assumed.
 
 - **Objective:** Report robust associations without hiding misspecification or selection effects.
 - **Justification:** The current Poisson/NB choice uses a heuristic dispersion rule and lacks multicollinearity, influence, zero-inflation, and sensitivity diagnostics.
 - **Dependencies:** `WP-07`.
 - **Deliverable:** Missingness profile, VIF/condition number, residual/influence checks, Poisson/NB/zero-inflated comparison when identifiable, alternative age specifications, and coefficient forest with CIs.
 - **Completion:** Synthetic/fixture tests cover convergence and known coefficients; unsupported models are rejected; the UI states association rather than causation.
-- **Evidence:** Missingness profile, condition number, VIF, Cook's-distance influence count, observed-versus-predicted zero fraction, and the alternative family AIC are computed in `analytics.py::citation_determinants_glm` and displayed in the Impact page's specification-diagnostics panel, which also labels the estimates exploratory when the zero gap is large. Still missing: an actual ZIP/ZINB fit (family choice remains the dispersion > 1.5 heuristic rather than an AIC or likelihood-ratio decision) and any alternative to the fixed `log(age + 1)` exposure.
+- **Evidence:** Missingness profile, condition number, VIF, Cook's-distance influence count, observed-versus-predicted zero fraction, and the candidate AICs are computed in `analytics.py::citation_determinants_glm` and displayed in the Impact page's specification-diagnostics panel. The dispersion > 1.5 heuristic is gone: Poisson, negative binomial, ZIP and ZINB are all fitted and the minimum AIC wins, with `zero_inflated_status` recording when no zero-inflated candidate converged. A candidate whose Hessian could not be inverted is refused outright rather than selected -- it has point estimates but NaN intervals and p-values, and a family that cannot state its own uncertainty must not win on AIC. Cook's distance is likewise reported against the Poisson GLM with `influence_basis` naming it, because a zero-inflated MLE fit has no hat matrix and would otherwise return a NaN dressed as a diagnostic. The fixed `log(age + 1)` offset is now one of three specifications -- offset, free log-age covariate, free linear-age covariate -- and `age_specification_signs_agree` drives an explicit warning when a coefficient changes sign between them.
 
 ### `WP-16` — Multiple testing and temporal trend validity
 

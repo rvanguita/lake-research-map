@@ -502,6 +502,16 @@ def _age_normalized_rankings(articles_df: pd.DataFrame) -> None:
     )
 
 
+# Internal design-matrix column names kept for schema stability; the dashboard
+# renders these English labels instead (PRD NFR-07).
+_GLM_FEATURE_LABELS = {
+    "ano_publicacao": "Publication year (time effect)",
+    "qtd_referencias": "Reference count",
+    "tamanho_equipe": "Team size (authors)",
+    "origem_ieee": "Published in IEEE (vs. Elsevier)",
+}
+
+
 def _citation_determinants_glm_view(articles_df: pd.DataFrame) -> None:
     st.subheader("Determinants associated with citation rate")
     st.caption(
@@ -521,12 +531,7 @@ def _citation_determinants_glm_view(articles_df: pd.DataFrame) -> None:
     coefs = glm_res["coefficients"]
     irrs = glm_res["irr"]
 
-    feat_labels = {
-        "ano_publicacao": "Publication year (time effect)",
-        "qtd_referencias": "Reference count",
-        "tamanho_equipe": "Team size (authors)",
-        "origem_ieee": "Published in IEEE (vs. Elsevier)",
-    }
+    feat_labels = _GLM_FEATURE_LABELS
 
     glm_df = pd.DataFrame(
         {
@@ -540,7 +545,8 @@ def _citation_determinants_glm_view(articles_df: pd.DataFrame) -> None:
     )
     st.dataframe(glm_df, hide_index=True, width="stretch")
     st.caption(
-        f"Family: {glm_res['family'].replace('_', ' ')} · Poisson dispersion "
+        f"Family: {glm_res['family'].replace('_', ' ')}, selected by AIC over "
+        f"{len(glm_res.get('candidate_aic') or {})} candidates · Poisson dispersion "
         f"{glm_res['dispersion']:.2f} · coverage {glm_res['n_used']}/{glm_res['n_total']} "
         f"({glm_res['coverage']:.1%}) · pseudo R² {glm_res.get('score', 0):.3f}."
     )
@@ -551,11 +557,12 @@ def _citation_determinants_glm_view(articles_df: pd.DataFrame) -> None:
 
 
 def _family_aic_metric(glm_res: dict) -> tuple[str, str, str]:
-    """Compare the candidate families by AIC beside the heuristic that chose one.
+    """Report the AIC of every candidate family beside the one AIC selected.
 
-    `candidate_aic` maps each fitted family to its AIC. The family actually
-    selected still comes from the dispersion > 1.5 rule, so showing both makes
-    it visible when AIC would have preferred the other one.
+    `candidate_aic` maps each family that converged to its AIC, and the model
+    now selects the minimum rather than applying a dispersion threshold. Listing
+    the losers is what lets a reader see how decisive that choice was: two
+    families a point apart is a different claim from two hundred apart.
     """
     candidates = glm_res.get("candidate_aic") or {}
     selected = glm_res["family"]
@@ -563,14 +570,70 @@ def _family_aic_metric(glm_res: dict) -> tuple[str, str, str]:
     if not candidates:
         return ("\U0001f9ee Family AIC", "n/a", f"selected: {readable}")
 
-    best = min(candidates, key=lambda name: candidates[name])
     detail = " \u00b7 ".join(
         f"{name.replace('_', ' ')} {value:.1f}" for name, value in sorted(candidates.items())
     )
-    if len(candidates) > 1 and best != selected:
-        detail += f" \u2014 AIC would prefer {best.replace('_', ' ')}"
-    value = f"{candidates[selected]:.1f}" if selected in candidates else f"{candidates[best]:.1f}"
+    if glm_res.get("zero_inflated_status") == "did_not_converge":
+        detail += " \u2014 no zero-inflated fit converged"
+    value = f"{candidates[selected]:.1f}" if selected in candidates else "n/a"
     return (f"\U0001f9ee AIC ({readable})", value, detail)
+
+
+def _age_specification_table(glm_res: dict, feat_labels: dict[str, str]) -> None:
+    """Show whether each association survives a different exposure assumption.
+
+    `log(age + 1)` as a fixed-coefficient offset forces citations to accumulate
+    exactly proportionally to log age. WP-15 requires the alternative
+    specifications to be visible, because a predictor whose sign flips between
+    them is an artifact of that assumption rather than a finding.
+    """
+    specifications = glm_res.get("age_specifications") or []
+    if len(specifications) < 2:
+        return
+
+    readable = {
+        "offset_log_age": "log(age+1) as offset (default)",
+        "covariate_log_age": "log(age+1) as free covariate",
+        "covariate_linear_age": "age as free covariate",
+    }
+    rows = []
+    for spec in specifications:
+        row = {
+            "Age specification": readable.get(spec["specification"], spec["specification"]),
+            "AIC": round(float(spec["aic"]), 1),
+        }
+        for feature, coefficient in spec["coefficients"].items():
+            row[f"\u03b2 {feat_labels.get(feature, feature)}"] = round(float(coefficient), 4)
+        rows.append(row)
+
+    st.markdown("**Sensitivity to the age specification**")
+    st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+    if glm_res.get("age_specification_signs_agree"):
+        st.caption(
+            "Every coefficient keeps its sign across the three exposure choices, so the "
+            "reported associations are not an artifact of treating log age as a fixed offset."
+        )
+    else:
+        st.warning(
+            "At least one coefficient changes sign when the age term is estimated instead of "
+            "fixed. Treat that association as an artifact of the exposure choice, not a finding."
+        )
+
+
+def _influence_delta(glm_res: dict, max_cooks: float | None) -> str:
+    """Caption the influence count, naming the fit it was measured on.
+
+    Cook's distance needs a hat matrix, which a zero-inflated fit has not got,
+    so the model falls back to the Poisson GLM. Saying which fit produced the
+    number keeps it from reading as a diagnostic of the selected family.
+    """
+    if max_cooks is None or not pd.notna(max_cooks):
+        return "Cook's distance unavailable for this fit"
+    basis = glm_res.get("influence_basis")
+    suffix = ""
+    if basis and basis not in {glm_res.get("family"), "unavailable"}:
+        suffix = f", measured on the {basis.replace('_', ' ')} fit"
+    return f"max Cook's distance {max_cooks:.3f}{suffix}"
 
 
 def _glm_specification_diagnostics(glm_res: dict) -> None:
@@ -597,7 +660,7 @@ def _glm_specification_diagnostics(glm_res: dict) -> None:
                 (
                     "🎯 Influential observations",
                     f"{glm_res.get('influential_count', 0):,}",
-                    "n/a" if max_cooks is None else f"max Cook's distance {max_cooks:.3f}",
+                    _influence_delta(glm_res, max_cooks),
                 ),
                 (
                     "⚠️ Zero-inflation gap",
@@ -641,8 +704,18 @@ def _glm_specification_diagnostics(glm_res: dict) -> None:
                 "unevenly across sources also shifts which articles the model sees."
             )
 
-        st.caption(
-            "A positive zero-inflation gap means the model under-predicts articles with zero "
-            "citations. No zero-inflated model is fitted here, so a large gap marks these "
-            "estimates as exploratory rather than being corrected for."
-        )
+        _age_specification_table(glm_res, _GLM_FEATURE_LABELS)
+
+        if glm_res.get("zero_inflated_status") == "fitted":
+            st.caption(
+                "A positive zero-inflation gap means the model under-predicts articles with "
+                "zero citations. Zero-inflated Poisson and negative-binomial models were "
+                "fitted as candidates and compared by AIC, so a gap that survives selection "
+                "is a property of the corpus rather than an uncorrected misspecification."
+            )
+        else:
+            st.caption(
+                "A positive zero-inflation gap means the model under-predicts articles with "
+                "zero citations. No zero-inflated candidate converged on this cut, so a large "
+                "gap marks these estimates as exploratory rather than being corrected for."
+            )
