@@ -240,6 +240,7 @@ def _persist_openalex_evidence(session: Session, result: dict, observed_at: date
                     citing_work_id=work_id,
                     cited_work_id=str(cited_work_id),
                     observed_at=observed_at,
+                    discovered_via="referenced_works",
                 )
             )
     access = payload.get("open_access") or {}
@@ -311,4 +312,158 @@ def enrich_cache_from_openalex(
         "fetched": fetched_count,
         "updated": updated_count,
         "total_cache_entries": len(cache),
+    }
+
+
+# ---------------------------------------------------------------------------
+# WP-24: incoming citation edges and graph coverage
+# ---------------------------------------------------------------------------
+
+# OpenAlex caps a page at 200 and will keep paginating a highly-cited work for
+# a long time. The cap exists so one popular paper cannot consume an entire
+# refresh budget; a truncated crawl is recorded as truncated rather than
+# silently treated as "no more citations".
+CITING_PAGE_SIZE = 200
+CITING_MAX_PAGES = 5
+
+
+def fetch_openalex_citing_works(
+    work_id: str,
+    *,
+    session_factory=None,
+    email: str | None = None,
+    api_key: str | None = None,
+    max_pages: int = CITING_MAX_PAGES,
+) -> dict:
+    """List the OpenAlex works that cite `work_id`, following `cites:` pages.
+
+    Returns ``{"citing_work_ids": [...], "truncated": bool, "pages": int}``.
+    `truncated` is the field that matters downstream: without it an incomplete
+    crawl is indistinguishable from a work with few citations, and the
+    disruption index that WP-24 exists to enable would be computed on a
+    forward-citation set that is quietly missing its tail.
+
+    Network-bound. `session_factory` is injected so the pagination logic can be
+    tested without calling OpenAlex.
+    """
+    import requests
+
+    get = session_factory or requests.get
+    resolved_email = email or os.environ.get("OPENALEX_EMAIL")
+    resolved_key = api_key or os.environ.get("OPENALEX_API_KEY")
+
+    citing: list[str] = []
+    cursor = "*"
+    pages = 0
+    truncated = False
+    while pages < max_pages:
+        params = {
+            "filter": f"cites:{work_id}",
+            "per-page": CITING_PAGE_SIZE,
+            "cursor": cursor,
+            "select": "id",
+        }
+        if resolved_email:
+            params["mailto"] = resolved_email
+        if resolved_key:
+            params["api_key"] = resolved_key
+        response = get(
+            OPENALEX_BASE_URL, params=params, headers={"User-Agent": DEFAULT_USER_AGENT}, timeout=30
+        )
+        response.raise_for_status()
+        payload = response.json()
+        pages += 1
+        for item in payload.get("results") or []:
+            identifier = item.get("id")
+            if identifier and identifier != work_id:
+                citing.append(str(identifier))
+        cursor = (payload.get("meta") or {}).get("next_cursor")
+        if not cursor or not (payload.get("results") or []):
+            break
+    else:
+        truncated = True
+
+    # `while ... else` runs the else only when the loop was never broken out
+    # of, which is exactly the "ran out of page budget" case.
+    return {
+        "citing_work_ids": list(dict.fromkeys(citing)),
+        "truncated": truncated,
+        "pages": pages,
+    }
+
+
+def persist_incoming_edges(
+    session: Session,
+    work_id: str,
+    citing_work_ids: list[str],
+    observed_at: datetime,
+) -> int:
+    """Store `cites:` results as edges, tagged with how they were discovered.
+
+    Direction needs no column: an incoming edge is one whose `cited_work_id`
+    is ours. What does need recording is the provenance, because a crawl that
+    stopped early and a work that is genuinely uncited look identical
+    afterwards.
+    """
+    inserted = 0
+    for citing in dict.fromkeys(citing_work_ids):
+        if not citing or citing == work_id:
+            continue
+        session.add(
+            CitationEdge(
+                provider="openalex",
+                citing_work_id=str(citing),
+                cited_work_id=work_id,
+                observed_at=observed_at,
+                discovered_via="cites_query",
+            )
+        )
+        inserted += 1
+    return inserted
+
+
+def citation_graph_coverage(session: Session, work_ids: list[str]) -> dict:
+    """Report how much of the corpus has usable forward and backward edges.
+
+    WP-24's gate says CD/disruption stays unavailable unless coverage is
+    adequate, which cannot be evaluated without measuring it. Backward
+    coverage is trustworthy when present because a reference list is complete
+    per work; forward coverage is only trustworthy where the crawl was not
+    truncated, so the two are reported separately rather than averaged into
+    one reassuring number.
+    """
+    wanted = [str(w) for w in work_ids if w]
+    if not wanted:
+        return {
+            "population": 0,
+            "with_backward": 0,
+            "with_forward": 0,
+            "backward_coverage": 0.0,
+            "forward_coverage": 0.0,
+            "usable_for_disruption": 0,
+        }
+
+    rows = session.execute(
+        select(CitationEdge.citing_work_id, CitationEdge.cited_work_id, CitationEdge.discovered_via)
+    ).all()
+    backward: set[str] = set()
+    forward: set[str] = set()
+    for citing, cited, via in rows:
+        if via == "referenced_works" and citing in wanted:
+            backward.add(citing)
+        elif via == "cites_query" and cited in wanted:
+            forward.add(cited)
+
+    population = len(set(wanted))
+    both = backward & forward
+    return {
+        "population": population,
+        "with_backward": len(backward),
+        "with_forward": len(forward),
+        "backward_coverage": len(backward) / population,
+        "forward_coverage": len(forward) / population,
+        # The disruption index needs both directions for the same work, so the
+        # usable population is the intersection, never the larger of the two.
+        "usable_for_disruption": len(both),
+        "disruption_coverage": len(both) / population,
     }

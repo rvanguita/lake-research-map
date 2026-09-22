@@ -26,7 +26,7 @@ Dependencies use work-package IDs. Horizons are sequencing bands rather than cal
 
 ## 2. Delivered baseline
 
-The following capabilities are implemented and covered by the current 268-test suite (229 before this cycle, plus regression tests for the defects `WP-15` through `WP-19` fixed, the 21 application-wide page tests `WP-22` added, and the evidence-sample coverage from Section 4):
+The following capabilities are implemented and covered by the current 273-test suite (229 before this cycle, plus regression tests for the defects `WP-15` through `WP-19` fixed, the 21 application-wide page tests `WP-22` added, and the evidence-sample coverage from Section 4):
 
 - Raw/Bronze/Silver/Gold ingestion and transformations with DOI normalization and rejection audit.
 - Local PDF inventory/matching, full-text extraction, chunk reconciliation, and local BGE embeddings.
@@ -296,13 +296,14 @@ This baseline does not imply that every analytical method is confirmatory. The l
 
 ### `WP-24` — Citation graph and verified access data
 
-- **Status:** Outgoing citation-edge and access-observation persistence implemented; incoming-edge collection, coverage, and confounding audits remain open.
+- **Status:** Incoming-edge collection and the coverage audit are implemented and fixture-tested on 2026-09-22; running them needs `OPENALEX_EMAIL` and a live crawl, so measured coverage remains open.
 
 - **Objective:** Enable disruption and access-association research with the required observables.
 - **Justification:** CD disruption requires forward/backward citation relations; OACA requires verified access status and confounder control.
 - **Dependencies:** `WP-01`, `WP-07`.
 - **Deliverable:** Versioned citation graph; verified access observations; documented sampling/coverage and model protocol.
 - **Completion:** Graph integrity and access-validation audits pass; CD/OACA remain unavailable if coverage or confounding control is inadequate.
+- **Evidence:** `ingest/openalex.py::fetch_openalex_citing_works` follows the `cites:` cursor to collect forward edges, and `persist_incoming_edges` stores them in the existing `lit_citation_edges` table. No direction column was added: an incoming edge is already one whose `cited_work_id` is ours. What was missing is provenance, so `discovered_via` (additive, nullable) records whether an edge came from a work's own complete `referenced_works` list or from a paginated `cites:` crawl -- absent the distinction, a crawl that ran out of page budget is indistinguishable from a genuinely uncited work, and the disruption index this package exists to enable would be computed on a forward-citation set silently missing its tail. The crawl is capped at five pages of 200 and reports `truncated` when it stops early. `citation_graph_coverage` reports backward and forward coverage separately and defines the usable population as their **intersection**, never the larger of the two, because the disruption index needs both directions for the same work. All of it is tested against injected fixtures; nothing here has been run against the live API, since `.env` carries no `OPENALEX_EMAIL` and a refresh would issue thousands of requests.
 
 ### `WP-25` — Scale-triggered storage and compute evolution
 

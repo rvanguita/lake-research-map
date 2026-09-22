@@ -131,6 +131,12 @@ class CitationEdge(Base):
     citing_work_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     cited_work_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     observed_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, index=True)
+    # How the edge was seen, which is not the same question as its direction.
+    # `referenced_works` is the citing work's own complete reference list, so a
+    # missing edge means the reference is absent. A `cites:` query is paginated
+    # and can be cut short, so a missing edge there may only mean the crawl
+    # stopped. Coverage cannot be computed without telling the two apart.
+    discovered_via: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
 
 
 class AccessObservation(Base):
