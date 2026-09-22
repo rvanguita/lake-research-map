@@ -862,9 +862,9 @@ def _qualis_a1_a3_combined(with_estrato: pd.DataFrame) -> None:
         fig.update_traces(hovertemplate="<b>%{y}</b><br>%{x:,} articles<extra></extra>")
         render_chart(
             fig,
-            caption="The same most published journals of the A1-A3 set, now colored by "
-            "CAPES/Qualis classification itself — shows which category each journal of the ranking "
-            "pertence.",
+            caption="The same most-published journals of the A1-A3 set, now coloured by the "
+            "CAPES/Qualis classification itself — it shows which category each journal in "
+            "the ranking belongs to.",
         )
     with col_source_tier:
         if "source" not in combined_df.columns:

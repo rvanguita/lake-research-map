@@ -1214,7 +1214,11 @@ def _configure_enrichment_commands(subparsers) -> None:
     actions = enrichment.add_subparsers(dest="enrichment_action", required=True)
     refresh = actions.add_parser("refresh-openalex", help="Refresh the active DOI population")
     refresh.add_argument("--max-fetch", type=int, default=100)
-    refresh.add_argument("--delay", type=float, default=0.1)
+    # 0.1s is exactly OpenAlex's stated 10 req/s ceiling, so a live crawl of
+    # the corpus on 2026-09-22 collected 23 rate-limited observations once
+    # retries were exhausted. Leaving headroom costs a few minutes over
+    # 3,115 DOIs and avoids re-fetching the throttled ones on a later run.
+    refresh.add_argument("--delay", type=float, default=0.15)
     refresh.add_argument(
         "--refresh-all",
         action="store_true",

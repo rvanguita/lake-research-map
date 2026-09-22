@@ -56,7 +56,7 @@ def render() -> None:
 
     hero_banner(
         "Complete historical series",
-        "Persistence, linear trend and log-linear trend "
+        "Persistence, linear trend and log-linear trend are compared against each other. "
         "The partial year is only monitored; it does not enter the training. "
         "The bands use conformal historical errors and represent uncertainty of the collected corpus.",
     )
@@ -65,6 +65,11 @@ def render() -> None:
     if articles_df.empty:
         st.warning("Run the pipeline and reload this page.")
         return
+    loaders.render_population_provenance(
+        loaders.article_population_status(),
+        shown=len(articles_df),
+        total=len(articles_df),
+    )
 
     tab_volume, tab_keywords, tab_bass, tab_bursts = st.tabs(
         [
@@ -418,8 +423,9 @@ def _keyword_trend_lines(
     )
     render_chart(
         fig,
-        caption="Solid = observed history; traced : continuation predicted by the same chosen model "
-        "Shows the real trajectory behind the next ranking, not only the point of arrival.",
+        caption="Solid = observed history; dashed = the continuation predicted by the same "
+        "selected model. It shows the real trajectory behind the next ranking, not only the "
+        "point of arrival.",
     )
 
 

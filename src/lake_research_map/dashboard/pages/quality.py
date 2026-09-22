@@ -20,6 +20,10 @@ from lake_research_map.dashboard.components import (
     render_chart,
     require_columns,
 )
+from lake_research_map.dashboard.retrieval_eval import (
+    benchmark_retrieval_modes,
+    evaluate_rankings,
+)
 from lake_research_map.dashboard.search import bm25_search, hybrid_search_rrf, semantic_search
 from lake_research_map.dashboard.theme import (
     CATEGORICAL_PALETTE,
@@ -28,9 +32,13 @@ from lake_research_map.dashboard.theme import (
     TREND_DOWN_COLOR,
     theme_tokens,
 )
+from lake_research_map.transform.evidence_samples import RETRIEVAL_QUERIES
 from lake_research_map.transform.gold_articles import CHUNK_MAX_CHARS
 
 SEARCH_DEMO_MAX_RESULTS = 10
+# The pooled judgement sample was drawn at depth 10, so scoring deeper than
+# that would count unjudged results as irrelevant and understate every mode.
+RETRIEVAL_BENCHMARK_K = 10
 
 
 def render() -> None:
@@ -94,6 +102,7 @@ def render() -> None:
     elif tab_search.open:
         with tab_search:
             _search_demo(chunks_df)
+            _retrieval_benchmark()
 
 
 def _ieee_extras(articles_df: pd.DataFrame) -> None:
@@ -169,10 +178,11 @@ def _ieee_extras(articles_df: pd.DataFrame) -> None:
                 fig.update_traces(hovertemplate="<b>%{y}</b><br>%{x:,} articles<extra></extra>")
                 render_chart(
                     fig,
-                    caption="An article counts once a country present among its affiliations, then "
-                    "International collaborations appear in more than one country and the sum of bars"
-                    f"exceeds the {n_ieee:,} articles. It is extracted from the final segment of each affiliation "
-                    "(`…, city, country`) and also handles the U.S. format (`…, UT, USA`).",
+                    caption="An article counts once for each country present among its "
+                    "affiliations, so an international collaboration appears under more than one "
+                    f"country and the bars sum to more than the {n_ieee:,} articles. The country "
+                    "is taken from the final segment of each affiliation (`…, city, country`), "
+                    "which also handles the U.S. format (`…, UT, USA`).",
                 )
 
     if sub_mes.open:
@@ -379,10 +389,11 @@ def _fulltext_coverage(articles_df: pd.DataFrame, chunks_df: pd.DataFrame) -> No
             ]
         )
     st.caption(
-        f"Only {n_with_pdf / n_total:.1%} of articles have a PDF — corpus PDFs come exclusively from "
-        "IEEE bulk-downloads, so Elsevier has 0% full text coverage. "
-        "(`gold_articles.py`) silently swallows faults, so a PDF that failed is indistinguishable from a "
-        "PDF without extractable text — the card '"
+        f"Only {n_with_pdf / n_total:.1%} of articles have a PDF — corpus PDFs come exclusively "
+        "from IEEE bulk-downloads, so Elsevier has 0% full-text coverage. Text extraction "
+        "(`gold_articles.py`) silently swallows faults, so a PDF that failed to parse is "
+        "indistinguishable from one that carries no extractable text; the card above counts "
+        "both together."
     )
 
 
@@ -840,3 +851,94 @@ def _bibliometric_anomalies_audit(articles_df: pd.DataFrame) -> None:
     ]
     display_cols = [c for c in cols if c in outliers.columns]
     article_table(outliers, display_cols, download_key="anomalous_articles_audit")
+
+
+def _retrieval_benchmark() -> None:
+    """Score dense, BM25 and RRF over the versioned query set — `RQ-08`, `WP-13`.
+
+    The metric harness (`dashboard/retrieval_eval.py`) and the pooled judgement
+    sampler both existed and were reachable only from `tests/`, so the project
+    could compute Recall@k, MRR and nDCG and had nowhere to show them. This is
+    the surface, and it is deliberately honest about what stands behind the
+    numbers: a benchmark scored against one AI-assisted pass is a smoke test of
+    the harness, not evidence that a retrieval mode is better.
+    """
+    st.divider()
+    st.subheader("📐 Retrieval benchmark")
+
+    judgements = loaders.review_labels("retrieval")
+    if judgements.empty:
+        st.info(
+            "No retrieval judgements are stored yet. Generate the pooled sample with "
+            "`lake-research-map evidence retrieval`, assign it with `reviews setup "
+            "--workflow retrieval`, and import the reviewed file. Until then no "
+            "Recall@k/MRR/nDCG figure would mean anything."
+        )
+        return
+
+    reviewers = sorted(judgements["reviewer_id"].dropna().unique())
+    independent = [name for name in reviewers if not str(name).endswith("-assisted")]
+    relevant_by_query: dict[str, set[str]] = {}
+    for row in judgements.itertuples(index=False):
+        if str(row.label).strip().casefold() != "relevant":
+            continue
+        query_id, _, doi = str(row.subject_id).partition("::")
+        if doi:
+            relevant_by_query.setdefault(query_id, set()).add(doi)
+    if not relevant_by_query:
+        st.warning("Judgements exist but none marked a result relevant, so no query is scorable.")
+        return
+
+    chunk_frame = loaders.chunk_search_data()
+    if chunk_frame.empty or "doi" not in chunk_frame.columns:
+        st.info("No embedded chunks available to retrieve over; run the `embed` stage.")
+        return
+
+    def _mode(search):
+        def retrieve(text: str, depth: int) -> list[str]:
+            hits = search(text, chunk_frame, top_k=depth)
+            return [str(doi) for doi in hits["doi"]] if "doi" in hits else []
+
+        return retrieve
+
+    queries = [(qid, text) for qid, text in RETRIEVAL_QUERIES if qid in relevant_by_query]
+    rankings, latency = benchmark_retrieval_modes(
+        {
+            "Dense (BGE-small)": _mode(semantic_search),
+            "BM25": _mode(bm25_search),
+            "Hybrid RRF": _mode(hybrid_search_rrf),
+        },
+        queries,
+        top_k=RETRIEVAL_BENCHMARK_K,
+    )
+    metrics = evaluate_rankings(rankings, relevant_by_query, k=RETRIEVAL_BENCHMARK_K)
+
+    table = pd.DataFrame(
+        [
+            {
+                "Mode": mode,
+                f"Recall@{RETRIEVAL_BENCHMARK_K}": values[f"recall@{RETRIEVAL_BENCHMARK_K}"],
+                "MRR": values["mrr"],
+                f"nDCG@{RETRIEVAL_BENCHMARK_K}": values[f"ndcg@{RETRIEVAL_BENCHMARK_K}"],
+                "p50 latency (ms)": latency[mode]["p50_ms"],
+                "Queries": int(values["queries"]),
+            }
+            for mode, values in metrics.items()
+        ]
+    )
+    st.dataframe(table.round(3), hide_index=True, width="stretch")
+
+    if independent:
+        st.caption(
+            f"Scored over {len(queries)} judged queries from {', '.join(independent)}. "
+            "The pool was built from all three modes, so no mode is scored on results only "
+            "it could return."
+        )
+    else:
+        st.warning(
+            f"**Not approved evidence.** Every judgement here comes from "
+            f"`{', '.join(reviewers)}` — an AI-assisted pass, not an independent human "
+            "review. `WP-13` requires two independent reviewers before a retrieval mode "
+            "may be selected as the default on these numbers. The table shows the harness "
+            "works; it does not show which mode is better."
+        )
