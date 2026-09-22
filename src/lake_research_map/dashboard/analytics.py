@@ -1340,6 +1340,23 @@ def network_null_model_diagnostics(graph, *, n_simulations: int = 100, seed: int
     }
 
 
+def _knn_overlap(matrix: np.ndarray, projection: np.ndarray, k: int) -> float:
+    """Share of each point's k nearest neighbours that survive the projection.
+
+    The most legible of the three neighbourhood measures: 0.7 means seven of
+    every ten neighbours a point has in the clustering space are still its
+    neighbours on screen.
+    """
+    from sklearn.neighbors import NearestNeighbors
+
+    if k < 1 or len(matrix) <= k:
+        return float("nan")
+    high = NearestNeighbors(n_neighbors=k + 1).fit(matrix).kneighbors(return_distance=False)
+    low = NearestNeighbors(n_neighbors=k + 1).fit(projection).kneighbors(return_distance=False)
+    shared = [len(set(a).intersection(b)) for a, b in zip(high, low, strict=True)]
+    return float(np.mean(shared) / k)
+
+
 def semantic_stability_diagnostics(
     embeddings: np.ndarray,
     labels: np.ndarray,
@@ -1379,6 +1396,14 @@ def semantic_stability_diagnostics(
         "projection_trustworthiness": float(
             trustworthiness(matrix, projection, n_neighbors=neighbors)
         ),
+        # Trustworthiness only punishes neighbours the map *invents*. A
+        # projection that tears a real cluster in two scores well on it while
+        # being badly wrong, so continuity (the same measure with the spaces
+        # swapped, which punishes neighbours the map *loses*) and the plain
+        # kNN overlap are reported beside it.
+        "projection_continuity": float(trustworthiness(projection, matrix, n_neighbors=neighbors)),
+        "knn_overlap": _knn_overlap(matrix, projection, neighbors),
+        "neighbors": neighbors,
         "n_bootstrap": len(ari_values),
         "clusters": clusters,
     }

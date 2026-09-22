@@ -67,6 +67,8 @@ _ADDITIVE_COLUMNS: dict[str, dict[str, tuple[str, tuple[str, ...]]]] = {
     },
     # Cosine to the logistics anchor, see transform/semantics.py.
     "lit_semantics": {"offtopic_score": ("FLOAT NULL", ("gold",))},
+    # WP-17: cluster/projection stability recorded with the run that produced it.
+    "lit_semantic_runs": {"stability": ("JSON NULL", ("gold",))},
     # ROADMAP #1: binary embedding storage (migration from JSON to BLOB).
     "lit_chunks": {
         "embedding_bin": ("LONGBLOB NULL", ("gold",)),

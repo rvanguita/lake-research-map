@@ -362,6 +362,11 @@ class SemanticRun(Base):
     embedding_dim: Mapped[int] = mapped_column(Integer, nullable=False)
     article_count: Mapped[int] = mapped_column(Integer, nullable=False)
     parameters: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Cluster/projection stability for this run. Kept on the run rather than
+    # recomputed on the page so a past map's caveats stay attached to it: the
+    # diagnostics describe the run that produced the layout, not whatever the
+    # dashboard happens to be showing now.
+    stability: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=naive_utc_now)
 
 

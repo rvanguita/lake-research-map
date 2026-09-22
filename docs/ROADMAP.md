@@ -212,14 +212,14 @@ This baseline does not imply that every analytical method is confirmatory. The l
 
 ### `WP-17` — Semantic stability and projection diagnostics
 
-- **Status:** Partially delivered; bootstrap ARI and trustworthiness are computed and displayed beside the map, while persistence and cluster-count sensitivity remain open.
+- **Status:** Complete on 2026-09-22; the k sweep, two further neighbourhood measures, and run-level persistence all ship beside the map.
 
 - **Objective:** Separate robust high-dimensional structure from unstable 2D presentation.
 - **Justification:** Silhouette-selected KMeans and t-SNE/UMAP views can change with samples and parameters.
 - **Dependencies:** `WP-06`.
 - **Deliverable:** Bootstrap/subsample ARI, cluster-count sensitivity, projection trustworthiness, neighborhood preservation, seed stability, and drift computed in embedding space before visualization.
 - **Completion:** Theme/novelty panels show stability and coverage; unstable labels remain numbered/exploratory rather than receiving fixed ontological names.
-- **Evidence:** `analytics.py::semantic_stability_diagnostics` computes subsample/seed bootstrap ARI and projection trustworthiness, and the Screening page's stability panel reports both next to the projection along with the population used and an explicit warning that theme numbering carries no ontological claim. Still open: nothing is persisted to a table, there is no cluster-count sweep, no neighbourhood-preservation metric beyond trustworthiness, and no embedding-space drift measure.
+- **Evidence:** `analytics.py::semantic_stability_diagnostics` computes subsample/seed bootstrap ARI and projection trustworthiness, and the Screening page's stability panel reports both next to the projection along with the population used and an explicit warning that theme numbering carries no ontological claim. The three named gaps are closed. `transform/semantics.py::theme_sweep` re-runs the same search `discover_themes` performs and keeps every candidate's silhouette, smallest-cluster share and rejection flag, so the page can show that silhouette is nearly flat across `MIN_THEMES..MAX_THEMES` and that the near-tie rule, not a maximum, is what selects `k`. Trustworthiness only penalises neighbours a projection invents, so a layout that tears one real cluster in two scores well on it; `projection_continuity` (the same measure with the spaces swapped) and `knn_overlap` are reported beside it, and on a scrambled control they fall to 0.55 and 0.33 against 0.95 and 0.80 for a faithful one. Persistence is an additive nullable `stability` JSON column on `lit_semantic_runs` (`db/bootstrap.py::_ADDITIVE_COLUMNS`), attached to the run that produced the layout rather than recomputed, so a past map keeps its own caveats. Embedding-space drift remains deliberately unimplemented: with a single embedding revision in the corpus there is no second point to measure drift against, and a drift number computed from one revision would be decorative.
 
 ### `WP-18` — Forecast and Bass validation
 

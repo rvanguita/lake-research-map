@@ -301,3 +301,53 @@ def test_build_semantics_end_to_end_with_injected_anchors(gold_session):
     assert sem_count == n
     assert gold_session.query(DuplicatePair).count() == 0
     assert gold_session.query(DuplicateOverride).count() == 1
+
+
+def test_theme_sweep_keeps_the_losing_candidates():
+    """WP-17: the k search is only auditable if the rejected candidates survive.
+
+    Silhouette is nearly flat across the range on this corpus, so the near-tie
+    rule -- not the maximum -- is what picks k. A sweep that reported only the
+    winner would hide that.
+    """
+    import numpy as np
+
+    from lake_research_map.transform.semantics import MAX_THEMES, MIN_THEMES, theme_sweep
+
+    rng = np.random.default_rng(0)
+    matrix = np.vstack([rng.normal(centre, 0.4, (40, 6)) for centre in (-5, 0, 5, 10)])
+
+    sweep = theme_sweep(matrix)
+
+    assert [row["k"] for row in sweep] == list(range(MIN_THEMES, MAX_THEMES + 1))
+    # Four well-separated blobs: k=4 must win outright here.
+    assert max(sweep, key=lambda row: row["silhouette"])["k"] == 4
+    for row in sweep:
+        assert 0.0 < row["smallest_cluster_share"] <= 1.0
+        assert isinstance(row["rejected_small_cluster"], bool)
+        assert row["rejected_small_cluster"] == (row["smallest_cluster_share"] < 0.02)
+
+    # Too few rows to sweep at all returns nothing rather than guessing.
+    assert theme_sweep(np.zeros((2, 3))) == []
+
+
+def test_projection_measures_separate_invented_from_lost_neighbours():
+    """Trustworthiness alone cannot fail a projection that tears a cluster apart."""
+    import numpy as np
+
+    from lake_research_map.dashboard.analytics import semantic_stability_diagnostics
+
+    rng = np.random.default_rng(7)
+    matrix = np.vstack([rng.normal(-3, 0.1, (20, 4)), rng.normal(3, 0.1, (20, 4))])
+    labels = np.array([0] * 20 + [1] * 20)
+
+    faithful = semantic_stability_diagnostics(matrix, labels, matrix[:, :2], n_bootstrap=3, seed=3)
+    scrambled = semantic_stability_diagnostics(
+        matrix, labels, rng.normal(0, 1, (40, 2)), n_bootstrap=3, seed=3
+    )
+
+    for key in ("projection_trustworthiness", "projection_continuity", "knn_overlap"):
+        assert faithful[key] > scrambled[key], key
+    assert faithful["knn_overlap"] > 0.6
+    assert scrambled["knn_overlap"] < 0.5
+    assert faithful["neighbors"] >= 1
