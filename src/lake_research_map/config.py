@@ -86,11 +86,30 @@ class MySQLSettings:
     @classmethod
     def from_env(cls) -> MySQLSettings:
         role = os.environ.get("LAKE_RESEARCH_MAP_DB_ROLE", "pipeline").strip().upper()
+        role_user = os.environ.get(f"MYSQL_{role}_USER")
+        role_password = os.environ.get(f"MYSQL_{role}_PASSWORD")
+        # User and password resolve independently, so setting only one of a
+        # role's pair silently pairs that value with the *other* credential's
+        # fallback -- typically the role's fresh password against `root`, which
+        # fails as a bare "Access denied for user 'root'" and sends you looking
+        # at the server instead of at this file. Refuse the half-configured
+        # pair and say which half is missing.
+        if bool(role_user) != bool(role_password):
+            present, missing = (
+                (f"MYSQL_{role}_PASSWORD", f"MYSQL_{role}_USER")
+                if role_password
+                else (f"MYSQL_{role}_USER", f"MYSQL_{role}_PASSWORD")
+            )
+            raise RuntimeError(
+                f"{present} is set but {missing} is not, so the {role.lower()} role would "
+                f"connect as the fallback user with the {role.lower()} credential. Set both, "
+                f"or remove {present} from .env to keep using MYSQL_USER/MYSQL_PASSWORD."
+            )
         return cls(
             host=os.environ.get("MYSQL_HOST", "127.0.0.1"),
             port=int(os.environ.get("MYSQL_PORT", "3306")),
-            user=os.environ.get(f"MYSQL_{role}_USER", os.environ.get("MYSQL_USER", "root")),
-            password=os.environ.get(f"MYSQL_{role}_PASSWORD", os.environ.get("MYSQL_PASSWORD", "")),
+            user=role_user or os.environ.get("MYSQL_USER", "root"),
+            password=role_password or os.environ.get("MYSQL_PASSWORD", ""),
         )
 
     def database_name(self, layer: str) -> str:

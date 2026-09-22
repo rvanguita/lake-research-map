@@ -1086,7 +1086,14 @@ def _run_evidence_command(args: argparse.Namespace) -> None:
             # and re-reading it per query would be ten full table scans.
             chunk_frame = loaders.chunk_search_data()
             if chunk_frame.empty:
-                raise ValueError("no embedded chunks to retrieve over; run `--stage embed` first")
+                # `chunk_search_data` tolerates an unreachable database and an
+                # absent table alike, both as an empty frame, so this message
+                # must not assert a cause it cannot tell apart.
+                raise ValueError(
+                    "no chunks available to retrieve over. Either the `embed` stage has not "
+                    "run, or the database is unreachable -- check the log above for a "
+                    "connection error before re-running `--stage embed`."
+                )
 
             def _retrieve(text: str, depth: int) -> list[str]:
                 hits = hybrid_search_rrf(text, chunk_frame, top_k=depth)
