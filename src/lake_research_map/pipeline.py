@@ -1215,12 +1215,41 @@ def _configure_enrichment_commands(subparsers) -> None:
     refresh = actions.add_parser("refresh-openalex", help="Refresh the active DOI population")
     refresh.add_argument("--max-fetch", type=int, default=100)
     refresh.add_argument("--delay", type=float, default=0.1)
+    refresh.add_argument(
+        "--refresh-all",
+        action="store_true",
+        help="Re-observe DOIs that already succeeded, for a deliberate as-of snapshot "
+        "instead of gap-filling",
+    )
+    refresh.add_argument(
+        "--commit-every",
+        type=int,
+        default=25,
+        help="Persist progress every N fetches so an interrupt keeps what it already got",
+    )
+    refresh.add_argument(
+        "--store-payload",
+        action="store_true",
+        help="Also store each raw Work JSON; adds hundreds of MB over the corpus and "
+        "nothing reads it back",
+    )
     citations = actions.add_parser(
         "refresh-citations",
         help="Crawl incoming citation edges for works already observed in Bronze",
     )
     citations.add_argument("--max-works", type=int, default=50)
     citations.add_argument("--delay", type=float, default=0.2)
+    citations.add_argument(
+        "--refresh-all",
+        action="store_true",
+        help="Re-crawl works already carrying a crawl timestamp",
+    )
+    citations.add_argument(
+        "--commit-every",
+        type=int,
+        default=25,
+        help="Persist progress every N works so an interrupt keeps what it already got",
+    )
     citations.add_argument(
         "--max-pages",
         type=int,
@@ -1277,8 +1306,16 @@ def _run_enrichment_command(args: argparse.Namespace) -> None:
             dois,
             max_fetch=args.max_fetch,
             delay=args.delay,
+            refresh_all=args.refresh_all,
+            commit_every=args.commit_every,
+            store_payload=args.store_payload,
         )
         print(stats)
+        if stats["remaining"]:
+            print(
+                f"{stats['remaining']} DOIs still unobserved. Re-run the same command to "
+                "continue; it resumes from where this run stopped."
+            )
     finally:
         bronze_session.close()
         gold_session.close()
@@ -1307,31 +1344,58 @@ def _refresh_citation_edges(bronze_session, args: argparse.Namespace) -> dict:
     )
 
     observed_at = datetime.now(UTC).replace(tzinfo=None)
-    work_ids = bronze_session.scalars(
-        select(ExternalWork.provider_work_id)
+    works = bronze_session.scalars(
+        select(ExternalWork)
         .where(ExternalWork.provider == "openalex")
         .order_by(ExternalWork.provider_work_id)
     ).all()
-    if not work_ids:
+    if not works:
         raise ValueError(
             "no OpenAlex works have been observed yet; run `enrichment refresh-openalex` first"
         )
 
+    # Same resumability rule as the backward pass: without it,
+    # `works[:max_works]` is the same leading slice on every invocation and the
+    # crawl re-requests works it already has instead of advancing. A work is
+    # "done" when it carries a crawl timestamp, not when it has an edge --
+    # a work nobody cites produces no edge and would otherwise be retried
+    # forever.
+    pending = [w for w in works if getattr(w, "citing_crawled_at", None) is None]
+    if getattr(args, "refresh_all", False):
+        pending = list(works)
+    batch = pending[: args.max_works]
+    logger.info(
+        "openalex citing crawl: %d works, %d already crawled, %d pending, crawling %d",
+        len(works),
+        len(works) - len(pending),
+        len(pending),
+        len(batch),
+    )
+
     max_pages = args.max_pages or CITING_MAX_PAGES
     edges = truncated = crawled = 0
-    for work_id in work_ids[: args.max_works]:
+    for position, work in enumerate(batch, start=1):
+        work_id = work.provider_work_id
         result = fetch_openalex_citing_works(work_id, max_pages=max_pages)
         edges += persist_incoming_edges(
             bronze_session, work_id, result["citing_work_ids"], observed_at
         )
+        work.citing_crawled_at = observed_at
+        work.citing_truncated = bool(result["truncated"])
         truncated += int(result["truncated"])
         crawled += 1
+        commit_every = getattr(args, "commit_every", 25)
+        if commit_every and position % commit_every == 0:
+            bronze_session.commit()
+            logger.info("openalex citing crawl: %d/%d works, %d edges", position, len(batch), edges)
         if args.delay:
             time.sleep(args.delay)
     bronze_session.commit()
     return {
-        "works_known": len(work_ids),
+        "works_known": len(works),
+        "already_crawled": len(works) - len(pending),
         "works_crawled": crawled,
+        "remaining": max(len(pending) - len(batch), 0),
         "edges_inserted": edges,
         "truncated_works": truncated,
         "observed_at": observed_at.isoformat(),
@@ -1453,6 +1517,10 @@ def _configure_audit_commands(subparsers) -> None:
         "citation-graph",
         help="Measure forward/backward citation coverage and whether disruption is usable",
     )
+    actions.add_parser(
+        "citation-years",
+        help="Measure annual citation-count coverage behind Price/longevity analyses",
+    )
 
 
 def _audit_citation_graph() -> None:
@@ -1487,11 +1555,13 @@ def _audit_citation_graph() -> None:
             f"({coverage['backward_coverage']:.1%})"
         )
         print(
-            f"Forward (cites:):    {coverage['with_forward']} ({coverage['forward_coverage']:.1%})"
+            f"Forward crawled:     {coverage['with_forward']} "
+            f"({coverage['forward_coverage']:.1%}), of which {coverage['truncated']} truncated"
         )
+        print(f"  with citing edges: {coverage['with_forward_edges']}")
         print(
             f"Usable for CD:       {coverage['usable_for_disruption']} "
-            f"({coverage['disruption_coverage']:.1%}) -- works with both directions"
+            f"({coverage['disruption_coverage']:.1%}) -- both directions, not truncated"
         )
         if coverage["disruption_coverage"] < 0.80:
             print(
@@ -1502,9 +1572,68 @@ def _audit_citation_graph() -> None:
         session.close()
 
 
+def _audit_citation_years() -> None:
+    """Report WP-23's coverage gate over annual citation counts.
+
+    `CitationYearCount` rows are written by every successful OpenAlex
+    observation and read by nothing, so the package's own completion rule --
+    "coverage and validation gates pass; only then may Price, longevity, or
+    Sleeping Beauty panels enter WP-21 review" -- had no instrument behind it.
+
+    Coverage is reported against the *observed* population rather than the
+    corpus: a work OpenAlex never resolved cannot have a trajectory, and
+    mixing the two denominators would make an unrun crawl look like missing
+    data at the provider.
+    """
+    from lake_research_map.db.bronze_models import CitationYearCount, ExternalWork
+
+    bootstrap()
+    session = get_session("bronze")
+    try:
+        works = session.scalars(
+            select(ExternalWork.provider_work_id).where(ExternalWork.provider == "openalex")
+        ).all()
+        if not works:
+            print(
+                "No OpenAlex works observed, so annual-count coverage is 0 by absence rather "
+                "than by measurement. Run `enrichment refresh-openalex` first."
+            )
+            return
+        rows = session.execute(
+            select(
+                CitationYearCount.provider_work_id,
+                func.count(),
+                func.min(CitationYearCount.year),
+                func.max(CitationYearCount.year),
+            )
+            .where(CitationYearCount.provider == "openalex")
+            .group_by(CitationYearCount.provider_work_id)
+        ).all()
+        with_series = {row[0] for row in rows}
+        population = len(set(works))
+        covered = len(with_series & set(works))
+        spans = [row[1] for row in rows if row[0] in set(works)]
+        print(f"Observed works:      {population}")
+        print(f"With annual counts:  {covered} ({covered / population:.1%})")
+        if spans:
+            spans.sort()
+            print(f"Years per work:      min {spans[0]}, median {spans[len(spans) // 2]}")
+            print(f"Year range:          {min(r[2] for r in rows)}-{max(r[3] for r in rows)}")
+        if covered / population < 0.80:
+            print(
+                "Below 80%: Price's index, citation longevity and Sleeping Beauty stay "
+                "unavailable, which is WP-23's documented outcome for inadequate coverage."
+            )
+    finally:
+        session.close()
+
+
 def _run_audit_command(args: argparse.Namespace) -> None:
     if args.audit_action == "citation-graph":
         _audit_citation_graph()
+        return
+    if args.audit_action == "citation-years":
+        _audit_citation_years()
         return
 
     from lake_research_map.db.gold_models import (

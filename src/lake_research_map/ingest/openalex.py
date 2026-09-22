@@ -160,21 +160,55 @@ def refresh_openalex_observations(
     observed_at: datetime | None = None,
     max_fetch: int = 100,
     delay: float = 0.1,
+    refresh_all: bool = False,
+    commit_every: int = 25,
+    store_payload: bool = False,
 ) -> dict[str, int]:
-    """Append one reproducible observation batch to Bronze."""
+    """Append a reproducible observation batch to Bronze, resumably.
+
+    Resumability is the point. The skip used to compare `observed_at` against
+    *this run's* `batch_time`, which a previous run can never equal, while the
+    work list was always `sorted(dois)[:max_fetch]` -- the same leading slice
+    every time. A corpus of 3,115 DOIs at the default `max_fetch=100` therefore
+    re-fetched the same first hundred on every invocation and never reached the
+    hundred-and-first. Skipping DOIs that already carry a *successful*
+    observation is what lets run N+1 continue where run N stopped.
+
+    Failed and not-found observations are retried rather than skipped: a 429 or
+    a timeout says nothing about the DOI, and OpenAlex does add records over
+    time. `refresh_all=True` re-observes everything, which is the right mode for
+    a deliberate as-of snapshot rather than gap-filling.
+
+    Progress is committed every `commit_every` rows. The single commit at the
+    end meant an interrupt at request 3,000 discarded all 3,000, which on a
+    crawl this long is the likely outcome rather than the unlucky one.
+    """
     batch_time = (observed_at or datetime.now(UTC)).replace(tzinfo=None)
     normalized = sorted({_normalize_doi(doi) for doi in dois if _normalize_doi(doi)})
-    inserted = success = 0
-    for doi in normalized[:max_fetch]:
-        existing = session.scalar(
-            select(EnrichmentObservation.id).where(
-                EnrichmentObservation.provider == "openalex",
-                EnrichmentObservation.doi == doi,
-                EnrichmentObservation.observed_at == batch_time,
-            )
+
+    already: set[str] = set()
+    if not refresh_all:
+        already = set(
+            session.scalars(
+                select(EnrichmentObservation.doi).where(
+                    EnrichmentObservation.provider == "openalex",
+                    EnrichmentObservation.status == "success",
+                )
+            ).all()
         )
-        if existing is not None:
-            continue
+    pending = [doi for doi in normalized if doi not in already]
+    batch = pending[:max_fetch]
+
+    logger.info(
+        "openalex refresh: %d DOIs, %d already observed, %d pending, fetching %d",
+        len(normalized),
+        len(already & set(normalized)),
+        len(pending),
+        len(batch),
+    )
+
+    inserted = success = 0
+    for position, doi in enumerate(batch, start=1):
         result = fetch_openalex_observation(doi)
         session.add(
             EnrichmentObservation(
@@ -188,7 +222,14 @@ def refresh_openalex_observations(
                 reference_count=result.get("reference_count"),
                 response_sha256=result.get("response_sha256"),
                 retry_count=result.get("retry_count", 0),
-                payload=result.get("payload"),
+                # The whole Work JSON is tens of kilobytes and nothing in the
+                # project reads it back: `_persist_openalex_evidence` lifts the
+                # annual counts, reference edges and access status into their
+                # own tables, and `response_sha256` already proves what was
+                # received. Storing it for 3,115 works would add hundreds of
+                # megabytes to a MySQL server this project shares with
+                # unrelated ones, so it is opt-in.
+                payload=result.get("payload") if store_payload else None,
                 error_message=result.get("error_message"),
             )
         )
@@ -196,14 +237,20 @@ def refresh_openalex_observations(
             _persist_openalex_evidence(session, result, batch_time)
         inserted += 1
         success += int(result["status"] == "success")
+        if commit_every and position % commit_every == 0:
+            session.commit()
+            logger.info("openalex refresh: %d/%d fetched, %d ok", position, len(batch), success)
         if delay:
             time.sleep(delay)
     session.commit()
     return {
         "requested": len(normalized),
-        "fetched": min(len(normalized), max_fetch),
+        "already_observed": len(already & set(normalized)),
+        "pending": len(pending),
+        "fetched": len(batch),
         "inserted": inserted,
         "success": success,
+        "remaining": max(len(pending) - len(batch), 0),
     }
 
 
@@ -407,23 +454,52 @@ def citation_graph_coverage(session: Session, work_ids: list[str]) -> dict:
         select(CitationEdge.citing_work_id, CitationEdge.cited_work_id, CitationEdge.discovered_via)
     ).all()
     backward: set[str] = set()
-    forward: set[str] = set()
+    forward_edges: set[str] = set()
     for citing, cited, via in rows:
         if via == "referenced_works" and citing in wanted:
             backward.add(citing)
         elif via == "cites_query" and cited in wanted:
-            forward.add(cited)
+            forward_edges.add(cited)
 
+    # Forward coverage is a property of the crawl, not of the edges it found.
+    # Counting works that have an incoming edge silently excludes every work
+    # nobody cites -- for which the correct answer, "zero citing works", is
+    # known and usable. A truncated crawl is the opposite case: it produced
+    # edges but its tail is missing, so it is excluded from the usable set.
+    crawled: set[str] = set()
+    truncated: set[str] = set()
+    try:
+        for work_id, crawled_at, was_truncated in session.execute(
+            select(
+                ExternalWork.provider_work_id,
+                ExternalWork.citing_crawled_at,
+                ExternalWork.citing_truncated,
+            ).where(ExternalWork.provider == "openalex")
+        ).all():
+            if work_id in wanted and crawled_at is not None:
+                crawled.add(work_id)
+                if was_truncated:
+                    truncated.add(work_id)
+    except Exception:  # pragma: no cover - pre-migration database
+        # Before the additive migration the columns do not exist; fall back to
+        # edge presence so the audit degrades instead of failing.
+        logger.warning("forward-crawl columns unavailable; falling back to edge presence")
+        crawled = set(forward_edges)
+
+    forward = crawled or forward_edges
     population = len(set(wanted))
-    both = backward & forward
+    both = (backward & forward) - truncated
     return {
         "population": population,
         "with_backward": len(backward),
         "with_forward": len(forward),
+        "with_forward_edges": len(forward_edges),
+        "truncated": len(truncated),
         "backward_coverage": len(backward) / population,
         "forward_coverage": len(forward) / population,
         # The disruption index needs both directions for the same work, so the
-        # usable population is the intersection, never the larger of the two.
+        # usable population is the intersection, never the larger of the two,
+        # and never a work whose forward tail was cut off.
         "usable_for_disruption": len(both),
         "disruption_coverage": len(both) / population,
     }
