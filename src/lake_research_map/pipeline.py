@@ -844,6 +844,15 @@ def _configure_review_commands(subparsers) -> None:
     setup.add_argument("--protocol-version", required=True)
     setup.add_argument("--instructions-file", required=True)
     setup.add_argument("--reviewer", action="append", required=True)
+    setup.add_argument(
+        "--subject-file",
+        default=None,
+        help=(
+            "CSV from `evidence ...` whose subject_id column scopes the assignment. "
+            "Without it every article in the dataset version is assigned, which is "
+            "rarely what a stratified review wants."
+        ),
+    )
     export = actions.add_parser("export", help="Export one reviewer's assignments")
     export.add_argument("--workflow", required=True)
     export.add_argument("--version-id", required=True)
@@ -871,6 +880,29 @@ def _configure_review_commands(subparsers) -> None:
     approve.add_argument("--reject", action="store_true")
 
 
+def _read_subject_file(path: str) -> list[str]:
+    """Read the `subject_id` column of a CSV written by the `evidence` commands.
+
+    Without this the review CLI could only ever assign the whole dataset
+    version, so a stratified sample had nowhere to go: the generators wrote a
+    CSV that nothing consumed.
+    """
+    import csv
+    from pathlib import Path
+
+    handle = Path(path)
+    with handle.open(newline="", encoding="utf-8") as stream:
+        reader = csv.DictReader(stream)
+        if reader.fieldnames is None or "subject_id" not in reader.fieldnames:
+            raise ValueError(f"{path}: expected a `subject_id` column, got {reader.fieldnames}")
+        subjects = [
+            row["subject_id"].strip() for row in reader if (row.get("subject_id") or "").strip()
+        ]
+    if not subjects:
+        raise ValueError(f"{path}: no subject_id values to assign")
+    return sorted(dict.fromkeys(subjects))
+
+
 def _run_review_command(args: argparse.Namespace) -> None:
     from pathlib import Path
 
@@ -894,14 +926,17 @@ def _run_review_command(args: argparse.Namespace) -> None:
                 protocol_version=args.protocol_version,
                 instructions=instructions,
             )
+            subject_ids = _read_subject_file(args.subject_file) if args.subject_file else None
             count = assign_dataset_articles(
                 session,
                 workflow=args.workflow,
                 dataset_version_id=args.version_id,
                 protocol=protocol,
                 reviewer_ids=args.reviewer,
+                subject_ids=subject_ids,
             )
-            print(f"Created {count} assignments.")
+            scope = f"{len(subject_ids)} subjects" if subject_ids else "every article"
+            print(f"Created {count} assignments over {scope}.")
         elif args.review_action == "export":
             count = export_assignments(
                 session,

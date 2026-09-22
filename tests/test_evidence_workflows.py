@@ -172,3 +172,42 @@ def test_dual_review_round_trip_preserves_raw_labels(gold_session, tmp_path):
     )
     assert gold_session.query(ReviewAdjudication).one().final_label == "include"
     assert gold_session.query(ReviewLabel).count() == 4
+
+
+def test_subject_file_scopes_the_assignment_to_the_sample(tmp_path):
+    """The evidence CSVs were a dead end before this: `reviews setup` could only
+    assign the whole dataset version, so a stratified sample had nowhere to go."""
+    import csv
+
+    from lake_research_map.pipeline import _read_subject_file
+
+    path = tmp_path / "sample.csv"
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=("workflow", "subject_id", "label", "rationale"))
+        writer.writeheader()
+        for subject in ("10.1/b::/a/2.pdf", "10.1/a::/a/1.pdf", "10.1/b::/a/2.pdf", ""):
+            writer.writerow(
+                {"workflow": "pdf", "subject_id": subject, "label": "", "rationale": ""}
+            )
+
+    subjects = _read_subject_file(str(path))
+
+    # Deduplicated, sorted, blanks dropped -- the same contract
+    # `assign_dataset_articles` already applies to its subject list.
+    assert subjects == ["10.1/a::/a/1.pdf", "10.1/b::/a/2.pdf"]
+
+
+def test_subject_file_refuses_a_csv_it_cannot_use(tmp_path):
+    import pytest
+
+    from lake_research_map.pipeline import _read_subject_file
+
+    wrong = tmp_path / "wrong.csv"
+    wrong.write_text("doi,label\n10.1/a,include\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="subject_id"):
+        _read_subject_file(str(wrong))
+
+    empty = tmp_path / "empty.csv"
+    empty.write_text("workflow,subject_id,label,rationale\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="no subject_id"):
+        _read_subject_file(str(empty))
