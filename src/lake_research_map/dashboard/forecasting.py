@@ -74,6 +74,11 @@ class ForecastResult:
     r2_train: float
     baseline_skill: float | None = None
     empirical_interval_coverage: float | None = None
+    # Per-horizon backtest: {h: {"cv_mae":…, "mase":…, "coverage":…}}. The
+    # two-year projection used to be scored only one step ahead, so the second
+    # year on the chart carried no validation at all.
+    horizon_backtests: dict[int, dict[str, float | None]] = field(default_factory=dict)
+    mase: float | None = None
     insufficient_data: bool = False
     notes: list[str] = field(default_factory=list)
 
@@ -101,15 +106,36 @@ def yearly_counts(df: pd.DataFrame, source: str | None = None) -> pd.Series:
     return counts.reindex(full_index, fill_value=0).astype(float)
 
 
+def _naive_scale(values: np.ndarray) -> float:
+    """Mean absolute one-step change: the denominator MASE is scaled by.
+
+    MASE < 1 means the model beats a naive "next year equals this year"
+    forecast on its own scale, which is what makes the keyword series and the
+    corpus series comparable at all -- a raw MAE of 4 means something very
+    different on a series averaging 12 than on one averaging 400.
+    """
+    if len(values) < 2:
+        return float("nan")
+    scale = float(np.mean(np.abs(np.diff(values))))
+    return scale if scale > 0 else float("nan")
+
+
 def _rolling_origin_cv(
-    years: np.ndarray, values: np.ndarray, cv_years: tuple[int, ...]
+    years: np.ndarray, values: np.ndarray, cv_years: tuple[int, ...], *, horizon: int = 1
 ) -> dict[str, float]:
-    """Mean CV MAE per candidate: for each year in `cv_years`, train on every
-    earlier year in `years` and score against that year's actual value.
+    """Mean CV MAE per candidate at a given forecast `horizon`.
+
+    For each year in `cv_years`, train on every year at least `horizon` steps
+    earlier and score against that year's actual value. At `horizon=1` this is
+    the original one-step-ahead cross-validation; larger horizons are what make
+    a two-year projection testable instead of merely plotted.
     """
     errors: dict[str, list[float]] = {kind: [] for kind in _CANDIDATES}
     for cv_year in cv_years:
-        train_mask = years < cv_year
+        # The origin sits `horizon` years back, so nothing within the forecast
+        # window is visible to the fit -- otherwise a 2-year claim is scored
+        # with 1-year information and always looks better than it is.
+        train_mask = years <= cv_year - horizon
         if train_mask.sum() < 3 or cv_year not in years:
             continue
         train_x, train_y = years[train_mask], values[train_mask]
@@ -135,21 +161,25 @@ def _holdout_interval_coverage(
     *,
     n_holdout: int,
     quantile: float = 0.9,
+    horizon: int = 1,
 ) -> float | None:
-    """Fraction of held-out one-step errors covered by a radius fitted without them.
+    """Fraction of held-out `horizon`-step errors covered by a radius fitted without them.
 
     Returns `None` when there is not enough history to both calibrate a radius on
     at least three folds and keep `n_holdout` folds back for scoring: an unknown
     coverage is more honest than one computed in sample.
     """
     errors = []
-    for index in range(3, len(years)):
+    for index in range(3, len(years) - horizon + 1):
+        target = index + horizon - 1
+        if target >= len(years):
+            break
         try:
             predictor = _fit_model(kind, years[:index], values[:index])
         except Exception:
-            logger.debug("_holdout_interval_coverage: %r failed at %r", kind, years[index])
+            logger.debug("_holdout_interval_coverage: %r failed at %r", kind, years[target])
             continue
-        errors.append(abs(float(values[index]) - float(predictor([years[index]])[0])))
+        errors.append(abs(float(values[target]) - float(predictor([years[target]])[0])))
     if len(errors) < 3 + n_holdout:
         return None
     calibration, holdout = errors[:-n_holdout], errors[-n_holdout:]
@@ -271,6 +301,43 @@ def fit_and_forecast(
         if np.isfinite(chosen_mae) and np.isfinite(baseline_mae) and baseline_mae > 0
         else None
     )
+    # MASE puts the error on the series' own scale, so the corpus series and a
+    # sparse keyword series can be compared at all; > 1 means worse than naive.
+    naive_scale = _naive_scale(final_values)
+    mase = (
+        float(chosen_mae / naive_scale)
+        if np.isfinite(chosen_mae) and np.isfinite(naive_scale)
+        else None
+    )
+
+    # Every fold above scores one step ahead, which left the second forecast
+    # year unvalidated. Re-score the chosen model at each horizon actually
+    # projected, so the chart's far end has evidence behind it or is silent.
+    horizon_backtests: dict[int, dict[str, float | None]] = {}
+    for step, _year in enumerate(forecast_years, start=1):
+        horizon_cv = _rolling_origin_cv(final_years, final_values, cv_years, horizon=step)
+        horizon_mae = horizon_cv.get(chosen_model, float("nan"))
+        horizon_base = horizon_cv.get("baseline", float("nan"))
+        horizon_backtests[step] = {
+            "cv_mae": float(horizon_mae) if np.isfinite(horizon_mae) else None,
+            "mase": (
+                float(horizon_mae / naive_scale)
+                if np.isfinite(horizon_mae) and np.isfinite(naive_scale)
+                else None
+            ),
+            "baseline_skill": (
+                float(1.0 - horizon_mae / horizon_base)
+                if np.isfinite(horizon_mae) and np.isfinite(horizon_base) and horizon_base > 0
+                else None
+            ),
+            "coverage": _holdout_interval_coverage(
+                chosen_model,
+                final_years,
+                final_values,
+                n_holdout=COVERAGE_HOLDOUT_FOLDS,
+                horizon=step,
+            ),
+        }
     step_factors = np.sqrt(np.arange(1, len(forecast_years) + 1, dtype=float))
     margin = conformal_radius * step_factors
     forecast_lower = np.clip(forecast_values - margin, 0, None)
@@ -306,6 +373,8 @@ def fit_and_forecast(
         r2_train=r2_train,
         baseline_skill=baseline_skill,
         empirical_interval_coverage=empirical_coverage,
+        horizon_backtests=horizon_backtests,
+        mase=mase,
         notes=notes,
     )
 
@@ -318,6 +387,55 @@ def _bass_cumulative(t: np.ndarray, p: float, q: float, m: float) -> np.ndarray:
     pq = p + q
     exp_term = np.exp(-pq * t)
     return m * (1.0 - exp_term) / (1.0 + (q / max(1e-9, p)) * exp_term)
+
+
+def _bass_standard_errors(pcov: np.ndarray) -> tuple[float | None, float | None, float | None]:
+    """Parameter standard errors from the fit covariance, or None when unusable.
+
+    `curve_fit` returns inf on the diagonal when a parameter is not identified
+    by the data; reporting that as a number would be worse than reporting
+    nothing.
+    """
+    try:
+        diagonal = np.diag(np.asarray(pcov, dtype=float))
+    except (ValueError, TypeError):
+        return (None, None, None)
+    out: list[float | None] = []
+    for variance in diagonal[:3]:
+        out.append(
+            round(float(np.sqrt(variance)), 4) if np.isfinite(variance) and variance >= 0 else None
+        )
+    while len(out) < 3:
+        out.append(None)
+    return (out[0], out[1], out[2])
+
+
+def _bass_peak_interval(
+    popt: np.ndarray, pcov: np.ndarray, first_year: float, *, draws: int = 500, seed: int = 0
+) -> tuple[float | None, float | None]:
+    """80% interval for the diffusion peak year, by parametric bootstrap.
+
+    The peak is a non-linear function of p and q, so its uncertainty cannot be
+    read off their standard errors directly. Sampling the fitted covariance and
+    recomputing the peak each time is the cheapest honest answer.
+    """
+    covariance = np.asarray(pcov, dtype=float)
+    if covariance.shape != (3, 3) or not np.all(np.isfinite(covariance)):
+        return (None, None)
+    rng = np.random.default_rng(seed)
+    try:
+        samples = rng.multivariate_normal(np.asarray(popt, dtype=float), covariance, size=draws)
+    except (np.linalg.LinAlgError, ValueError):
+        return (None, None)
+    peaks = []
+    for p_s, q_s, _m_s in samples:
+        if p_s <= 0 or q_s <= 0 or p_s >= q_s:
+            continue
+        peaks.append(first_year + np.log(q_s / p_s) / (p_s + q_s))
+    if len(peaks) < draws // 10:
+        # Too few draws produced an interior peak for a quantile to mean much.
+        return (None, None)
+    return (round(float(np.quantile(peaks, 0.1)), 1), round(float(np.quantile(peaks, 0.9)), 1))
 
 
 def fit_bass_diffusion_nls(
@@ -345,11 +463,20 @@ def fit_bass_diffusion_nls(
     bounds = ([1e-5, 1e-5, total_obs], [0.5, 1.5, total_obs * 20.0])
 
     try:
-        popt, _ = curve_fit(_bass_cumulative, t_relative, y_cum, p0=p0, bounds=bounds, maxfev=2000)
+        popt, pcov = curve_fit(
+            _bass_cumulative, t_relative, y_cum, p0=p0, bounds=bounds, maxfev=2000
+        )
         p_est, q_est, m_est = float(popt[0]), float(popt[1]), float(popt[2])
 
         t_peak_offset = np.log(q_est / p_est) / (p_est + q_est) if p_est < q_est else 0.0
         t_peak = float(years[0] + t_peak_offset)
+
+        # `curve_fit` already returns the covariance; discarding it meant the
+        # peak year -- the one number the Trends page actually asserts -- was
+        # shown as a point estimate with no spread. A parametric bootstrap over
+        # the fitted covariance gives that spread without refitting the series.
+        standard_errors = _bass_standard_errors(pcov)
+        peak_low, peak_high = _bass_peak_interval(popt, pcov, float(years[0]))
 
         return {
             "valid": True,
@@ -357,6 +484,11 @@ def fit_bass_diffusion_nls(
             "p": round(p_est, 4),
             "q": round(q_est, 4),
             "t_peak": round(t_peak, 1),
+            "p_stderr": standard_errors[0],
+            "q_stderr": standard_errors[1],
+            "m_stderr": standard_errors[2],
+            "t_peak_low": peak_low,
+            "t_peak_high": peak_high,
             "stage": ("growth" if t_peak > float(years[-1]) else "maturity"),
             "method": "nls",
         }
