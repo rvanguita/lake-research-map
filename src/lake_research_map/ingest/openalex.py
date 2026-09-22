@@ -51,6 +51,96 @@ def _user_agent(email: str | None) -> str:
     return f"lake-research-map/1.0 ({PROJECT_URL}; mailto:{contact})"
 
 
+# A crawl that has been told to stop must stop. The corpus refresh on
+# 2026-09-22 collected 73 consecutive HTTP 429s while the loop kept going,
+# spending four requests and seven seconds of backoff per DOI against an API
+# that had already refused -- roughly 8,000 futile requests had it run to the
+# end. Five, rather than one: an isolated 429 is noise, five in a row is a
+# policy.
+CONSECUTIVE_FAILURE_LIMIT = 5
+# `Retry-After` is honoured but capped: a header is a hint from a service, not
+# a licence to park the process for an hour.
+MAX_RETRY_AFTER_SECONDS = 60.0
+_THROTTLE_HEADERS = (
+    "retry-after",
+    "x-ratelimit-limit",
+    "x-ratelimit-remaining",
+    "x-ratelimit-reset",
+)
+
+
+def retry_after_seconds(response) -> float | None:
+    """What the server asked us to wait, or None when it did not say."""
+    try:
+        raw = response.headers.get("Retry-After")
+    except AttributeError:  # a fake response in a test may carry no headers
+        return None
+    if not raw:
+        return None
+    try:
+        return max(float(str(raw).strip()), 0.0)
+    except ValueError:
+        # The header also allows an HTTP-date. Falling back to the guess beats
+        # carrying a second parser for a value we only compare against a cap.
+        return None
+
+
+def retrying_is_futile(response) -> bool:
+    """True when the server's own wait exceeds anything worth sleeping through.
+
+    OpenAlex answered the exhausted quota with `Retry-After: 19587` -- 5.4
+    hours. Sleeping the capped 60s and trying again three times just spends
+    three minutes to be refused three more times. When the server names a wait
+    that long, the honest move is to surface the refusal immediately and let
+    the circuit breaker end the batch.
+    """
+    asked = retry_after_seconds(response)
+    return asked is not None and asked > MAX_RETRY_AFTER_SECONDS
+
+
+def backoff_seconds(response, retry_count: int) -> float:
+    """How long to wait before retrying, preferring what the server said.
+
+    The previous version always guessed `min(2**n, 8)` and discarded the
+    `Retry-After` header in which OpenAlex states the answer exactly. Guessing
+    short is what turns a brief throttle into a sustained one.
+    """
+    asked = retry_after_seconds(response)
+    if asked is not None:
+        return min(asked, MAX_RETRY_AFTER_SECONDS)
+    return float(min(2**retry_count, 8))
+
+
+def _log_throttle_headers(response) -> None:
+    """Say what the server actually reported, once per process.
+
+    Without this the only evidence of a block is a column of 429s, which
+    cannot distinguish a burst limit from a daily quota from a `mailto` that
+    never reached the polite pool -- and that distinction is what decides the
+    delay to re-run with.
+    """
+    global _THROTTLE_LOGGED
+    if _THROTTLE_LOGGED:
+        return
+    try:
+        headers = {
+            name: value
+            for name, value in response.headers.items()
+            if name.lower() in _THROTTLE_HEADERS
+        }
+    except AttributeError:
+        return
+    _THROTTLE_LOGGED = True
+    logger.warning(
+        "OpenAlex throttled this client (HTTP %s); headers: %s",
+        getattr(response, "status_code", "?"),
+        headers or "none returned",
+    )
+
+
+_THROTTLE_LOGGED = False
+
+
 def fetch_openalex_work(
     doi: str,
     *,
@@ -111,8 +201,9 @@ def fetch_openalex_observation(
                     "error_message": None,
                 }
             if response.status_code == 429 or response.status_code >= 500:
-                if retry_count < max_retries:
-                    time.sleep(min(2**retry_count, 8))
+                _log_throttle_headers(response)
+                if retry_count < max_retries and not retrying_is_futile(response):
+                    time.sleep(backoff_seconds(response, retry_count))
                     continue
                 return {
                     "doi": clean_doi,
@@ -208,6 +299,8 @@ def refresh_openalex_observations(
     )
 
     inserted = success = 0
+    consecutive_failures = 0
+    stopped_early: str | None = None
     for position, doi in enumerate(batch, start=1):
         result = fetch_openalex_observation(doi)
         session.add(
@@ -237,6 +330,23 @@ def refresh_openalex_observations(
             _persist_openalex_evidence(session, result, batch_time)
         inserted += 1
         success += int(result["status"] == "success")
+
+        if result["status"] in {"rate_limited", "error"}:
+            consecutive_failures += 1
+        else:
+            consecutive_failures = 0
+        if consecutive_failures >= CONSECUTIVE_FAILURE_LIMIT:
+            stopped_early = result["status"]
+            logger.warning(
+                "openalex refresh: stopping after %d consecutive %s responses at %d/%d; "
+                "progress is committed and the next run resumes here",
+                consecutive_failures,
+                stopped_early,
+                position,
+                len(batch),
+            )
+            break
+
         if commit_every and position % commit_every == 0:
             session.commit()
             logger.info("openalex refresh: %d/%d fetched, %d ok", position, len(batch), success)
@@ -247,10 +357,11 @@ def refresh_openalex_observations(
         "requested": len(normalized),
         "already_observed": len(already & set(normalized)),
         "pending": len(pending),
-        "fetched": len(batch),
+        "fetched": inserted,
         "inserted": inserted,
         "success": success,
-        "remaining": max(len(pending) - len(batch), 0),
+        "stopped_early": stopped_early,
+        "remaining": max(len(pending) - success, 0),
     }
 
 
@@ -329,6 +440,9 @@ def _persist_openalex_evidence(session: Session, result: dict, observed_at: date
 # silently treated as "no more citations".
 CITING_PAGE_SIZE = 200
 CITING_MAX_PAGES = 5
+# Same retry budget as the backward pass, so one throttled page does not
+# discard a work's whole forward set.
+CITING_MAX_RETRIES = 3
 
 
 def fetch_openalex_citing_works(
@@ -371,12 +485,33 @@ def fetch_openalex_citing_works(
             params["mailto"] = resolved_email
         if resolved_key:
             params["api_key"] = resolved_key
-        response = get(
-            OPENALEX_BASE_URL,
-            params=params,
-            headers={"User-Agent": _user_agent(resolved_email)},
-            timeout=30,
-        )
+        # The forward pass had no 429 handling at all -- a bare
+        # `raise_for_status()` -- so the first throttled page killed a crawl of
+        # a thousand works. It was never exercised against the live API, which
+        # is exactly why that went unnoticed.
+        response = None
+        for retry_count in range(CITING_MAX_RETRIES + 1):
+            response = get(
+                OPENALEX_BASE_URL,
+                params=params,
+                headers={"User-Agent": _user_agent(resolved_email)},
+                timeout=30,
+            )
+            status = getattr(response, "status_code", 200)
+            if status == 429 or status >= 500:
+                _log_throttle_headers(response)
+                if retry_count < CITING_MAX_RETRIES and not retrying_is_futile(response):
+                    time.sleep(backoff_seconds(response, retry_count))
+                    continue
+                # Out of retries: report the partial set as truncated rather
+                # than as a complete crawl that found nothing more.
+                return {
+                    "citing_work_ids": list(dict.fromkeys(citing)),
+                    "truncated": True,
+                    "pages": pages,
+                    "throttled": True,
+                }
+            break
         response.raise_for_status()
         payload = response.json()
         pages += 1
@@ -396,6 +531,7 @@ def fetch_openalex_citing_works(
         "citing_work_ids": list(dict.fromkeys(citing)),
         "truncated": truncated,
         "pages": pages,
+        "throttled": False,
     }
 
 

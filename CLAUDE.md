@@ -168,6 +168,19 @@ Raw scanning defaults to **append** semantics: a partial download does not make 
 disappear. Use explicit snapshot mode only when the supplied directory set is known to be the complete corpus;
 snapshot mode is the operation that propagates removals.
 
+### OpenAlex has a per-window request quota, not just a rate limit
+
+Measured 2026-09-22: `X-RateLimit-Limit: 1000`, `Retry-After: 19587` (5.4 h). The crawl stopped at exactly
+1,000 successful observations because that is the whole quota, so `--delay` buys nothing -- pacing cannot
+purchase requests the quota does not grant. Covering 3,115 DOIs needs roughly four windows, and the forward
+(`cites:`) crawl another ~1,100 requests on top.
+
+Both crawls stop themselves after five consecutive failures rather than grinding through a batch the API has
+stopped answering, commit progress as they go, and resume by skipping DOIs that already succeeded. A run that
+reports `stopped_early` is not a bug; re-run it after the window resets. The polite pool is documented at
+100,000/day and we are being given 1,000, so whether the `mailto` is actually registering is an open question
+-- the client now logs the throttle headers once per run, which is what makes that checkable.
+
 ### The two sources are not interchangeable
 
 Anything that merges IEEE and Elsevier records has to normalize these differences:
