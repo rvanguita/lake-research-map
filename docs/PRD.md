@@ -4,7 +4,7 @@
 
 **Evidence cutoff:** 2026-09-21
 
-**Implementation baseline:** the active 2026-09-21 Gold version `2974743a…` contains 3,115 articles and 7,552 chunks, all carrying complete embedding metadata; the application has 10 registered dashboard pages and 355 passing automated tests (plus two opt-in MySQL tests skipped by the default run) as measured on 2026-09-22.
+**Implementation baseline:** the active 2026-09-21 Gold version `2974743a…` contains 3,115 articles and 7,552 chunks, all carrying complete embedding metadata; the application has 10 registered dashboard pages and 361 passing automated tests (plus two opt-in MySQL tests skipped by the default run) as measured on 2026-09-22.
 
 **Related documents:** [SDD.md](SDD.md), [ROADMAP.md](ROADMAP.md), [METHODOLOGY.md](METHODOLOGY.md)
 

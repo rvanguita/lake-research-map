@@ -26,7 +26,7 @@ Dependencies use work-package IDs. Horizons are sequencing bands rather than cal
 
 ## 2. Delivered baseline
 
-The following capabilities are implemented and covered by the current 355 passing tests plus two opt-in MySQL tests skipped in the default run (229 before this cycle, followed by regression, application-wide page, evidence-workflow, retrieval, provenance, semantic-persistence, MySQL migration, and year-bound coverage):
+The following capabilities are implemented and covered by the current 361 passing tests plus two opt-in MySQL tests skipped in the default run (229 before this cycle, followed by regression, application-wide page, evidence-workflow, retrieval, provenance, semantic-persistence, MySQL migration, and year-bound coverage):
 
 - Raw/Bronze/Silver/Gold ingestion and transformations with DOI normalization and rejection audit.
 - Local PDF inventory/matching, full-text extraction, chunk reconciliation, and local BGE embeddings.
@@ -108,7 +108,7 @@ This baseline does not imply that every analytical method is confirmatory. The l
 
 ### `WP-07` — Enrichment observations and temporal semantics
 
-- **Status:** Append-only observation, as-of selection, response provenance, and OpenAlex evidence schema implemented. The refresh gate was unsatisfiable until 2026-09-22 -- see Evidence -- and now needs only `OPENALEX_EMAIL`. The first live refresh ran on 2026-09-22 and observed **1,000 of 3,115 DOIs (32.1%)** before OpenAlex returned `X-RateLimit-Remaining: 0` against a limit of 1,000 per window; the remaining ~2,115 DOIs plus 73 throttled ones need roughly three further windows. Partial by quota, not by defect -- see `docs/evidence/2026-09-22-openalex-crawl.md`.
+- **Status:** Append-only observation, as-of selection, response provenance, and OpenAlex evidence schema implemented. The refresh gate was unsatisfiable until 2026-09-22 -- see Evidence -- and now needs only `OPENALEX_EMAIL`. The first live refresh ran on 2026-09-22 and observed **1,000 of 3,115 DOIs (32.1%)** before OpenAlex returned `X-RateLimit-Remaining: 0` against a limit of 1,000 per window; the remaining ~2,115 DOIs plus 73 throttled ones need roughly three further windows. Partial by quota, not by defect -- see `docs/evidence/2026-09-22-openalex-crawl.md`. The remaining DOIs are now one batched pass rather than two windows: the refresh OR-joins 50 DOIs per request, so the corpus costs 63 requests instead of 3,115.
 
 - **Objective:** Make citation/reference data reproducible and refreshable.
 - **Justification:** The current cache stores only latest counts and cannot support an as-of analysis.

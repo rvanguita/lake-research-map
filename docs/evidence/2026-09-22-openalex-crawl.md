@@ -120,8 +120,8 @@ once, and the batch ended after five refusals in about two seconds.
 
 ## Verification
 
-Suite **355 passed, 2 skipped** (343 before); `ruff check` and
-`ruff format --check` clean. Twelve new tests: `Retry-After` preferred, capped and
+Suite **361 passed, 2 skipped** (343 before); `ruff check` and
+`ruff format --check` clean. Eighteen new tests, six of them on batching: `Retry-After` preferred, capped and
 falling back; the breaker firing at five and *not* at one; committed progress
 surviving the break; `remaining` reflecting what still needs fetching; the
 forward crawl surviving a throttled page and reporting a persistent throttle as
@@ -130,6 +130,32 @@ truncated; a wait beyond the cap skipping the sleep entirely while a short one i
 The additive migration for `citing_crawled_at` / `citing_truncated` on
 `lit_external_works` was applied with the crawl stopped, and re-running bootstrap
 is a no-op.
+
+## Batching: the fix the quota actually called for
+
+The quota is counted in *requests*, and the client was spending one per DOI.
+Once that is the binding constraint, the answer is not to pace the requests but
+to stop making so many: OpenAlex OR-joins up to 50 values in a single filter,
+so a DOI population costs `ceil(n/50)` requests instead of `n`.
+
+| | per-DOI | batched |
+|---|---:|---:|
+| Remaining 2,115 DOIs | 2,115 requests | **43** |
+| Plus the citing crawl (~1,100) | ~3,215 → 4 windows, ~22 h | ~1,143 → ~1 window |
+
+`fetch_openalex_batch` returns the same per-DOI result shape as the single
+lookup, so persistence, the circuit breaker, the commit cadence and the stats
+all keep counting subjects rather than requests, and `batch_size=1` still
+routes through the original path. Two details matter for correctness:
+
+- **A DOI the response omits is `not_found`, not an error.** OpenAlex simply
+  leaves unknown works out of a filtered result, and calling that an error
+  would retry it on every later run forever.
+- **A throttled batch fails every DOI in it with one verdict**, which is what
+  lets the breaker recognise a throttle as a throttle rather than as fifty
+  unrelated failures. It now costs one request to discover a block, not five.
+
+This is also the politer way to ask: the same data for a sixtieth of the load.
 
 ## Residual — what the next window has to do
 
