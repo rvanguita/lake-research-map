@@ -76,16 +76,6 @@ CAPES_QUALIS_XLSX = next(
 )
 
 
-class ConfigurationError(RuntimeError):
-    """The environment describes a database connection that cannot be attempted.
-
-    Distinct from a connection failure: nothing was tried, because what .env
-    asks for is internally inconsistent. Read-only dashboard paths treat it the
-    same as an unreachable database and degrade; the pipeline CLI lets it
-    surface, because writing under the wrong identity is worse than stopping.
-    """
-
-
 @dataclass(frozen=True)
 class MySQLSettings:
     host: str
@@ -95,31 +85,20 @@ class MySQLSettings:
 
     @classmethod
     def from_env(cls) -> MySQLSettings:
-        role = os.environ.get("LAKE_RESEARCH_MAP_DB_ROLE", "pipeline").strip().upper()
-        role_user = os.environ.get(f"MYSQL_{role}_USER")
-        role_password = os.environ.get(f"MYSQL_{role}_PASSWORD")
-        # User and password resolve independently, so setting only one of a
-        # role's pair silently pairs that value with the *other* credential's
-        # fallback -- typically the role's fresh password against `root`, which
-        # fails as a bare "Access denied for user 'root'" and sends you looking
-        # at the server instead of at this file. Refuse the half-configured
-        # pair and say which half is missing.
-        if bool(role_user) != bool(role_password):
-            present, missing = (
-                (f"MYSQL_{role}_PASSWORD", f"MYSQL_{role}_USER")
-                if role_password
-                else (f"MYSQL_{role}_USER", f"MYSQL_{role}_PASSWORD")
-            )
-            raise ConfigurationError(
-                f"{present} is set but {missing} is not, so the {role.lower()} role would "
-                f"connect as the fallback user with the {role.lower()} credential. Set both, "
-                f"or remove {present} from .env to keep using MYSQL_USER/MYSQL_PASSWORD."
-            )
+        """Read the one database identity this project has.
+
+        There used to be per-role users (`MYSQL_PIPELINE_*`, `MYSQL_DASHBOARD_*`)
+        selected by `LAKE_RESEARCH_MAP_DB_ROLE`. They were dropped: this is a
+        single-machine deployment, so the isolation they bought did not pay for
+        the failure mode they introduced -- user and password resolved
+        independently, so setting only one half of a role's pair silently
+        connected as the fallback user with the role's credential.
+        """
         return cls(
             host=os.environ.get("MYSQL_HOST", "127.0.0.1"),
             port=int(os.environ.get("MYSQL_PORT", "3306")),
-            user=role_user or os.environ.get("MYSQL_USER", "root"),
-            password=role_password or os.environ.get("MYSQL_PASSWORD", ""),
+            user=os.environ.get("MYSQL_USER", "root"),
+            password=os.environ.get("MYSQL_PASSWORD", ""),
         )
 
     def database_name(self, layer: str) -> str:

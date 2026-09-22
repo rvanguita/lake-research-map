@@ -95,38 +95,3 @@ def test_silver_has_rejected_table():
     inspector = inspect(engine)
     assert "lit_rejected" in inspector.get_table_names()
     engine.dispose()
-
-
-def test_half_configured_role_credentials_are_refused(monkeypatch):
-    """Setting one half of a role's pair silently pairs it with the other's fallback.
-
-    Adding `MYSQL_PIPELINE_PASSWORD` without `MYSQL_PIPELINE_USER` made the
-    pipeline connect as `root` with the pipeline password, which surfaces only
-    as "Access denied for user 'root'" and sends you looking at the server
-    rather than at .env.
-    """
-    import pytest
-
-    from lake_research_map.config import MySQLSettings
-
-    for key in ("MYSQL_PIPELINE_USER", "MYSQL_PIPELINE_PASSWORD"):
-        monkeypatch.delenv(key, raising=False)
-    monkeypatch.setenv("LAKE_RESEARCH_MAP_DB_ROLE", "pipeline")
-    monkeypatch.setenv("MYSQL_USER", "root")
-    monkeypatch.setenv("MYSQL_PASSWORD", "root-secret")
-
-    # Neither half set: the plain credentials are used, as before.
-    assert MySQLSettings.from_env().user == "root"
-
-    monkeypatch.setenv("MYSQL_PIPELINE_PASSWORD", "generated")
-    with pytest.raises(RuntimeError, match="MYSQL_PIPELINE_USER is not"):
-        MySQLSettings.from_env()
-
-    monkeypatch.setenv("MYSQL_PIPELINE_USER", "lake_pipeline")
-    settings = MySQLSettings.from_env()
-    assert (settings.user, settings.password) == ("lake_pipeline", "generated")
-
-    # The mirror case is refused too.
-    monkeypatch.delenv("MYSQL_PIPELINE_PASSWORD")
-    with pytest.raises(RuntimeError, match="MYSQL_PIPELINE_PASSWORD is not"):
-        MySQLSettings.from_env()
