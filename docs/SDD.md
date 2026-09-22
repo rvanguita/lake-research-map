@@ -248,7 +248,34 @@ Hard-coded observation years and cluster-name assignments are transitional. Time
 
 Logs use structured fields with parent run ID, stage run ID, and dataset version. A telemetry-write failure is surfaced; it must not be silently downgraded to debug-only information for a production run.
 
-### 7.2 Initial SLOs
+### 7.2 Read-only audits
+
+Telemetry records what a run did; the audits answer whether the corpus is fit to
+analyse. They are read-only, safe to run at any time, and are the surface where
+coverage becomes visible.
+
+| Command | Reports | Denominator |
+|---|---|---|
+| `audit reference-corpus` | Active version, article/chunk/semantic counts, blocking quality failures | The active dataset version |
+| `audit citation-graph` | Backward and forward citation coverage, truncated crawls, population usable for a disruption index (their **intersection**, never the larger side) | Observed works, plus a per-registrant table against the corpus |
+| `audit citation-years` | Annual citation-count coverage, years per work, year range | Observed works, plus a per-registrant table against the corpus |
+
+Every audit that reports a share of externally collected data also reports it
+per registrant against the corpus, because an aggregate over a partial
+collection inherits whatever ordered that collection — see `ADR-07`. A
+publisher that the crawl has not reached prints as `0 / N  <- not reached`
+rather than being averaged into a reassuring total.
+
+### 7.2.1 Crawl resumption semantics
+
+Both OpenAlex passes are resumable and self-limiting. The backward pass skips
+DOIs that already carry a *successful* observation, so failures are retried and
+successes are not re-fetched; the forward pass skips works carrying
+`citing_crawled_at`, which is what distinguishes "already crawled, nobody cites
+it" from "not yet crawled" — edge presence cannot. Both stop after five
+consecutive refusals, commit progress as they go, and report `stopped_early`.
+
+### 7.3 Initial SLOs
 
 - 100% of successful published versions pass required quality gates.
 - 100% of active source files reconcile to Raw manifest revisions.
@@ -270,7 +297,7 @@ Logs use structured fields with parent run ID, stage run ID, and dataset version
 
 ### 9.1 Current baseline
 
-The repository has 361 passing pytest tests plus two opt-in MySQL tests skipped in the default run. They run with isolated in-memory SQLite sessions and additionally cover deterministic fingerprints, content-addressed retention, rename detection, Bronze deletion propagation, isolated Gold candidates, embedding contract failures, atomic materialization, exact Gold reactivation, an end-to-end correlated pipeline fixture, Airflow parent correlation, temporal enrichment observations, persistent human-review evidence, retrieval metrics, provenance coverage, persisted semantic diagnostics, the durable-label-to-calibration join with its approval digests, the injected-fixture citation-graph crawl, automatic abandoned-run recovery, and the plausible-year bound that keeps in-press records dated to next year inside every trend. The MySQL acceptance tests cover JSON/NULL/BLOB round trips, rollback, advisory locks, and the idempotent `lit_config` uniqueness migration. Ruff lint and format checks are required.
+The repository has 369 passing pytest tests plus two opt-in MySQL tests skipped in the default run. They run with isolated in-memory SQLite sessions and additionally cover deterministic fingerprints, content-addressed retention, rename detection, Bronze deletion propagation, isolated Gold candidates, embedding contract failures, atomic materialization, exact Gold reactivation, an end-to-end correlated pipeline fixture, Airflow parent correlation, temporal enrichment observations, persistent human-review evidence, retrieval metrics, provenance coverage, persisted semantic diagnostics, the durable-label-to-calibration join with its approval digests, the injected-fixture citation-graph crawl, automatic abandoned-run recovery, and the plausible-year bound that keeps in-press records dated to next year inside every trend. The MySQL acceptance tests cover JSON/NULL/BLOB round trips, rollback, advisory locks, and the idempotent `lit_config` uniqueness migration. Ruff lint and format checks are required.
 
 SQLite remains the default fast suite. MySQL-specific acceptance is recorded separately against MySQL 8.4 and must be rerun for changes to JSON/NULL behavior, BLOBs, DDL, transactions, or advisory locks.
 
@@ -348,6 +375,33 @@ The 2026-09-21 active-corpus benchmark measured an 11.06 MiB vector matrix and a
 **Alternative:** Direct page writes.
 
 **Rationale:** Controlled workflows provide clearer permissions, recovery, and audit trails.
+
+### `ADR-07` — Ordering an external crawl is sampling, not iteration
+
+**Context:** the OpenAlex refresh walked `sorted(dois)`, which reads as neutral
+iteration over a stable key. A DOI's registrant prefix is its publisher, so the
+sorted key is correlated with source: `10.1016` (Elsevier) sorts entirely before
+`10.1109` (IEEE). Combined with a request quota that stops the crawl part-way,
+the first live run observed 989 Elsevier works and zero IEEE ones, and every
+coverage figure computed on that subset described one publisher while reading as
+a statement about the corpus.
+
+**Decision:** external collection is ordered so that any prefix of it is
+representative. `interleave_by_registrant` positions each DOI at
+`(index + 0.5) / group_size` within its registrant and sorts by that fraction,
+which makes the first N proportional across publishers. The ordering is
+deterministic and seedless, so the same corpus always produces the same
+sequence. Coverage audits report per registrant against the corpus denominator,
+not only in aggregate.
+
+**Consequences:** a crawl interrupted at any point yields a usable sample rather
+than a publisher-complete block, and a source at zero is visible in the audit
+output instead of being averaged away. The cost is that no single publisher is
+ever finished early, which matters only if a downstream analysis needed one
+source complete — none does.
+
+**Generalization:** this applies to any bounded traversal of an ordered key
+whose order correlates with a property under analysis, not just to DOIs.
 
 ## 12. Known technical debt
 

@@ -1,7 +1,7 @@
 # lake-research-map
 
 [![Python 3.13](https://img.shields.io/badge/python-3.13-blue.svg)](https://www.python.org/downloads/)
-[![Tests: 186 passed](https://img.shields.io/badge/tests-186%20passed-brightgreen.svg)](tests/)
+[![Tests: 369 passed](https://img.shields.io/badge/tests-369%20passed-brightgreen.svg)](tests/)
 [![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
 [![Streamlit Dashboard](https://img.shields.io/badge/dashboard-Streamlit-FF4B4B.svg)](src/lake_research_map/dashboard/)
 [![Airflow Orchestration](https://img.shields.io/badge/orchestration-Apache%20Airflow-017CEE.svg)](airflow/)
@@ -121,6 +121,21 @@ All analytical functions reside in `dashboard/analytics.py` and `dashboard/forec
  │ Zhang's Excess Impact Index           │ e^2 = Σ_{i=1}^h c_i - h^2                │
  └───────────────────────────────────────┴──────────────────────────────────────────┘
 ```
+
+### Coverage is reported, not assumed
+
+Methods are only half of a claim; the other half is what they ran over. Two
+rules are enforced in the codebase rather than left to the reader:
+
+- **Every dashboard page states its dataset version and population** — a
+  provenance caption naming the immutable version, its publication time, and
+  how many articles survived the active filters.
+- **Externally collected data reports coverage per publisher, against the
+  corpus.** OpenAlex enrichment runs under a request quota and is therefore
+  often partial; an aggregate percentage over a partial crawl inherits whatever
+  ordered that crawl. Collection is publisher-proportional by construction
+  (`ADR-07`), and `audit citation-graph` / `audit citation-years` print a
+  per-registrant table marking any source the crawl has not reached.
 
 ---
 
@@ -282,7 +297,7 @@ lake-research-map/
 ├── scripts/
 │   ├── generate_hero.py          # Programmatic vector renderer for hero assets
 │   └── git-hooks/                # Pre-commit hook shell scripts
-├── tests/                        # 186 unit/integration tests (SQLite in-memory)
+├── tests/                        # 369 unit/integration tests (SQLite in-memory)
 ├── AGENTS.md                     # Universal guidelines for AI assistants
 ├── CLAUDE.md                     # Source-data quirks and environment notes
 ├── docker-compose.yml            # Airflow + Dashboard container orchestration
