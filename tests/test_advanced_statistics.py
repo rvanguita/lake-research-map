@@ -148,7 +148,12 @@ def test_citation_determinants_glm():
     )
     res = citation_determinants_glm(df)
     assert res["valid"] is True
-    assert res["family"] in {"poisson", "negative_binomial"}
+    assert res["family"] in {
+        "poisson",
+        "negative_binomial",
+        "zero_inflated_poisson",
+        "zero_inflated_negative_binomial",
+    }
     assert res["n_used"] == n
     assert res["coverage"] == 1.0
     assert len(res["features"]) == len(res["coefficients"]) == len(res["irr"])
@@ -158,6 +163,31 @@ def test_citation_determinants_glm():
     assert set(res["candidate_aic"]) >= {"poisson"}
     assert 0 <= res["observed_zero_fraction"] <= 1
     assert res["influential_count"] >= 0
+
+    # WP-15: the family is chosen by AIC over every candidate that converged,
+    # not by the old dispersion > 1.5 rule.
+    assert res["family_selection"] == "aic"
+    assert res["family"] == min(res["candidate_aic"], key=res["candidate_aic"].get)
+    assert res["zero_inflated_status"] in {"fitted", "did_not_converge"}
+
+    # A selected family must be able to state its own uncertainty: a fit whose
+    # Hessian could not be inverted returns NaN intervals and is not eligible.
+    assert all(np.isfinite(value) for value in res["p_values"])
+    assert all(np.isfinite(value) for value in res["irr_lower"])
+    assert all(np.isfinite(value) for value in res["irr_upper"])
+
+    # WP-15: log(age + 1) as a fixed offset is an assumption, so the exposure
+    # choice is reported rather than hidden.
+    assert len(res["age_specifications"]) >= 2
+    assert {spec["specification"] for spec in res["age_specifications"]} <= {
+        "offset_log_age",
+        "covariate_log_age",
+        "covariate_linear_age",
+    }
+    for spec in res["age_specifications"]:
+        assert set(spec["coefficients"]) == set(res["features"])
+        assert np.isfinite(spec["aic"])
+    assert isinstance(res["age_specification_signs_agree"], bool)
 
     with_missing = df.copy()
     with_missing.loc[:4, "reference_count"] = np.nan
@@ -245,3 +275,61 @@ def test_conceptual_atypicality_analysis():
     assert not res["articles_df"].empty
     assert "median_z" in res["articles_df"].columns
     assert "is_atypical" in res["articles_df"].columns
+
+
+def test_citation_determinants_glm_reports_when_no_zero_inflated_fit_converges():
+    """A corpus with no zeros gives the zero-inflation part nothing to explain.
+
+    The panel must still be able to say which families were on the table, so
+    `zero_inflated_status` is always populated and the selected family always
+    carries finite uncertainty -- never a NaN interval from a fit whose Hessian
+    could not be inverted.
+    """
+    rng = np.random.default_rng(11)
+    n = 60
+    df = pd.DataFrame(
+        {
+            "year": rng.integers(2015, 2024, size=n),
+            # Strictly positive: there is no zero mass to inflate.
+            "citation_count": rng.integers(5, 40, size=n),
+            "reference_count": rng.integers(5, 50, size=n),
+            "authors": [["A", "B"], ["A", "B", "C"]] * (n // 2),
+            "source": ["ieee"] * (n // 2) + ["elsevier"] * (n // 2),
+        }
+    )
+    res = citation_determinants_glm(df)
+
+    assert res["valid"] is True
+    assert res["observed_zero_fraction"] == 0.0
+    assert res["zero_inflated_status"] in {"fitted", "did_not_converge"}
+    assert "poisson" in res["candidate_aic"]
+    assert res["family"] == min(res["candidate_aic"], key=res["candidate_aic"].get)
+    assert all(np.isfinite(value) for value in res["irr_lower"])
+    assert all(np.isfinite(value) for value in res["irr_upper"])
+    # Influence always names the fit it was measured on, because a zero-inflated
+    # fit has no hat matrix and falls back to the Poisson GLM.
+    assert res["influence_basis"] in {
+        "poisson",
+        "negative_binomial",
+        "unavailable",
+    }
+
+
+def test_citation_determinants_glm_rejects_undersized_sample():
+    df = pd.DataFrame(
+        {
+            "year": [2020] * 10,
+            "citation_count": list(range(10)),
+            "reference_count": list(range(10, 20)),
+            "authors": [["A"]] * 10,
+            "source": ["ieee"] * 10,
+        }
+    )
+    res = citation_determinants_glm(df)
+    assert res["valid"] is False
+    assert res["n_used"] == 10
+    assert "20" in res["warning"]
+    # Nothing was fitted, so the panel must not find diagnostics to display.
+    assert "age_specifications" not in res
+    assert "candidate_aic" not in res
+    assert res["coefficients"] == []

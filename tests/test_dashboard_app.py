@@ -52,3 +52,36 @@ _render_contract_status(results)
     assert len(app.metric) == 3
     assert app.error
     assert app.dataframe
+
+
+def test_citation_determinants_panel_renders_family_and_age_sensitivity():
+    """WP-15: the Impact panel must show how the family was chosen and whether
+    the associations survive a different age specification."""
+    script = """
+import numpy as np
+import pandas as pd
+from lake_research_map.dashboard.pages.highlights import _citation_determinants_glm_view
+
+rng = np.random.default_rng(3)
+n = 80
+articles = pd.DataFrame({
+    "doi": [f"10.1000/{i}" for i in range(n)],
+    "year": rng.integers(2012, 2024, size=n),
+    "citation_count": rng.integers(0, 60, size=n),
+    "reference_count": rng.integers(5, 50, size=n),
+    "authors": [["A", "B"], ["A", "B", "C"]] * (n // 2),
+    "source": ["ieee"] * (n // 2) + ["elsevier"] * (n // 2),
+})
+_citation_determinants_glm_view(articles)
+"""
+
+    app = AppTest.from_string(script).run(timeout=30)
+
+    assert not app.exception
+    captions = " ".join(caption.value for caption in app.caption)
+    assert "selected by AIC" in captions
+    # The expander body renders the age-sensitivity table alongside the
+    # coefficient table, so both are present.
+    assert len(app.dataframe) >= 2
+    markdown = " ".join(block.value for block in app.markdown)
+    assert "Sensitivity to the age specification" in markdown
