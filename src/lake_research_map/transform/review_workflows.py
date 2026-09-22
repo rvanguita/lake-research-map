@@ -263,3 +263,128 @@ def approve_model(
     session.add(row)
     session.commit()
     return row
+
+
+# Reserved reviewer id. `screening_calibration.resolve_review_consensus`
+# already treats a row under this name as the decision that outranks a
+# disagreement, so an adjudication reaches the calibrator as an extra row
+# rather than by overwriting the raw labels it was meant to preserve.
+ADJUDICATED_REVIEWER = "adjudicated"
+
+
+def collect_labels(
+    session: Session,
+    *,
+    workflow: str,
+    dataset_version_id: str,
+) -> list[dict[str, str]]:
+    """Return the durable labels in the long form the calibration reads.
+
+    This is the join the two halves of the workflow were missing: `import`
+    wrote reviewer decisions to the database, while calibration only ever saw
+    a CSV uploaded in the browser, so a persisted label could never reach the
+    threshold it exists to validate.
+
+    Only the highest revision of each assignment is returned. The table is
+    append-only, so a reviewer who corrects a decision adds a row instead of
+    editing one, and every earlier revision is history rather than a second
+    opinion.
+    """
+    if workflow not in WORKFLOW_LABELS:
+        raise ValueError(f"unknown workflow {workflow!r}")
+
+    label_rows = session.execute(
+        select(
+            ReviewLabel.assignment_id,
+            ReviewLabel.label,
+            ReviewAssignment.subject_id,
+            ReviewAssignment.reviewer_id,
+            ReviewProtocol.protocol_version,
+        )
+        .join(ReviewAssignment, ReviewAssignment.id == ReviewLabel.assignment_id)
+        .join(ReviewProtocol, ReviewProtocol.id == ReviewAssignment.protocol_id)
+        .where(
+            ReviewAssignment.workflow == workflow,
+            ReviewAssignment.dataset_version_id == dataset_version_id,
+        )
+        .order_by(ReviewLabel.assignment_id, ReviewLabel.label_revision.desc())
+    ).all()
+
+    rows: list[dict[str, str]] = []
+    seen: set[int] = set()
+    protocol_by_subject: dict[str, str] = {}
+    for assignment_id, label, subject_id, reviewer_id, protocol_version in label_rows:
+        protocol_by_subject.setdefault(subject_id, protocol_version)
+        if assignment_id in seen:
+            continue
+        seen.add(assignment_id)
+        rows.append(
+            {
+                "doi": subject_id,
+                "subject_id": subject_id,
+                "reviewer": reviewer_id,
+                "manual_label": label,
+                "protocol_version": protocol_version,
+            }
+        )
+
+    for row in session.scalars(
+        select(ReviewAdjudication).where(
+            ReviewAdjudication.workflow == workflow,
+            ReviewAdjudication.dataset_version_id == dataset_version_id,
+        )
+    ):
+        rows.append(
+            {
+                "doi": row.subject_id,
+                "subject_id": row.subject_id,
+                "reviewer": ADJUDICATED_REVIEWER,
+                "manual_label": row.final_label,
+                "protocol_version": protocol_by_subject.get(row.subject_id, "unversioned"),
+            }
+        )
+
+    return sorted(rows, key=lambda row: (row["subject_id"], row["reviewer"]))
+
+
+def assignment_progress(
+    session: Session,
+    *,
+    workflow: str,
+    dataset_version_id: str,
+) -> dict[str, int]:
+    """Count how much of a review round has actually been labelled.
+
+    Reported per reviewer as well as in total, because a round where one
+    reviewer finished and the other has not started produces plenty of labels
+    and zero agreement, and a single completion percentage hides that.
+    """
+    assignments = session.execute(
+        select(ReviewAssignment.id, ReviewAssignment.reviewer_id).where(
+            ReviewAssignment.workflow == workflow,
+            ReviewAssignment.dataset_version_id == dataset_version_id,
+        )
+    ).all()
+    labelled = set(
+        session.scalars(
+            select(ReviewLabel.assignment_id).where(
+                ReviewLabel.assignment_id.in_([row.id for row in assignments])
+            )
+        ).all()
+        if assignments
+        else []
+    )
+    per_reviewer: dict[str, int] = {}
+    outstanding: dict[str, int] = {}
+    for assignment_id, reviewer_id in assignments:
+        if assignment_id in labelled:
+            per_reviewer[reviewer_id] = per_reviewer.get(reviewer_id, 0) + 1
+        else:
+            outstanding[reviewer_id] = outstanding.get(reviewer_id, 0) + 1
+    return {
+        "assignments": len(assignments),
+        "labelled": len(labelled),
+        "outstanding": len(assignments) - len(labelled),
+        "labelled_by_reviewer": dict(sorted(per_reviewer.items())),
+        "outstanding_by_reviewer": dict(sorted(outstanding.items())),
+    }

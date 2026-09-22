@@ -103,7 +103,7 @@ def render() -> None:
         [
             "Flow and retention",
             "Layer quality",
-            "Auditoria",
+            "Audit",
             "Implementation and provenance",
         ],
         on_change="rerun",

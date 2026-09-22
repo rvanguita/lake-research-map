@@ -224,9 +224,9 @@ def _screening_calibration_panel(scored: pd.DataFrame) -> None:
     st.divider()
     st.subheader("Calibration with human review")
     st.caption(
-        "The uncertainty queue prioritizes reading; the stratified sample below serves a different "
-        "question: to estimate the threshold performance in the entire margin range. "
-        "records labels or applies exclusions automatically."
+        "The uncertainty queue prioritizes reading; the stratified sample below serves a "
+        "different question: to estimate the threshold's performance across the whole margin "
+        "range. Nothing on this page records labels or applies exclusions automatically."
     )
 
     sample = generate_stratified_screening_sample(scored, n_samples=100, seed=42)
@@ -244,7 +244,7 @@ def _screening_calibration_panel(scored: pd.DataFrame) -> None:
         accept_multiple_files=True,
         key="screening_review_files",
         help=(
-            "Mandatory fields: doi and manual_label.reviewer and protocol_version are recommended."
+            "Mandatory fields: doi and manual_label. reviewer and protocol_version are recommended."
         ),
     )
     if not uploaded:
@@ -270,7 +270,7 @@ def _screening_calibration_panel(scored: pd.DataFrame) -> None:
     if not issues.empty:
         n_errors = int(issues["severity"].eq("error").sum())
         n_warnings = int(issues["severity"].eq("warning").sum())
-        message = f"Auditoria do arquivo: {n_errors} erro(s) e {n_warnings} aviso(s)."
+        message = f"File audit: {n_errors} error(s) and {n_warnings} warning(s)."
         st.error(message) if n_errors else st.warning(message)
         st.dataframe(issues, hide_index=True, width="stretch")
     if labels.empty:
@@ -301,8 +301,8 @@ def _screening_calibration_panel(scored: pd.DataFrame) -> None:
     calibration = calibrate_screening_threshold(resolved, scored, seed=42)
     if not calibration["valid"]:
         st.warning(
-            "There is still no support for holdout validation. "
-            "Solved with 10 inclusions and 10 exclusions."
+            "There is still not enough support for holdout validation: it needs at least 40 "
+            "resolved subjects, with at least 10 inclusions and 10 exclusions."
         )
         return
 
@@ -321,10 +321,10 @@ def _screening_calibration_panel(scored: pd.DataFrame) -> None:
     )
     metric_row(
         [
-            ("Sensibilidade", _metric_with_ci("recall"), f"FN: {metrics['fn']}"),
-            ("Especificidade", _metric_with_ci("specificity"), None),
+            ("Sensitivity", _metric_with_ci("recall"), f"FN: {metrics['fn']}"),
+            ("Specificity", _metric_with_ci("specificity"), None),
             ("Precision", _metric_with_ci("precision"), None),
-            ("F2", _metric_with_ci("f2"), "prioriza sensibilidade"),
+            ("F2", _metric_with_ci("f2"), "favours sensitivity"),
             ("Load reduction", _metric_with_ci("workload_reduction"), None),
         ]
     )
@@ -337,10 +337,10 @@ def _screening_calibration_panel(scored: pd.DataFrame) -> None:
         markers=True,
         hover_data={"threshold": ":+.3f", "specificity": ":.1%"},
         labels={
-            "recall": "Sensibilidade",
+            "recall": "Sensitivity",
             "precision": "Precision",
             "threshold": "Threshold",
-            "specificity": "Especificidade",
+            "specificity": "Specificity",
         },
         title="Precision and sensitivity in the holdout set",
     )
@@ -354,7 +354,7 @@ def _screening_calibration_panel(scored: pd.DataFrame) -> None:
     fig.update_layout(xaxis_tickformat=".0%", yaxis_tickformat=".0%")
     render_chart(
         fig,
-        caption="The highlighted point is evidence of validation, non-authorization for exclusion "
+        caption="The highlighted point is validation evidence, not authorization to exclude. "
         "Broad intervals indicate the need to expand the human review.",
     )
 
@@ -372,11 +372,11 @@ def _legacy_relevance_screening(scored: pd.DataFrame) -> None:
     metric_row(
         [
             ("📄 Articles with score", f"{len(scored):,}", None),
-            ("📉 Score mediano", f"{scored['relevance_score'].median():.3f}", None),
+            ("📉 Median score", f"{scored['relevance_score'].median():.3f}", None),
             (
                 f"🚩 Below percentile {LOW_RELEVANCE_PERCENTILE}",
                 f"{len(low):,}",
-                f"corte em {threshold:.3f}",
+                f"cut at {threshold:.3f}",
             ),
         ]
     )
@@ -386,30 +386,30 @@ def _legacy_relevance_screening(scored: pd.DataFrame) -> None:
         x="relevance_score",
         nbins=60,
         title="How close to the theme of the review is each article",
-        labels={"relevance_score": "Relevancy score (cossine)", "count": "Articles"},
+        labels={"relevance_score": "Relevance score (cosine)", "count": "Articles"},
         color_discrete_sequence=[CATEGORICAL_PALETTE[0]],
     )
     fig.add_vline(
         x=threshold,
         line_dash="dash",
         line_color=TREND_DOWN_COLOR,
-        annotation_text=f"percentil {LOW_RELEVANCE_PERCENTILE}",
+        annotation_text=f"percentile {LOW_RELEVANCE_PERCENTILE}",
     )
     fig.update_layout(
-        xaxis_title="Relevant score (1.0 = identical to the anchor-theme)",
+        xaxis_title="Relevance score (1.0 = identical to the theme anchor)",
         yaxis_title="Number of articles",
         showlegend=False,
     )
     render_chart(
         fig,
-        caption="The score is the cosine between the abstract and an anchor text that describes the scope of the "
-        "The tail to the left concentrates the false positives of the search.",
+        caption="The score is the cosine between the abstract and an anchor text describing "
+        "the scope of the review. The left tail concentrates the search's false positives.",
     )
 
     st.divider()
     st.subheader(f"Low-relevance tail — {len(low):,} articles for manual review")
     st.caption(
-        "Ordered from the least relevant to the most relevant. "
+        "Ordered from the least relevant to the most relevant. A low score is a hint, "
         "not a verdict: review before discarding."
     )
     review = low.sort_values("relevance_score").head(TOP_REVIEW_ROWS).copy()
@@ -417,7 +417,7 @@ def _legacy_relevance_screening(scored: pd.DataFrame) -> None:
     article_table(
         review,
         ["relevance_score", "theme_label", "title", "year", "venue", "source", "doi"],
-        download_key="baixa_relevancia",
+        download_key="low_relevance",
     )
 
 
