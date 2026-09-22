@@ -375,3 +375,218 @@ def retrieval_candidates(
             f"first error: {next(iter(failures.values()))}"
         )
     return subjects, stats
+
+
+# ---------------------------------------------------------------------------
+# Resolving a subject back into evidence a reviewer can judge
+# ---------------------------------------------------------------------------
+
+# The exported queue used to carry `assignment_id` and `subject_id` and nothing
+# else, which made the human half of every evidence package unperformable: a
+# reviewer opening the screening queue saw
+# `reject::ieee::bib:03f7a342cbc9:6761637` and had no title, no abstract and no
+# way to answer "should this record have been in the corpus?". The subject ids
+# are built in this module, so the inverse belongs here too -- keeping both
+# halves of the format in one file is what stops them drifting apart.
+SUBJECT_COLUMNS: dict[str, tuple[str, ...]] = {
+    "screening": ("title", "source", "record_type", "year", "venue", "abstract"),
+    "author": ("variant_a", "variant_b", "papers_a", "papers_b"),
+    "pdf": ("doi", "article_title", "year", "pdf_file"),
+    "retrieval": ("query", "doi", "article_title", "abstract"),
+    "taxonomy": ("taxonomy_class", "doi", "article_title", "abstract"),
+}
+
+# Enough abstract to decide, short enough that the CSV stays openable in a
+# spreadsheet. A reviewer who needs the rest has the DOI.
+ABSTRACT_PREVIEW_CHARS = 700
+PAPERS_PER_VARIANT = 3
+
+
+def _preview(text: object, limit: int = ABSTRACT_PREVIEW_CHARS) -> str:
+    value = " ".join(str(text or "").split())
+    if len(value) <= limit:
+        return value
+    return value[: limit - 1].rstrip() + "…"
+
+
+def _gold_articles_by_doi(gold_session: Session, dataset_version_id: str, dois: set[str]) -> dict:
+    from lake_research_map.db.gold_models import DatasetArticle
+
+    if not dois:
+        return {}
+    rows = gold_session.scalars(
+        select(DatasetArticle).where(
+            DatasetArticle.dataset_version_id == dataset_version_id,
+            DatasetArticle.doi.in_(sorted(dois)),
+        )
+    ).all()
+    return {row.doi: row for row in rows}
+
+
+def describe_subjects(
+    workflow: str,
+    subject_ids: list[str],
+    *,
+    dataset_version_id: str,
+    gold_session: Session | None = None,
+    silver_session: Session | None = None,
+    bronze_session: Session | None = None,
+    raw_session: Session | None = None,
+) -> dict[str, dict[str, str]]:
+    """Map each subject id to the context a reviewer needs to label it.
+
+    Every branch degrades to blank values rather than raising: an export that
+    fails because one subject no longer resolves is worse than an export with
+    one incomplete row, since the reviewer can still work the other 29.
+    """
+    subjects = [str(value) for value in subject_ids]
+    if workflow == "screening":
+        return _describe_screening(subjects, bronze_session)
+    if workflow == "author":
+        return _describe_author(subjects, silver_session)
+    if workflow == "pdf":
+        return _describe_pdf(subjects, dataset_version_id, gold_session, raw_session)
+    if workflow in {"retrieval", "taxonomy"}:
+        return _describe_doi_keyed(workflow, subjects, dataset_version_id, gold_session)
+    return {}
+
+
+def _describe_screening(subjects: list[str], bronze_session: Session | None) -> dict:
+    """`reject::<source>::<source_id>` -- a record dropped at silver for no DOI.
+
+    Resolved straight from Bronze rather than through `lit_rejected`, because
+    Bronze is keyed by exactly the `(source, source_id)` pair the subject id
+    carries and holds the abstract that the rejection audit row does not.
+    """
+    described: dict[str, dict[str, str]] = {subject: {} for subject in subjects}
+    if bronze_session is None:
+        return described
+    from lake_research_map.db.bronze_models import Article as BronzeArticle
+
+    wanted: dict[tuple[str, str], str] = {}
+    for subject in subjects:
+        parts = subject.split("::", 2)
+        if len(parts) == 3 and parts[0] == "reject":
+            wanted[(parts[1], parts[2])] = subject
+    if not wanted:
+        return described
+    rows = bronze_session.scalars(
+        select(BronzeArticle).where(
+            BronzeArticle.source_id.in_(sorted({source_id for _, source_id in wanted}))
+        )
+    ).all()
+    for row in rows:
+        subject = wanted.get((row.source, row.source_id))
+        if subject is None:
+            continue
+        described[subject] = {
+            "title": _preview(row.title, 300),
+            "source": row.source,
+            "record_type": row.record_type or "",
+            "year": str(row.year) if row.year else "",
+            "venue": _preview(row.venue, 200),
+            "abstract": _preview(row.abstract),
+        }
+    return described
+
+
+def _describe_author(subjects: list[str], silver_session: Session | None) -> dict:
+    """`<variant_a>||<variant_b>` -- two spellings that may be one person.
+
+    The names alone cannot settle it; what decides a homonym is whether the
+    two variants publish on the same topics with the same collaborators, so a
+    few titles per variant travel with the pair.
+    """
+    described: dict[str, dict[str, str]] = {subject: {} for subject in subjects}
+    if silver_session is None:
+        return described
+    from lake_research_map.dashboard.analytics import canonical_author
+
+    titles: dict[str, list[str]] = defaultdict(list)
+    for row in silver_session.scalars(select(SilverArticle)).all():
+        for name in row.authors or []:
+            if not isinstance(name, str) or not name.strip():
+                continue
+            for key in {name.strip().casefold(), canonical_author(name)}:
+                if key and len(titles[key]) < PAPERS_PER_VARIANT:
+                    titles[key].append(_preview(row.title, 120))
+
+    for subject in subjects:
+        variant_a, _, variant_b = subject.partition("||")
+        described[subject] = {
+            "variant_a": variant_a,
+            "variant_b": variant_b,
+            "papers_a": " | ".join(titles.get(variant_a.casefold(), [])),
+            "papers_b": " | ".join(titles.get(variant_b.casefold(), [])),
+        }
+    return described
+
+
+def _describe_pdf(
+    subjects: list[str],
+    dataset_version_id: str,
+    gold_session: Session | None,
+    raw_session: Session | None,
+) -> dict:
+    """`<doi>::<pdf_path>` -- is this PDF really this article?
+
+    The stored path is content-addressed, so it reads as
+    `objects/ae/ae97ce4b…` and tells a reviewer nothing. `lit_pdf_files`
+    carries the original filename beside the archived blob, and that filename
+    is the only readable half of the comparison.
+    """
+    described: dict[str, dict[str, str]] = {subject: {} for subject in subjects}
+    pairs = {subject: subject.split("::", 1) for subject in subjects}
+    dois = {parts[0] for parts in pairs.values() if len(parts) == 2}
+
+    articles = _gold_articles_by_doi(gold_session, dataset_version_id, dois) if gold_session else {}
+
+    names: dict[str, str] = {}
+    if raw_session is not None:
+        from lake_research_map.db.raw_models import PdfFile
+
+        for row in raw_session.scalars(select(PdfFile)).all():
+            for key in (row.path, row.archive_path):
+                if key:
+                    names[key] = row.filename
+
+    for subject, parts in pairs.items():
+        if len(parts) != 2:
+            continue
+        doi, pdf_path = parts
+        article = articles.get(doi)
+        described[subject] = {
+            "doi": doi,
+            "article_title": _preview(getattr(article, "title", ""), 300),
+            "year": str(article.year) if article is not None and article.year else "",
+            "pdf_file": names.get(pdf_path, pdf_path.rsplit("/", 1)[-1]),
+        }
+    return described
+
+
+def _describe_doi_keyed(
+    workflow: str,
+    subjects: list[str],
+    dataset_version_id: str,
+    gold_session: Session | None,
+) -> dict:
+    """`<query id|taxonomy class>::<doi>` -- both judge a label against an article."""
+    described: dict[str, dict[str, str]] = {subject: {} for subject in subjects}
+    pairs = {subject: subject.split("::", 1) for subject in subjects}
+    dois = {parts[1] for parts in pairs.values() if len(parts) == 2}
+    articles = _gold_articles_by_doi(gold_session, dataset_version_id, dois) if gold_session else {}
+    queries = dict(RETRIEVAL_QUERIES)
+
+    lead = "query" if workflow == "retrieval" else "taxonomy_class"
+    for subject, parts in pairs.items():
+        if len(parts) != 2:
+            continue
+        key, doi = parts
+        article = articles.get(doi)
+        described[subject] = {
+            lead: queries.get(key, key) if workflow == "retrieval" else key,
+            "doi": doi,
+            "article_title": _preview(getattr(article, "title", ""), 300),
+            "abstract": _preview(getattr(article, "abstract", "")),
+        }
+    return described

@@ -26,7 +26,7 @@ Dependencies use work-package IDs. Horizons are sequencing bands rather than cal
 
 ## 2. Delivered baseline
 
-The following capabilities are implemented and covered by the current 314 passing tests plus two opt-in MySQL tests skipped in the default run (229 before this cycle, followed by regression, application-wide page, evidence-workflow, retrieval, provenance, semantic-persistence, MySQL migration, and year-bound coverage):
+The following capabilities are implemented and covered by the current 322 passing tests plus two opt-in MySQL tests skipped in the default run (229 before this cycle, followed by regression, application-wide page, evidence-workflow, retrieval, provenance, semantic-persistence, MySQL migration, and year-bound coverage):
 
 - Raw/Bronze/Silver/Gold ingestion and transformations with DOI normalization and rejection audit.
 - Local PDF inventory/matching, full-text extraction, chunk reconciliation, and local BGE embeddings.
@@ -87,7 +87,7 @@ This baseline does not imply that every analytical method is confirmatory. The l
 
 ### `WP-05` — Identity, PDF matching, and rejection validation
 
-- **Status:** `blocked-awaiting-evidence`; the persistent review workflow is available, but no reviewed identity/PDF/rejection sample has been supplied.
+- **Status:** `blocked-awaiting-evidence`; the persistent review workflow is available, but no reviewed identity/PDF/rejection sample has been supplied. The queue itself was the blocker until 2026-09-22: `export_assignments` wrote only `assignment_id` and an opaque `subject_id`, so no reviewer could answer the protocol's question from the file they were given -- `review/rene-pdf.csv` held its header and nothing else. Exports now carry the resolved evidence per workflow; see `docs/evidence/2026-09-22-review-queue-context.md`.
 
 - **Objective:** Quantify false merges, missed duplicates, PDF mislinks, and the bias introduced by no-DOI rejection.
 - **Justification:** DOI and fuzzy-title rules are high-impact methodological decisions currently tested mainly for mechanics.
@@ -131,7 +131,7 @@ This baseline does not imply that every analytical method is confirmatory. The l
 
 ### `WP-09` — Persistent dual-review screening workflow
 
-- **Status:** Persistent protocols, dual assignments, append-only label revisions, CSV export/import, and adjudication delivered. Screening inclusion criteria were approved and persisted as protocol `v2` on 2026-09-22, with 60 assignments over the 30 no-DOI subjects. Independent reviewer labels remain open and are human decisions rather than missing code.
+- **Status:** Persistent protocols, dual assignments, append-only label revisions, CSV export/import, and adjudication delivered. Screening inclusion criteria were approved and persisted as protocol `v2` on 2026-09-22, with 60 assignments over the 30 no-DOI subjects. Independent reviewer labels remain open. They were also, until 2026-09-22, impossible to produce: the exported queue carried no title, abstract or venue for a `reject::` subject. That is fixed -- see `docs/evidence/2026-09-22-review-queue-context.md` -- so what remains is genuinely a human decision rather than missing code.
 - **Objective:** Calibrate screening against reproducible human judgments.
 - **Justification:** The dashboard now measures agreement from uploaded decisions, but labels, assignments, and adjudication are not durable or dataset-versioned.
 - **Dependencies:** `WP-01`, `WP-04`, `WP-06`.
@@ -151,7 +151,7 @@ This baseline does not imply that every analytical method is confirmatory. The l
 
 ### `WP-11` — Author identity audit and overrides
 
-- **Status:** `blocked-awaiting-evidence`; reviewer persistence is available, while resolved author overrides and an audited error rate require human decisions.
+- **Status:** `blocked-awaiting-evidence`; reviewer persistence is available, while resolved author overrides and an audited error rate require human decisions. The queue itself was the blocker until 2026-09-22: `export_assignments` wrote only `assignment_id` and an opaque `subject_id`, so no reviewer could answer the protocol's question from the file they were given -- `review/rene-pdf.csv` held its header and nothing else. Exports now carry the resolved evidence per workflow; see `docs/evidence/2026-09-22-review-queue-context.md`.
 
 - **Objective:** Bound errors from heuristic author canonicalization.
 - **Justification:** Homonyms can merge and spelling variants can split, invalidating rankings and network structure.
@@ -172,7 +172,7 @@ This baseline does not imply that every analytical method is confirmatory. The l
 
 ### `WP-13` — Retrieval evaluation corpus
 
-- **Status:** `blocked-awaiting-evidence`; the common Recall@k/MRR/nDCG/latency harness and inspectable dense/BM25/RRF ranks are implemented. One explicitly AI-assisted review labeled all 96 pooled subjects (92 relevant, 3 not relevant, 1 uncertain), but the two independent human reviews remain outstanding, so metric values and default-mode selection are not approved.
+- **Status:** `blocked-awaiting-evidence`; the common Recall@k/MRR/nDCG/latency harness and inspectable dense/BM25/RRF ranks are implemented. One explicitly AI-assisted review labeled all 96 pooled subjects (92 relevant, 3 not relevant, 1 uncertain), but the two independent human reviews remain outstanding, so metric values and default-mode selection are not approved. Their queues now carry the query text and the article beside each judgement, which the id-only export did not.
 
 - **Objective:** Choose dense, lexical, or hybrid retrieval from measured relevance and latency.
 - **Justification:** RRF is implemented, but no labeled query set supports a quality claim.
