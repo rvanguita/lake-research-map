@@ -76,6 +76,16 @@ CAPES_QUALIS_XLSX = next(
 )
 
 
+class ConfigurationError(RuntimeError):
+    """The environment describes a database connection that cannot be attempted.
+
+    Distinct from a connection failure: nothing was tried, because what .env
+    asks for is internally inconsistent. Read-only dashboard paths treat it the
+    same as an unreachable database and degrade; the pipeline CLI lets it
+    surface, because writing under the wrong identity is worse than stopping.
+    """
+
+
 @dataclass(frozen=True)
 class MySQLSettings:
     host: str
@@ -100,7 +110,7 @@ class MySQLSettings:
                 if role_password
                 else (f"MYSQL_{role}_USER", f"MYSQL_{role}_PASSWORD")
             )
-            raise RuntimeError(
+            raise ConfigurationError(
                 f"{present} is set but {missing} is not, so the {role.lower()} role would "
                 f"connect as the fallback user with the {role.lower()} credential. Set both, "
                 f"or remove {present} from .env to keep using MYSQL_USER/MYSQL_PASSWORD."
