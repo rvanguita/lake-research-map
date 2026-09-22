@@ -932,8 +932,57 @@ def age_normalized_citations(df: pd.DataFrame, current_year: int = 2026) -> pd.D
     return res
 
 
-def mann_kendall_trend(series: np.ndarray | pd.Series) -> dict[str, float | str]:
-    """Returns trend direction ('growing', 'stable', 'falling'), p-value, S statistic, and slope."""
+def _hamed_rao_variance_factor(y: np.ndarray, sen_slope: float) -> float:
+    """Variance inflation for Mann-Kendall under serial dependence.
+
+    Mann-Kendall assumes independent observations. Annual publication and
+    keyword counts are not independent -- a busy year follows a busy year --
+    and positive autocorrelation makes the unadjusted test reject far too
+    often. Hamed and Rao (1998) rescale the variance by an effective sample
+    size read off the autocorrelation of the *detrended ranks*, counting only
+    the lags whose correlation clears the white-noise bound.
+
+    Returns 1.0 when there is nothing to correct, so the caller can always
+    multiply by it.
+    """
+    n = len(y)
+    if n < 10:
+        # Below ten points the lag correlations are themselves too noisy to
+        # correct with, and trading one bias for another is not an improvement.
+        return 1.0
+    detrended = y - sen_slope * np.arange(n, dtype=float)
+    ranks = pd.Series(detrended).rank().to_numpy()
+    centered = ranks - ranks.mean()
+    denominator = float(np.sum(centered**2))
+    if denominator <= 0:
+        return 1.0
+
+    total = 0.0
+    for lag in range(1, n - 2):
+        rho = float(np.sum(centered[: n - lag] * centered[lag:]) / denominator)
+        # Keep only autocorrelation distinguishable from white noise at 5%;
+        # summing every lag would inflate the variance with pure noise.
+        bound = 1.96 * np.sqrt(n - lag - 1) / (n - lag)
+        if abs(rho + 1.0 / (n - lag)) <= bound:
+            continue
+        total += (n - lag) * (n - lag - 1) * (n - lag - 2) * rho
+
+    factor = 1.0 + (2.0 / (n * (n - 1) * (n - 2))) * total
+    # A non-positive factor is a numerical artifact of a short series, not a
+    # finding that the variance vanished.
+    return float(factor) if factor > 0 else 1.0
+
+
+def mann_kendall_trend(
+    series: np.ndarray | pd.Series, *, serial_correction: bool = False
+) -> dict[str, float | str]:
+    """Returns trend direction ('growing', 'stable', 'falling'), p-value, S statistic, and slope.
+
+    `p_value` stays the classical independent-observations test so existing
+    callers are unchanged, and `p_value_serial_corrected` reports the same test
+    under the Hamed-Rao variance inflation. Pass ``serial_correction=True`` to
+    make `trend` and `p_value` follow the corrected value instead.
+    """
     from scipy import stats
 
     y = np.asarray(series, dtype=float)
@@ -946,6 +995,8 @@ def mann_kendall_trend(series: np.ndarray | pd.Series) -> dict[str, float | str]
             "s": 0.0,
             "slope": 0.0,
             "z": 0.0,
+            "p_value_serial_corrected": 1.0,
+            "serial_correction_factor": 1.0,
         }
 
     i_indices, j_indices = np.triu_indices(n, k=1)
@@ -959,31 +1010,101 @@ def mann_kendall_trend(series: np.ndarray | pd.Series) -> dict[str, float | str]
     tie_term = np.sum(counts * (counts - 1) * (2 * counts + 5))
     var_s = (n * (n - 1) * (2 * n + 5) - tie_term) / 18.0
 
-    if var_s > 0:
+    def _z_and_p(variance: float) -> tuple[float, float]:
+        if variance <= 0:
+            return 0.0, 1.0
         if s > 0:
-            z = (s - 1.0) / np.sqrt(var_s)
+            statistic = (s - 1.0) / np.sqrt(variance)
         elif s < 0:
-            z = (s + 1.0) / np.sqrt(var_s)
+            statistic = (s + 1.0) / np.sqrt(variance)
         else:
-            z = 0.0
-        p_value = float(2.0 * stats.norm.sf(abs(z)))
-    else:
-        z = 0.0
-        p_value = 1.0
+            statistic = 0.0
+        return float(statistic), float(2.0 * stats.norm.sf(abs(statistic)))
 
-    if p_value < 0.05 and sen_slope > 0:
+    z, p_value = _z_and_p(var_s)
+    correction_factor = _hamed_rao_variance_factor(y, sen_slope)
+    z_corrected, p_corrected = _z_and_p(var_s * correction_factor)
+
+    # The corrected test is the one that holds when the series is
+    # autocorrelated, but it stays opt-in: every existing caller reads
+    # `p_value`, and silently changing what that means would rewrite published
+    # trend tables without anybody asking for it.
+    decisive_p = p_corrected if serial_correction else p_value
+    if decisive_p < 0.05 and sen_slope > 0:
         trend = "growing"
-    elif p_value < 0.05 and sen_slope < 0:
+    elif decisive_p < 0.05 and sen_slope < 0:
         trend = "falling"
     else:
         trend = "stable"
 
     return {
         "trend": trend,
-        "p_value": p_value,
+        "p_value": decisive_p if serial_correction else p_value,
+        "p_value_independent": p_value,
+        "p_value_serial_corrected": p_corrected,
+        "serial_correction_factor": correction_factor,
         "s": float(s),
-        "z": float(z),
+        "z": float(z_corrected if serial_correction else z),
         "slope": sen_slope,
+    }
+
+
+def linear_slope_with_ci(
+    x: np.ndarray | pd.Series, y: np.ndarray | pd.Series, *, confidence: float = 0.95
+) -> dict[str, float]:
+    """OLS slope with the standard error and confidence interval it implies.
+
+    A ranked table of bare slopes invites reading the order as a finding. Most
+    of these series are a handful of years long, so the interval is frequently
+    wide enough to contain zero even at the top of the ranking -- which is the
+    thing the reader needs to see.
+    """
+    from scipy import stats
+
+    xs = np.asarray(x, dtype=float)
+    ys = np.asarray(y, dtype=float)
+    mask = np.isfinite(xs) & np.isfinite(ys)
+    xs, ys = xs[mask], ys[mask]
+    n = len(xs)
+    nan = {
+        "slope": float("nan"),
+        "stderr": float("nan"),
+        "ci_low": float("nan"),
+        "ci_high": float("nan"),
+        "p_value": float("nan"),
+        "n": n,
+    }
+    if n < 3:
+        return nan
+    centered = xs - xs.mean()
+    sxx = float(np.sum(centered**2))
+    if sxx <= 0:
+        return nan
+    slope = float(np.sum(centered * (ys - ys.mean())) / sxx)
+    intercept = float(ys.mean() - slope * xs.mean())
+    residuals = ys - (intercept + slope * xs)
+    dof = n - 2
+    residual_var = float(np.sum(residuals**2)) / dof if dof > 0 else 0.0
+    stderr = float(np.sqrt(residual_var / sxx)) if residual_var > 0 else 0.0
+    if stderr == 0:
+        # A perfect fit has no sampling spread to report; saying the interval
+        # is the point estimate is honest, inventing one is not.
+        return {
+            "slope": slope,
+            "stderr": 0.0,
+            "ci_low": slope,
+            "ci_high": slope,
+            "p_value": 0.0,
+            "n": n,
+        }
+    margin = float(stats.t.ppf(0.5 + confidence / 2.0, dof)) * stderr
+    return {
+        "slope": slope,
+        "stderr": stderr,
+        "ci_low": slope - margin,
+        "ci_high": slope + margin,
+        "p_value": float(2.0 * stats.t.sf(abs(slope / stderr), dof)),
+        "n": n,
     }
 
 
@@ -2864,11 +2985,41 @@ def technological_burst_detection(
     }
 
 
-def detect_structural_breaks(series: pd.Series | np.ndarray) -> dict:
+def _max_f_over_breakpoints(values: np.ndarray) -> tuple[float, int | None]:
+    """Largest mean-shift F statistic over every admissible breakpoint.
+
+    Returns ``(f_stat, k)``; ``k`` is None when no split improves on the
+    pooled mean.
+    """
+    total = len(values)
+    tss = float(np.sum((values - np.mean(values)) ** 2))
+    best_rss = float("inf")
+    best_k = None
+    for k in range(2, total - 2):
+        pre, post = values[:k], values[k:]
+        rss = float(np.sum((pre - np.mean(pre)) ** 2) + np.sum((post - np.mean(post)) ** 2))
+        if rss < best_rss:
+            best_rss, best_k = rss, k
+    if best_k is None or best_rss <= 0 or tss <= best_rss:
+        return 0.0, None
+    df2 = total - 2
+    return float(((tss - best_rss) / 1) / (best_rss / df2)), best_k
+
+
+def detect_structural_breaks(
+    series: pd.Series | np.ndarray, *, n_bootstrap: int = 200, seed: int = 42
+) -> dict:
     """Detect structural breaks / changepoints in time series using Chow test and SSE minimization.
 
     Identifies historical regime shifts (inflection points) where the underlying mean
     or momentum fundamentally changed.
+
+    The breakpoint is *searched*, so the F statistic is a maximum over every
+    admissible split and its null distribution is not F: read against the F
+    table, a pure-noise series looks significant far too often. The reported
+    `p_value` is therefore an empirical one from permuting the series under a
+    no-break null; `p_value_naive` keeps the old F-table value so the
+    difference stays visible rather than silently changing.
     """
     from scipy import stats
 
@@ -2891,41 +3042,54 @@ def detect_structural_breaks(series: pd.Series | np.ndarray) -> dict:
             "break_year": None,
             "f_stat": 0.0,
             "p_value": 1.0,
+            "p_value_naive": 1.0,
+            "p_value_resolution": 1.0,
+            "bootstrap_samples": 0,
             "pre_mean": float(np.mean(values)) if T > 0 else 0.0,
             "post_mean": float(np.mean(values)) if T > 0 else 0.0,
             "relative_jump_pct": 0.0,
         }
 
-    tss = float(np.sum((values - np.mean(values)) ** 2))
-    best_rss = float("inf")
-    best_k = None
+    f_stat, best_k = _max_f_over_breakpoints(values)
 
-    # Search for breakpoint k in [2, T-3]
-    for k in range(2, T - 2):
-        pre = values[:k]
-        post = values[k:]
-        rss = float(np.sum((pre - np.mean(pre)) ** 2) + np.sum((post - np.mean(post)) ** 2))
-        if rss < best_rss:
-            best_rss = rss
-            best_k = k
-
-    if best_k is None or best_rss <= 0 or tss <= best_rss:
+    if best_k is None:
         return {
             "has_break": False,
             "break_index": None,
             "break_year": None,
             "f_stat": 0.0,
             "p_value": 1.0,
+            "p_value_naive": 1.0,
+            "p_value_resolution": 1.0,
+            "bootstrap_samples": 0,
             "pre_mean": float(np.mean(values)),
             "post_mean": float(np.mean(values)),
             "relative_jump_pct": 0.0,
         }
 
-    p = 1  # 1 degree of freedom for mean shift
-    df1 = p
-    df2 = T - 2 * p
-    f_stat = float(((tss - best_rss) / df1) / (best_rss / df2))
-    p_value = float(stats.f.sf(f_stat, df1, df2))
+    # The F-table value, kept only for comparison: it assumes the breakpoint
+    # was fixed in advance, which it was not.
+    p_value_naive = float(stats.f.sf(f_stat, 1, T - 2))
+
+    # Permuting the series destroys any ordering, so each replicate is drawn
+    # from a no-break null while keeping the observed values and their spread.
+    # The share of replicates whose own searched maximum reaches the observed
+    # one is the p-value the search actually earns.
+    rng = np.random.default_rng(seed)
+    exceedances = 0
+    draws = 0
+    for _ in range(max(1, n_bootstrap)):
+        null_f, null_k = _max_f_over_breakpoints(rng.permutation(values))
+        if null_k is None:
+            null_f = 0.0
+        draws += 1
+        if null_f >= f_stat:
+            exceedances += 1
+    p_value = float((1 + exceedances) / (draws + 1))
+    # An empirical p-value cannot resolve below 1/(draws+1); reporting the
+    # floor stops a reader treating "0.005" as a precise small number rather
+    # than "as small as this many replicates can show".
+    p_value_resolution = float(1.0 / (draws + 1))
 
     pre_mean = float(np.mean(values[:best_k]))
     post_mean = float(np.mean(values[best_k:]))
@@ -2939,6 +3103,9 @@ def detect_structural_breaks(series: pd.Series | np.ndarray) -> dict:
         "break_year": break_year,
         "f_stat": round(f_stat, 2),
         "p_value": round(p_value, 4),
+        "p_value_naive": round(p_value_naive, 4),
+        "p_value_resolution": round(p_value_resolution, 5),
+        "bootstrap_samples": draws,
         "pre_mean": round(pre_mean, 2),
         "post_mean": round(post_mean, 2),
         "relative_jump_pct": round(jump, 1),

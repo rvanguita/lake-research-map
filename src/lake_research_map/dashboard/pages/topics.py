@@ -484,28 +484,36 @@ def _rising_falling(kw_year: pd.DataFrame) -> None:
     counts = kw_year["keyword"].value_counts()
     eligible = counts[counts >= MIN_KEYWORD_OCCURRENCES].index
 
+    from lake_research_map.dashboard.analytics import linear_slope_with_ci
+
     by_year_total = kw_year.groupby("year").size()
-    slopes = {}
+    fits: dict[str, dict[str, float]] = {}
     for kw in eligible:
         yearly = kw_year[kw_year["keyword"] == kw].groupby("year").size()
         share = (yearly / by_year_total.reindex(yearly.index)).fillna(0.0) * 100
         if len(share) < 3:
             continue
-        x = share.index.to_numpy(dtype=float)
-        y = share.to_numpy(dtype=float)
-        slope = np.polyfit(x - x.mean(), y, 1)[0]
-        slopes[kw] = slope
+        fit = linear_slope_with_ci(share.index.to_numpy(dtype=float), share.to_numpy(dtype=float))
+        if np.isfinite(fit["slope"]):
+            fits[kw] = fit
 
-    if not slopes:
+    if not fits:
         st.info(
             f"No term has at least {MIN_KEYWORD_OCCURRENCES} occurrences for trend calculation."
         )
         return
 
-    slope_series = pd.Series(slopes).sort_values()
+    slope_series = pd.Series({kw: fit["slope"] for kw, fit in fits.items()}).sort_values()
     top_slopes = pd.concat([slope_series.head(7), slope_series.tail(7)]).drop_duplicates()
     df = top_slopes.rename_axis("keyword").reset_index(name="slope")
     df["direction"] = df["slope"].apply(lambda s: "Rising" if s >= 0 else "Falling")
+    # Error bars carry the sampling spread the ranking hides: on series this
+    # short the interval very often straddles zero even at the extremes.
+    df["ci_low"] = df["keyword"].map(lambda kw: fits[kw]["ci_low"])
+    df["ci_high"] = df["keyword"].map(lambda kw: fits[kw]["ci_high"])
+    df["err_plus"] = df["ci_high"] - df["slope"]
+    df["err_minus"] = df["slope"] - df["ci_low"]
+    df["excludes_zero"] = (df["ci_low"] > 0) | (df["ci_high"] < 0)
     df = df.sort_values("slope")
 
     fig = px.bar(
@@ -515,19 +523,30 @@ def _rising_falling(kw_year: pd.DataFrame) -> None:
         orientation="h",
         color="direction",
         color_discrete_map={"Rising": TREND_UP_COLOR, "Falling": TREND_DOWN_COLOR},
-        title="Incline annual participation (linear regression)",
+        error_x="err_plus",
+        error_x_minus="err_minus",
+        title="Annual participation slope (linear regression, 95% CI)",
         labels={
             "slope": "Annual variation in participation (p.p./year)",
             "keyword": "Keyword",
             "direction": "Trend",
         },
+        custom_data=["ci_low", "ci_high"],
     )
-    fig.update_traces(hovertemplate="<b>%{y}</b><br>%{x:+.2f} pp/year<extra></extra>")
+    fig.update_traces(
+        hovertemplate=(
+            "<b>%{y}</b><br>%{x:+.2f} pp/year"
+            "<br>95% CI %{customdata[0]:+.2f} to %{customdata[1]:+.2f}<extra></extra>"
+        )
+    )
     fig.update_layout(legend_title_text="Trend")
+    decisive = int(df["excludes_zero"].sum())
     render_chart(
         fig,
         caption=f"Slope of each term's annual percentage share (minimum {MIN_KEYWORD_OCCURRENCES} "
-        "occurrences in the period), estimated by simple linear regression.",
+        "occurrences in the period), by ordinary least squares. Bars show the 95% confidence "
+        f"interval: {decisive} of the {len(df)} terms shown have an interval that excludes zero, "
+        "so the rest are ranked by a slope the data cannot separate from no trend.",
     )
 
     from lake_research_map.dashboard.analytics import benjamini_hochberg, mann_kendall_trend
@@ -548,25 +567,41 @@ def _rising_falling(kw_year: pd.DataFrame) -> None:
                     "Keyword": kw,
                     "Trend": res["trend"].title(),
                     "Raw p-value": float(res["p_value"]),
+                    # Mann-Kendall assumes independent years, which annual
+                    # counts are not. The Hamed-Rao variance inflation is
+                    # reported beside the raw value as a sensitivity rather
+                    # than swapped in: it changes which terms look significant.
+                    "Serial-corrected p-value": float(res["p_value_serial_corrected"]),
                     "Sen slope": round(res["slope"], 3),
                 }
             )
     if mk_records:
         family = pd.DataFrame(mk_records)
         family["Adjusted p-value"] = benjamini_hochberg(family["Raw p-value"])
+        family["Adjusted p-value (serial)"] = benjamini_hochberg(family["Serial-corrected p-value"])
         family["FDR significant"] = family["Adjusted p-value"] < 0.05
+        family["FDR significant (serial)"] = family["Adjusted p-value (serial)"] < 0.05
+        survives = int((family["FDR significant"] & family["FDR significant (serial)"]).sum())
+        flagged = int(family["FDR significant"].sum())
         displayed = set(df["keyword"])
         trends = family[family["Keyword"].isin(displayed)].copy()
-        trends[["Raw p-value", "Adjusted p-value"]] = trends[
-            ["Raw p-value", "Adjusted p-value"]
-        ].round(4)
+        p_columns = [
+            "Raw p-value",
+            "Adjusted p-value",
+            "Serial-corrected p-value",
+            "Adjusted p-value (serial)",
+        ]
+        trends[p_columns] = trends[p_columns].round(4)
         trends = trends.sort_values("Sen slope")
         st.markdown("#### Nonparametric trend test")
         st.caption(
             "Mann-Kendall and Sen slopes use zero-filled annual series. Benjamini-Hochberg "
             f"adjustment controls the false-discovery rate across all {len(family)} keywords "
             f"with at least {MIN_KEYWORD_OCCURRENCES} occurrences; the table shows the "
-            f"{len(trends)} terms charted above, with their family-adjusted values."
+            f"{len(trends)} terms charted above, with their family-adjusted values. "
+            f"Of the {flagged} keywords significant under the independence assumption, "
+            f"{survives} stay significant once the Hamed-Rao correction for autocorrelated "
+            "years is applied — treat the difference as the cost of that assumption."
         )
         st.dataframe(trends, hide_index=True, width="stretch")
 
