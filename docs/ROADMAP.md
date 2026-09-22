@@ -234,14 +234,14 @@ This baseline does not imply that every analytical method is confirmatory. The l
 
 ### `WP-19` — Network null models and temporal collaboration
 
-- **Status:** Partially delivered; the degree-preserving null model ships and does not depend on WP-11. Assortativity and periodized tie dynamics remain open, and every claim stays bounded by heuristic author identity.
+- **Status:** Complete on 2026-09-22; assortativity, robustness and periodized tie dynamics all ship. Every claim stays bounded by heuristic author identity, which is `WP-11`'s business, not this package's.
 
 - **Objective:** Distinguish structural collaboration evidence from corpus-size artifacts.
 - **Justification:** Static centralities and a single random comparison do not describe network uncertainty or evolution.
 - **Dependencies:** `WP-11`.
 - **Deliverable:** Component-aware metrics, degree-preserving null models, assortativity/robustness checks, and periodized new-versus-repeated collaboration ties.
 - **Completion:** Network claims include identity coverage, component scope, null distribution, and sensitivity to the selected author subset.
-- **Evidence:** `analytics.py::network_null_model_diagnostics` rewires the graph preserving every author's degree and reports observed clustering, null mean/standard deviation, z-score, and an empirical p-value; the Researchers page displays it and states that path length and small-world sigma cover only the largest component while density and centralities cover the whole graph. Still open: assortativity, robustness checks, and periodized new-versus-repeated ties (the existing recurrent-edge count is static).
+- **Evidence:** `analytics.py::network_null_model_diagnostics` rewires the graph preserving every author's degree and reports observed clustering, null mean/standard deviation, z-score, and an empirical p-value; the Researchers page displays it and states that path length and small-world sigma cover only the largest component while density and centralities cover the whole graph. The three remaining gaps are closed. Degree assortativity is scored against the same degree-preserving ensemble that was already being built, since the degree sequence alone forces part of it and a bare coefficient would be unreadable. `_robustness_under_removal` reports the giant-component share after removing the top-decile hubs and after removing the same count at random, averaged over 20 draws: on a scale-free control the gap is 0.15 (0.75 vs 0.90) against 0.02 for a small-world control, which is the signature that distinguishes a network held together by a few authors from one with distributed structure. `periodized_collaboration_ties` splits author pairs into equal-year periods and counts a tie as new in the period holding its first-ever collaboration and returning thereafter, which is what separates a field still recruiting collaborators from one consolidating into fixed teams -- a distinction the static recurrent-edge count cannot make, because both produce the same number of repeat pairs.
 
 ## 6. Medium term — dashboard consolidation
 

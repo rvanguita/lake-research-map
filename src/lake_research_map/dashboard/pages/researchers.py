@@ -1019,14 +1019,82 @@ def _network_null_model(graph, net_metrics: dict) -> None:
                 ),
             ]
         )
+        assortativity = result.get("observed_assortativity")
+        assort_z = result.get("assortativity_z_score")
+        targeted = result.get("robustness_targeted")
+        random_removal = result.get("robustness_random")
+        if assortativity is not None or targeted is not None:
+            metric_row(
+                [
+                    (
+                        "🔗 Degree assortativity",
+                        "n/a" if assortativity is None else f"{assortativity:+.3f}",
+                        "n/a" if assort_z is None else f"z {assort_z:+.2f} vs. the same rewirings",
+                    ),
+                    (
+                        "💥 Giant component, hubs removed",
+                        "n/a" if targeted is None else f"{targeted:.0%}",
+                        f"{result.get('robustness_removed', 0)} highest-degree authors",
+                    ),
+                    (
+                        "🎲 Giant component, random removal",
+                        "n/a" if random_removal is None else f"{random_removal:.0%}",
+                        "Same count removed at random, averaged over 20 draws",
+                    ),
+                ]
+            )
         st.caption(
             "The null preserves each author's degree and rewires the ties, so a high z-score "
             "means the clustering is not just a consequence of how many co-authors each "
-            "person has. Path length and the small-world σ above are restricted to the "
-            "largest connected component, while density and the centralities cover the whole "
-            "graph including fragments — the two are not on the same population. Every "
-            "claim here is also bounded by heuristic author identity: homonyms merge and "
-            "spelling variants split."
+            "person has. Assortativity is scored against those same rewirings, because the "
+            "degree sequence alone forces part of it. The two removal figures are only "
+            "meaningful as a pair: a network that fragments when its hubs go but shrugs off "
+            "the same number of random losses is one held together by a few people, while "
+            "two similar numbers mean the structure is distributed. Path length and the "
+            "small-world σ above are restricted to the largest connected component, while "
+            "density and the centralities cover the whole graph including fragments — the "
+            "two are not on the same population. Every claim here is also bounded by "
+            "heuristic author identity: homonyms merge and spelling variants split."
+        )
+
+
+def _periodized_ties(author_rows: pd.DataFrame) -> None:
+    """Show whether the field keeps recruiting collaborators or has closed up.
+
+    A static recurrent-edge count cannot tell those apart: both produce the
+    same number of repeat pairs. Splitting by the period in which a tie first
+    appears is what separates them.
+    """
+    from lake_research_map.dashboard.analytics import periodized_collaboration_ties
+
+    ties = periodized_collaboration_ties(author_rows)
+    if ties.empty or len(ties) < 2:
+        return
+
+    with st.expander("New vs. returning collaborations over time", expanded=False):
+        shown = ties.rename(
+            columns={
+                "period": "Period",
+                "new_ties": "New ties",
+                "repeated_ties": "Returning ties",
+                "total_ties": "Active ties",
+                "new_share": "New share",
+            }
+        )
+        shown["New share"] = (shown["New share"] * 100).round(1)
+        st.dataframe(shown, hide_index=True, width="stretch")
+        first, last = ties.iloc[0]["new_share"], ties.iloc[-1]["new_share"]
+        direction = (
+            "the field is still recruiting new collaborators"
+            if last >= first
+            else "collaboration is consolidating into established pairs"
+        )
+        st.caption(
+            "A tie is *new* in the period containing its first-ever collaboration and "
+            "*returning* thereafter. The share of new ties moved from "
+            f"{first:.0%} to {last:.0%} across the periods shown, so on this corpus "
+            f"{direction}. Periods are equal splits of the observed years, not calendar "
+            "decades, and every count inherits the limits of heuristic author identity."
         )
 
 
@@ -1305,6 +1373,7 @@ def _coauthorship_network(author_rows: pd.DataFrame) -> None:
     )
 
     _network_null_model(graph, net_metrics)
+    _periodized_ties(author_rows)
 
     if not partners_df.empty:
         st.divider()
