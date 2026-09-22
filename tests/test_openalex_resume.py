@@ -48,15 +48,22 @@ def fake_fetch(monkeypatch):
     return calls
 
 
+# These tests exercise the per-DOI path explicitly (`batch_size=1`). Resume,
+# breaker and payload behaviour are orthogonal to how many DOIs share a
+# request; the batched default has its own file.
 DOIS = [f"10.1000/{index}" for index in range(6)]
 
 
 def test_a_second_run_continues_instead_of_repeating_the_first_slice(bronze_session, fake_fetch):
-    first = openalex.refresh_openalex_observations(bronze_session, DOIS, max_fetch=2, delay=0)
+    first = openalex.refresh_openalex_observations(
+        bronze_session, DOIS, max_fetch=2, delay=0, batch_size=1
+    )
     assert first["fetched"] == 2
     assert first["remaining"] == 4
 
-    second = openalex.refresh_openalex_observations(bronze_session, DOIS, max_fetch=2, delay=0)
+    second = openalex.refresh_openalex_observations(
+        bronze_session, DOIS, max_fetch=2, delay=0, batch_size=1
+    )
 
     assert second["already_observed"] == 2
     assert second["fetched"] == 2
@@ -67,7 +74,9 @@ def test_a_second_run_continues_instead_of_repeating_the_first_slice(bronze_sess
 
 def test_the_whole_corpus_is_reachable_across_runs(bronze_session, fake_fetch):
     for _ in range(3):
-        openalex.refresh_openalex_observations(bronze_session, DOIS, max_fetch=2, delay=0)
+        openalex.refresh_openalex_observations(
+            bronze_session, DOIS, max_fetch=2, delay=0, batch_size=1
+        )
 
     observed = set(bronze_session.scalars(openalex.select(EnrichmentObservation.doi)).all())
     assert observed == set(DOIS)
@@ -75,7 +84,9 @@ def test_the_whole_corpus_is_reachable_across_runs(bronze_session, fake_fetch):
 
 
 def test_refresh_all_re_observes_for_a_deliberate_snapshot(bronze_session, fake_fetch):
-    openalex.refresh_openalex_observations(bronze_session, DOIS[:2], max_fetch=2, delay=0)
+    openalex.refresh_openalex_observations(
+        bronze_session, DOIS[:2], max_fetch=2, delay=0, batch_size=1
+    )
     fake_fetch.clear()
 
     again = openalex.refresh_openalex_observations(
@@ -83,6 +94,7 @@ def test_refresh_all_re_observes_for_a_deliberate_snapshot(bronze_session, fake_
         DOIS[:2],
         max_fetch=2,
         delay=0,
+        batch_size=1,
         refresh_all=True,
         observed_at=datetime(2027, 1, 1, tzinfo=UTC),
     )
@@ -107,8 +119,12 @@ def test_a_failed_observation_is_retried_rather_than_skipped(bronze_session, mon
         }
 
     monkeypatch.setattr(openalex, "fetch_openalex_observation", _failing)
-    openalex.refresh_openalex_observations(bronze_session, DOIS[:1], max_fetch=1, delay=0)
-    openalex.refresh_openalex_observations(bronze_session, DOIS[:1], max_fetch=1, delay=0)
+    openalex.refresh_openalex_observations(
+        bronze_session, DOIS[:1], max_fetch=1, delay=0, batch_size=1
+    )
+    openalex.refresh_openalex_observations(
+        bronze_session, DOIS[:1], max_fetch=1, delay=0, batch_size=1
+    )
 
     # A 429 says nothing about the DOI, so it must not permanently exclude it.
     assert attempts == ["10.1000/0", "10.1000/0"]
@@ -137,7 +153,7 @@ def test_progress_survives_an_interrupt_midway(bronze_session, monkeypatch):
     monkeypatch.setattr(openalex, "fetch_openalex_observation", _explode_on_the_fourth)
     with pytest.raises(KeyboardInterrupt):
         openalex.refresh_openalex_observations(
-            bronze_session, DOIS, max_fetch=6, delay=0, commit_every=3
+            bronze_session, DOIS, max_fetch=6, delay=0, batch_size=1, commit_every=3
         )
 
     bronze_session.rollback()
@@ -148,7 +164,9 @@ def test_progress_survives_an_interrupt_midway(bronze_session, monkeypatch):
 
 
 def test_the_raw_payload_is_not_stored_unless_asked(bronze_session, fake_fetch):
-    openalex.refresh_openalex_observations(bronze_session, DOIS[:1], max_fetch=1, delay=0)
+    openalex.refresh_openalex_observations(
+        bronze_session, DOIS[:1], max_fetch=1, delay=0, batch_size=1
+    )
     row = bronze_session.scalars(openalex.select(EnrichmentObservation)).first()
     assert row.payload is None
     # The evidence it carries is still extracted into its own table.
@@ -159,7 +177,7 @@ def test_the_raw_payload_is_not_stored_unless_asked(bronze_session, fake_fetch):
 
 def test_store_payload_keeps_the_body_when_explicitly_requested(bronze_session, fake_fetch):
     openalex.refresh_openalex_observations(
-        bronze_session, DOIS[:1], max_fetch=1, delay=0, store_payload=True
+        bronze_session, DOIS[:1], max_fetch=1, delay=0, batch_size=1, store_payload=True
     )
     row = bronze_session.scalars(openalex.select(EnrichmentObservation)).first()
     assert row.payload["display_name"] == "A work"

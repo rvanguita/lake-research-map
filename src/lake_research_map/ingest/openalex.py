@@ -244,6 +244,127 @@ def fetch_openalex_observation(
     raise AssertionError("retry loop must return")
 
 
+# OpenAlex OR-joins up to 50 values in one filter, so a DOI population can be
+# fetched in ceil(n/50) requests instead of n. That is not a micro-optimisation
+# here: the quota is 1,000 requests per window, so one-request-per-DOI made the
+# 3,115-DOI corpus a four-window, ~22-hour job, while batching makes it 63
+# requests. It is also the polite way to ask -- the same data for a sixtieth of
+# the load.
+OPENALEX_FILTER_BATCH = 50
+
+
+def fetch_openalex_batch(
+    dois: list[str],
+    *,
+    timeout: float = 30.0,
+    email: str | None = None,
+    api_key: str | None = None,
+    max_retries: int = 3,
+    session_factory=None,
+) -> dict[str, dict]:
+    """Fetch a batch of DOIs in one request, keyed by normalized DOI.
+
+    Returns the same per-DOI result shape as `fetch_openalex_observation`, so
+    the persistence path does not care which one produced it. A DOI the
+    response does not carry is reported `not_found`: OpenAlex simply omits
+    unknown works from a filtered result, and treating an omission as an error
+    would retry it forever.
+    """
+    get = session_factory or requests.get
+    clean = [doi for doi in (_normalize_doi(value) for value in dois) if doi]
+    if not clean:
+        return {}
+
+    resolved_email = email or os.environ.get("OPENALEX_EMAIL")
+    resolved_key = api_key or os.environ.get("OPENALEX_API_KEY")
+    params = {
+        "filter": "doi:" + "|".join(f"https://doi.org/{doi}" for doi in clean),
+        "per-page": len(clean),
+    }
+    if resolved_email:
+        params["mailto"] = resolved_email
+    if resolved_key:
+        params["api_key"] = resolved_key
+
+    def _failure(status: str, http_status, retry_count: int, message: str) -> dict[str, dict]:
+        return {
+            doi: {
+                "doi": doi,
+                "status": status,
+                "http_status": http_status,
+                "retry_count": retry_count,
+                "error_message": message,
+            }
+            for doi in clean
+        }
+
+    for retry_count in range(max_retries + 1):
+        try:
+            response = get(
+                OPENALEX_BASE_URL,
+                params=params,
+                headers={"User-Agent": _user_agent(resolved_email)},
+                timeout=timeout,
+            )
+            status_code = getattr(response, "status_code", 200)
+            if status_code == 429 or status_code >= 500:
+                _log_throttle_headers(response)
+                if retry_count < max_retries and not retrying_is_futile(response):
+                    time.sleep(backoff_seconds(response, retry_count))
+                    continue
+                # The whole batch shares one verdict, which is what lets the
+                # circuit breaker see a throttle as a throttle rather than as
+                # fifty unrelated failures.
+                return _failure(
+                    "rate_limited" if status_code == 429 else "error",
+                    status_code,
+                    retry_count,
+                    f"OpenAlex returned HTTP {status_code}",
+                )
+            response.raise_for_status()
+            payload = response.json()
+        except (requests.RequestException, ValueError) as exc:
+            if retry_count < max_retries:
+                time.sleep(min(2**retry_count, 8))
+                continue
+            logger.warning("OpenAlex batch request failed: %s", exc)
+            return _failure("error", None, retry_count, str(exc))
+
+        results: dict[str, dict] = {}
+        for work in payload.get("results") or []:
+            doi = _normalize_doi(work.get("doi"))
+            if not doi:
+                continue
+            body = json.dumps(work, sort_keys=True, separators=(",", ":"))
+            referenced = work.get("referenced_works") or []
+            cited_by = work.get("cited_by_count")
+            results[doi] = {
+                "doi": doi,
+                "provider_work_id": work.get("id"),
+                "status": "success",
+                "http_status": status_code,
+                "citation_count": int(cited_by) if cited_by is not None else None,
+                "reference_count": len(referenced),
+                "response_sha256": hashlib.sha256(body.encode("utf-8")).hexdigest(),
+                "retry_count": retry_count,
+                "payload": work,
+                "error_message": None,
+            }
+        for doi in clean:
+            results.setdefault(
+                doi,
+                {
+                    "doi": doi,
+                    "status": "not_found",
+                    "http_status": status_code,
+                    "retry_count": retry_count,
+                    "error_message": None,
+                },
+            )
+        return results
+    raise AssertionError("retry loop must return")
+
+
 def refresh_openalex_observations(
     session: Session,
     dois: list[str],
@@ -254,6 +375,7 @@ def refresh_openalex_observations(
     refresh_all: bool = False,
     commit_every: int = 25,
     store_payload: bool = False,
+    batch_size: int = OPENALEX_FILTER_BATCH,
 ) -> dict[str, int]:
     """Append a reproducible observation batch to Bronze, resumably.
 
@@ -301,57 +423,77 @@ def refresh_openalex_observations(
     inserted = success = 0
     consecutive_failures = 0
     stopped_early: str | None = None
-    for position, doi in enumerate(batch, start=1):
-        result = fetch_openalex_observation(doi)
-        session.add(
-            EnrichmentObservation(
-                provider="openalex",
-                doi=doi,
-                provider_work_id=result.get("provider_work_id"),
-                observed_at=batch_time,
-                status=result["status"],
-                http_status=result.get("http_status"),
-                citation_count=result.get("citation_count"),
-                reference_count=result.get("reference_count"),
-                response_sha256=result.get("response_sha256"),
-                retry_count=result.get("retry_count", 0),
-                # The whole Work JSON is tens of kilobytes and nothing in the
-                # project reads it back: `_persist_openalex_evidence` lifts the
-                # annual counts, reference edges and access status into their
-                # own tables, and `response_sha256` already proves what was
-                # received. Storing it for 3,115 works would add hundreds of
-                # megabytes to a MySQL server this project shares with
-                # unrelated ones, so it is opt-in.
-                payload=result.get("payload") if store_payload else None,
-                error_message=result.get("error_message"),
-            )
-        )
-        if result["status"] == "success":
-            _persist_openalex_evidence(session, result, batch_time)
-        inserted += 1
-        success += int(result["status"] == "success")
 
-        if result["status"] in {"rate_limited", "error"}:
-            consecutive_failures += 1
-        else:
-            consecutive_failures = 0
-        if consecutive_failures >= CONSECUTIVE_FAILURE_LIMIT:
-            stopped_early = result["status"]
-            logger.warning(
-                "openalex refresh: stopping after %d consecutive %s responses at %d/%d; "
-                "progress is committed and the next run resumes here",
-                consecutive_failures,
-                stopped_early,
-                position,
-                len(batch),
-            )
-            break
+    # One request per `OPENALEX_FILTER_BATCH` DOIs rather than per DOI. The
+    # loop below still walks DOIs one at a time so the breaker, the commit
+    # cadence and the stats keep counting subjects, not requests.
+    def _resolve(chunk: list[str]) -> dict[str, dict]:
+        """One request for the whole chunk, or the per-DOI path when batching is off."""
+        if batch_size > 1:
+            return fetch_openalex_batch(chunk)
+        return {doi: fetch_openalex_observation(doi) for doi in chunk}
 
-        if commit_every and position % commit_every == 0:
-            session.commit()
-            logger.info("openalex refresh: %d/%d fetched, %d ok", position, len(batch), success)
+    position = 0
+    for chunk_start in range(0, len(batch), max(batch_size, 1)):
+        chunk = batch[chunk_start : chunk_start + max(batch_size, 1)]
+        resolved = _resolve(chunk)
         if delay:
             time.sleep(delay)
+
+        for doi in chunk:
+            position += 1
+            result = resolved[doi]
+            session.add(
+                EnrichmentObservation(
+                    provider="openalex",
+                    doi=doi,
+                    provider_work_id=result.get("provider_work_id"),
+                    observed_at=batch_time,
+                    status=result["status"],
+                    http_status=result.get("http_status"),
+                    citation_count=result.get("citation_count"),
+                    reference_count=result.get("reference_count"),
+                    response_sha256=result.get("response_sha256"),
+                    retry_count=result.get("retry_count", 0),
+                    # The whole Work JSON is tens of kilobytes and nothing in
+                    # the project reads it back: `_persist_openalex_evidence`
+                    # lifts the annual counts, reference edges and access
+                    # status into their own tables, and `response_sha256`
+                    # already proves what was received. Storing it for 3,115
+                    # works would add hundreds of megabytes to a MySQL server
+                    # this project shares with unrelated ones, so it is opt-in.
+                    payload=result.get("payload") if store_payload else None,
+                    error_message=result.get("error_message"),
+                )
+            )
+            if result["status"] == "success":
+                _persist_openalex_evidence(session, result, batch_time)
+            inserted += 1
+            success += int(result["status"] == "success")
+
+            if result["status"] in {"rate_limited", "error"}:
+                consecutive_failures += 1
+            else:
+                consecutive_failures = 0
+            if consecutive_failures >= CONSECUTIVE_FAILURE_LIMIT:
+                stopped_early = result["status"]
+                logger.warning(
+                    "openalex refresh: stopping after %d consecutive %s responses at %d/%d; "
+                    "progress is committed and the next run resumes here",
+                    consecutive_failures,
+                    stopped_early,
+                    position,
+                    len(batch),
+                )
+                break
+
+            if commit_every and position % commit_every == 0:
+                session.commit()
+                logger.info("openalex refresh: %d/%d fetched, %d ok", position, len(batch), success)
+
+        if stopped_early:
+            break
+
     session.commit()
     return {
         "requested": len(normalized),

@@ -175,6 +175,11 @@ Measured 2026-09-22: `X-RateLimit-Limit: 1000`, `Retry-After: 19587` (5.4 h). Th
 purchase requests the quota does not grant. Covering 3,115 DOIs needs roughly four windows, and the forward
 (`cites:`) crawl another ~1,100 requests on top.
 
+Because the limit counts *requests*, the DOI refresh asks in batches: OpenAlex OR-joins up to 50 values in one
+filter, so the corpus costs 63 requests instead of 3,115. Pacing cannot buy quota; asking less often can. A DOI
+missing from a filtered response means `not_found`, not an error -- OpenAlex omits unknown works rather than
+reporting them.
+
 Both crawls stop themselves after five consecutive failures rather than grinding through a batch the API has
 stopped answering, commit progress as they go, and resume by skipping DOIs that already succeeded. A run that
 reports `stopped_early` is not a bug; re-run it after the window resets. The polite pool is documented at

@@ -76,6 +76,9 @@ def _ok_result(doi, **_kwargs):
     }
 
 
+# These tests exercise the per-DOI path explicitly (`batch_size=1`). Resume,
+# breaker and payload behaviour are orthogonal to how many DOIs share a
+# request; the batched default has its own file.
 DOIS = [f"10.1000/{index}" for index in range(20)]
 
 
@@ -87,7 +90,9 @@ def test_the_batch_halts_after_five_consecutive_failures(bronze_session, monkeyp
         return _throttled_result(doi)
 
     monkeypatch.setattr(openalex, "fetch_openalex_observation", _always_throttled)
-    stats = openalex.refresh_openalex_observations(bronze_session, DOIS, max_fetch=20, delay=0)
+    stats = openalex.refresh_openalex_observations(
+        bronze_session, DOIS, max_fetch=20, delay=0, batch_size=1
+    )
 
     assert len(calls) == CONSECUTIVE_FAILURE_LIMIT
     assert stats["stopped_early"] == "rate_limited"
@@ -104,7 +109,9 @@ def test_an_isolated_failure_does_not_trip_the_breaker(bronze_session, monkeypat
         return _throttled_result(doi) if len(calls) == 3 else _ok_result(doi)
 
     monkeypatch.setattr(openalex, "fetch_openalex_observation", _one_bad_apple)
-    stats = openalex.refresh_openalex_observations(bronze_session, DOIS, max_fetch=20, delay=0)
+    stats = openalex.refresh_openalex_observations(
+        bronze_session, DOIS, max_fetch=20, delay=0, batch_size=1
+    )
 
     assert len(calls) == 20
     assert stats["stopped_early"] is None
@@ -120,7 +127,7 @@ def test_progress_before_the_breaker_is_committed(bronze_session, monkeypatch):
 
     monkeypatch.setattr(openalex, "fetch_openalex_observation", _good_then_dead)
     stats = openalex.refresh_openalex_observations(
-        bronze_session, DOIS, max_fetch=20, delay=0, commit_every=2
+        bronze_session, DOIS, max_fetch=20, delay=0, batch_size=1, commit_every=2
     )
 
     assert stats["stopped_early"] == "rate_limited"
@@ -136,7 +143,9 @@ def test_the_remaining_count_reflects_what_still_needs_fetching(bronze_session, 
     monkeypatch.setattr(
         openalex, "fetch_openalex_observation", lambda doi, **k: _throttled_result(doi)
     )
-    stats = openalex.refresh_openalex_observations(bronze_session, DOIS, max_fetch=20, delay=0)
+    stats = openalex.refresh_openalex_observations(
+        bronze_session, DOIS, max_fetch=20, delay=0, batch_size=1
+    )
 
     # Nothing succeeded, so nothing was actually retired from the backlog.
     assert stats["remaining"] == len(DOIS)
