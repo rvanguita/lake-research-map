@@ -69,6 +69,9 @@ _ADDITIVE_COLUMNS: dict[str, dict[str, tuple[str, tuple[str, ...]]]] = {
     "lit_semantics": {"offtopic_score": ("FLOAT NULL", ("gold",))},
     # WP-17: cluster/projection stability recorded with the run that produced it.
     "lit_semantic_runs": {"stability": ("JSON NULL", ("gold",))},
+    # WP-24: how a citation edge was observed (complete reference list vs. a
+    # paginated cites: crawl), which the coverage audit needs.
+    "lit_citation_edges": {"discovered_via": ("VARCHAR(32) NULL", ("bronze",))},
     # ROADMAP #1: binary embedding storage (migration from JSON to BLOB).
     "lit_chunks": {
         "embedding_bin": ("LONGBLOB NULL", ("gold",)),
