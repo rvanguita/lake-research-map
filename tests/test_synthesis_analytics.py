@@ -210,7 +210,7 @@ def test_mathematical_complexity_spectrum():
 
 def test_author_m_quotient_analysis():
     df = _make_dummy_synthesis_data()
-    m_df = author_m_quotient_analysis(df, min_papers=2)
+    m_df = author_m_quotient_analysis(df, observation_year=2026, min_papers=2)
 
     assert not m_df.empty
     assert "author" in m_df.columns
@@ -356,3 +356,19 @@ def test_precision_scores_only_decided_labels():
     assert taxonomy_precision_from_labels(
         frame, TAXONOMY_REGISTRY["Optimization methods"], pd.DataFrame()
     ).empty
+
+
+def test_assisted_review_labels_do_not_count_as_human_evidence():
+    from lake_research_map.dashboard.components import _partition_review_labels
+
+    labels = pd.DataFrame(
+        {
+            "reviewer_id": ["rene", "codex-assisted", "revisor2"],
+            "label": ["present", "absent", "ambiguous"],
+        }
+    )
+
+    human, assisted = _partition_review_labels(labels)
+
+    assert human["reviewer_id"].tolist() == ["rene", "revisor2"]
+    assert assisted["reviewer_id"].tolist() == ["codex-assisted"]

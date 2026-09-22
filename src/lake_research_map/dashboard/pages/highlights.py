@@ -464,15 +464,17 @@ def _heavy_tail_analysis(articles_df: pd.DataFrame) -> None:
 
 
 def _age_normalized_rankings(articles_df: pd.DataFrame) -> None:
+    observation_year, observation_basis = loaders.citation_observation_context()
     st.subheader("⏳ Impact Normalized by the Article Age")
     st.caption(
         "Old articles accumulate more gross citations due to mere temporal exposure. "
         "Annualized citation rate and z-score by annual publication cohort reveal studies "
-        "recent that are reaching exceptional impact velocity."
+        "recent that are reaching exceptional impact velocity. "
+        f"Rates use observation year {observation_year} ({observation_basis})."
     )
     from lake_research_map.dashboard.analytics import age_normalized_citations
 
-    norm_df = age_normalized_citations(articles_df)
+    norm_df = age_normalized_citations(articles_df, observation_year=observation_year)
     if "citation_rate_annual" not in norm_df.columns:
         st.info("Insufficient data for normalization by age.")
         return
@@ -513,16 +515,18 @@ _GLM_FEATURE_LABELS = {
 
 
 def _citation_determinants_glm_view(articles_df: pd.DataFrame) -> None:
+    observation_year, observation_basis = loaders.citation_observation_context()
     st.subheader("Determinants associated with citation rate")
     st.caption(
         "Count GLM with an exposure offset for article age. The IRR of a numeric field is the "
         "multiplier for a one-standard-deviation change. These are conditional associations "
         "within this corpus, not causal effects — the source indicator in particular also "
-        "encodes source-specific missingness."
+        "encodes source-specific missingness. "
+        f"Article age is measured at {observation_year} ({observation_basis})."
     )
     from lake_research_map.dashboard.analytics import citation_determinants_glm
 
-    glm_res = citation_determinants_glm(articles_df)
+    glm_res = citation_determinants_glm(articles_df, observation_year=observation_year)
     if not glm_res.get("valid"):
         st.info(glm_res.get("warning") or "Sample too small for the count model.")
         return

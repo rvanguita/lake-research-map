@@ -44,7 +44,7 @@ def test_age_normalized_citations():
             "year": [2010, 2025, 2010, 2025],
         }
     )
-    norm = age_normalized_citations(df, current_year=2026)
+    norm = age_normalized_citations(df, observation_year=2026)
     assert "citation_rate_annual" in norm.columns
     assert "cohort_citation_percentile" in norm.columns
     # 10 citations in 2025 (age ~2, rate ~5.0) vs 50 in 2010 (age ~17, rate ~2.9)
@@ -147,7 +147,7 @@ def test_citation_determinants_glm():
             "source": ["ieee"] * (n // 2) + ["elsevier"] * (n // 2),
         }
     )
-    res = citation_determinants_glm(df)
+    res = citation_determinants_glm(df, observation_year=2026)
     assert res["valid"] is True
     assert res["family"] in {
         "poisson",
@@ -192,7 +192,7 @@ def test_citation_determinants_glm():
 
     with_missing = df.copy()
     with_missing.loc[:4, "reference_count"] = np.nan
-    incomplete = citation_determinants_glm(with_missing)
+    incomplete = citation_determinants_glm(with_missing, observation_year=2026)
     assert incomplete["n_used"] == n - 5
     assert incomplete["coverage"] == (n - 5) / n
     assert incomplete["missingness"]["reference_count"] == 5 / n
@@ -328,7 +328,7 @@ def test_citation_determinants_glm_reports_when_no_zero_inflated_fit_converges()
             "source": ["ieee"] * (n // 2) + ["elsevier"] * (n // 2),
         }
     )
-    res = citation_determinants_glm(df)
+    res = citation_determinants_glm(df, observation_year=2026)
 
     assert res["valid"] is True
     assert res["observed_zero_fraction"] == 0.0
@@ -356,7 +356,7 @@ def test_citation_determinants_glm_rejects_undersized_sample():
             "source": ["ieee"] * 10,
         }
     )
-    res = citation_determinants_glm(df)
+    res = citation_determinants_glm(df, observation_year=2026)
     assert res["valid"] is False
     assert res["n_used"] == 10
     assert "20" in res["warning"]

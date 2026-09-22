@@ -155,17 +155,20 @@ def _relevance_screening(scored: pd.DataFrame) -> None:
     )
     render_chart(
         fig,
-        caption="Each summary is compared with two anchors: the theme of review and reading "
-        "The margin is the difference, and the *zero is the cut**: to the left of it "
-        "are the articles that the text itself puts closer to supply chain than to supply chain. "
-        "With one anchor, the two distributions overlapped and "
-        "In order to apply the cut-off method, any percentile also discarded work within the scope. "
-        "**All** the graphs, use the filter in the sidebar.",
+        caption="Each abstract is compared with **two** anchors: the review topic and the "
+        "logistics interpretation of the same search phrase. The margin is their difference, "
+        "and **zero is the cutoff**: articles to its left are closer to supply-chain logistics "
+        "than to electric-power distribution networks. With one anchor, the two distributions "
+        "overlapped, and any percentile cutoff also discarded in-scope work. Use the sidebar "
+        "filter to apply this cutoff to **all** charts.",
     )
 
     st.divider()
     st.subheader(f"Out of scope — {len(low):,} articles for manual review")
-    st.caption("The score is an aid to screening.not a verdict: review before discarding.")
+    st.caption(
+        "Ordered from the most negative margin upward. The score supports screening; it is not "
+        "a verdict, so review each article before excluding it."
+    )
     review = low.sort_values("relevance_margin").head(TOP_REVIEW_ROWS).copy()
     for column in ("relevance_margin", "relevance_score"):
         review[column] = review[column].round(3)
@@ -436,7 +439,7 @@ def _semantic_map(scored: pd.DataFrame) -> None:
             + ("..." if len(t) > 195 else "")
         )
     )
-    plot_df["venue_display"] = plot_df["venue"].fillna("Uninformed Periodic")
+    plot_df["venue_display"] = plot_df["venue"].fillna("Venue not reported")
     plot_df["year_display"] = plot_df["year"].fillna("—").astype(str)
     source_map = {"ieee": "IEEE Xplore", "elsevier": "ScienceDirect (Elsevier)"}
     plot_df["source_display"] = plot_df["source"].map(source_map).fillna(plot_df["source"])
@@ -800,9 +803,9 @@ def _add_theme_labels(fig, plot_df: pd.DataFrame) -> None:
 def _semantic_novelty_panel(scored: pd.DataFrame) -> None:
     st.subheader("Semantic isolation in embedding space")
     st.caption(
-        "It measures the mean distance to the nearest $k$-neighbors in the 384D vector space. "
-        "High values indicate documents isolated from the neighbors of the corpus. "
-        "only, innovation or interdisciplinarity."
+        "Measures mean distance to the nearest $k$ neighbors in the 384-dimensional embedding "
+        "space. High values identify documents isolated from the rest of the corpus; isolation "
+        "alone does not establish novelty, innovation, or interdisciplinarity."
     )
 
     nov_df = loaders.semantic_novelty_scores()
@@ -911,19 +914,19 @@ def _themes(scored: pd.DataFrame) -> None:
     min_corpus_year = int(yearly["year"].min())
     max_corpus_year = int(yearly["year"].max())
 
-    # Controles interativos em barra compacta
+    # Compact interactive controls.
     c_time, c_metric, c_smooth = st.columns([3, 3, 3])
     with c_time:
         time_options = []
         if min_corpus_year < 2000:
-            time_options.append("Desde 2000 (Recomendado)")
+            time_options.append("Since 2000 (recommended)")
         if min_corpus_year < 1990:
-            time_options.append("Desde 1990")
+            time_options.append("Since 1990")
         time_options.append(f"Full history ({min_corpus_year}–{max_corpus_year})")
 
         time_choice = (
             st.segmented_control(
-                "Horizonte temporal",
+                "Time horizon",
                 options=time_options,
                 default=time_options[0],
                 key="theme_evol_horizon",
@@ -949,21 +952,21 @@ def _themes(scored: pd.DataFrame) -> None:
             st.segmented_control(
                 "Smoothing",
                 options=[
-                    "Mobile average 3 years (Sweathe)",
-                    "Mobile average 5 years",
-                    "No smoothing (Brute)",
+                    "3-year moving average (smooth)",
+                    "5-year moving average",
+                    "No smoothing (raw)",
                 ],
-                default="Mobile average 3 years (Sweathe)",
+                default="3-year moving average (smooth)",
                 key="theme_evol_smooth",
                 help="It applies centralized moving average to smooth the annual noise and reveal structural trends.",
             )
-            or "Mobile average 3 years (Sweathe)"
+            or "3-year moving average (smooth)"
         )
 
     # Determine the initial year from the selected filter.
-    if "Desde 2000" in time_choice:
+    if "Since 2000" in time_choice:
         start_year = max(2000, min_corpus_year)
-    elif "Desde 1990" in time_choice:
+    elif "Since 1990" in time_choice:
         start_year = max(1990, min_corpus_year)
     else:
         start_year = min_corpus_year
@@ -1001,7 +1004,7 @@ def _themes(scored: pd.DataFrame) -> None:
         win = 1
 
     # 3. Calculate values for the selected metric.
-    is_relative = "Relativa" in metric_choice
+    is_relative = metric_choice == "Relative Participation (%)"
     if is_relative:
         row_sums = pivot.sum(axis=1).replace(0, 1)
         pct = pivot.div(row_sums, axis=0) * 100
@@ -1077,7 +1080,7 @@ def _themes(scored: pd.DataFrame) -> None:
             y=1,
             xanchor="left",
             x=1.01,
-            title=dict(text="<b>Thematic Theme</b>"),
+            title=dict(text="<b>Theme</b>"),
             font=dict(size=11),
             itemsizing="constant",
             tracegroupgap=6,
@@ -1086,9 +1089,9 @@ def _themes(scored: pd.DataFrame) -> None:
     )
 
     chart_caption = (
-        "Thematic evolution with continuous filling and moving average: eliminates distortions of sparse years "
-        "and reveals where the scientific attention migrated. "
-        "of topics such as electrical mobility and distributed storage."
+        "Thematic evolution with a continuous year grid and moving average reduces distortions "
+        "from sparse years and shows how scientific attention migrated toward topics such as "
+        "electric mobility and distributed storage."
         if is_relative
         else "Absolute volume of articles per theme in each year: reveals the growth of the corpus as a whole "
         "and the accelerated expansion of scientific production in the last two decades."
@@ -1175,32 +1178,32 @@ def _duplicates() -> None:
         else pd.Series(dtype="object")
     )
     st.caption(
-        "The DOI is the only reliable deduplication key of this corpus (see `CLAUDE.md`), then the "
-        "the same work published under two DOIs may survive as two records. These pairs "
-        "were detected by the similarity of the summary and wait for a human decision. "
-        "remains only read; register the decision with `lake-research-map duplicates`."
+        "DOI is the corpus's only reliable deduplication key (see `CLAUDE.md`), so the same "
+        "work published under different DOIs may survive as separate records. These pairs were "
+        "detected through abstract similarity and await human review. The dashboard remains "
+        "read-only; record decisions with `lake-research-map duplicates`."
     )
 
-    st.markdown("#### Reviewing pendants")
+    st.markdown("#### Pending review")
     if pairs.empty:
         st.success("No pair of almost identical abstracts are expected to be reviewed.")
     else:
         table = pairs.copy()
         table["Title A"] = table["doi_a"].map(titles)
         table["Title B"] = table["doi_b"].map(titles)
-        table["Similaridade"] = table["similarity"].round(4)
+        table["Similarity"] = table["similarity"].round(4)
         st.dataframe(
-            table[["Similaridade", "Title A", "Title B", "doi_a", "doi_b"]].sort_values(
-                "Similaridade", ascending=False
+            table[["Similarity", "Title A", "Title B", "doi_a", "doi_b"]].sort_values(
+                "Similarity", ascending=False
             ),
             hide_index=True,
             width="stretch",
         )
         st.code(
             "uv run lake-research-map duplicates merge --canonical-doi DOI --duplicate-doi DOI "
-            '--reason "justificativa"\n'
+            '--reason "rationale"\n'
             "uv run lake-research-map duplicates keep --doi-a DOI --doi-b DOI "
-            '--reason "justificativa"',
+            '--reason "rationale"',
             language="bash",
         )
 
@@ -1210,10 +1213,10 @@ def _duplicates() -> None:
         return
 
     history = overrides.copy()
-    history["Decision"] = history["decision"].map({"merge": "Mesclar", "keep": "Manter separados"})
+    history["Decision"] = history["decision"].map({"merge": "Merge", "keep": "Keep separate"})
     history["Canonical DOI"] = history["canonical_doi"].fillna("—")
-    history["Justificativa"] = history["reason"]
-    history["Atualizado em"] = history["updated_at"]
+    history["Rationale"] = history["reason"]
+    history["Updated at"] = history["updated_at"]
     st.dataframe(
         history[
             [
@@ -1221,10 +1224,10 @@ def _duplicates() -> None:
                 "Canonical DOI",
                 "doi_a",
                 "doi_b",
-                "Justificativa",
-                "Atualizado em",
+                "Rationale",
+                "Updated at",
             ]
-        ].sort_values("Atualizado em", ascending=False),
+        ].sort_values("Updated at", ascending=False),
         hide_index=True,
         width="stretch",
     )

@@ -517,23 +517,36 @@ def article_table(df: pd.DataFrame, columns: list[str], download_key: str = "") 
         )
 
 
+def _partition_review_labels(labels: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Separate human evidence from explicitly assisted draft reviews.
+
+    Reviewer identifiers ending in ``-assisted`` are an operational convention:
+    their labels remain auditable, but must not silently upgrade an exploratory
+    taxonomy into a human-validated one. Older exports without ``reviewer_id`` are
+    treated as human evidence for backward compatibility.
+    """
+    if labels.empty or "reviewer_id" not in labels.columns:
+        return labels, labels.iloc[0:0].copy()
+    assisted = labels["reviewer_id"].fillna("").astype(str).str.casefold().str.endswith("-assisted")
+    return labels.loc[~assisted].copy(), labels.loc[assisted].copy()
+
+
 def taxonomy_disclosure(df, taxonomy_name: str, *, key: str = "") -> None:
     """State what share of the corpus a regex taxonomy actually classifies.
 
     `WP-12` requires every displayed taxonomy to report its evaluated coverage
     and either meet a declared minimum precision or be labelled exploratory.
-    None of them has a reviewed sample yet, so all are exploratory — but the
-    coverage is measurable today and is the number that changes how the chart
-    above should be read.
+    Human-reviewed labels can upgrade a taxonomy from exploratory to measured;
+    explicitly assisted draft reviews remain visible in the audit trail but do
+    not cross that evidence boundary.
 
     The distinction matters because a frequency chart drawn over matched
     articles only answers "among the ones I recognised, which is most common?"
     while appearing to answer "what does this corpus do?". On five of the seven
     taxonomies here the recognised share is under a third.
 
-    Precision upgrades itself: once labels exist for this taxonomy the panel
-    reports per-class precision/recall/F1 instead of the exploratory notice,
-    with no further code change.
+    Precision upgrades itself once human labels exist for this taxonomy. Draft
+    labels from a reviewer whose identifier ends in ``-assisted`` are excluded.
     """
     from lake_research_map.dashboard.analytics import (
         TAXONOMY_REGISTRY,
@@ -549,10 +562,12 @@ def taxonomy_disclosure(df, taxonomy_name: str, *, key: str = "") -> None:
         return
 
     scored = pd.DataFrame()
+    assisted_labels = pd.DataFrame()
     try:
         labels = loaders.review_labels("taxonomy")
         if not labels.empty:
-            scored = taxonomy_precision_from_labels(df, patterns, labels)
+            human_labels, assisted_labels = _partition_review_labels(labels)
+            scored = taxonomy_precision_from_labels(df, patterns, human_labels)
     except Exception:
         # A missing review table must not take down an analytical page.
         logger.debug("taxonomy_disclosure: review labels unavailable", exc_info=True)
@@ -579,14 +594,20 @@ def taxonomy_disclosure(df, taxonomy_name: str, *, key: str = "") -> None:
         )
         if scored.empty:
             st.warning(
-                "**Exploratory.** No reviewed sample exists for this taxonomy, so its "
+                "**Exploratory.** No human-reviewed sample exists for this taxonomy, so its "
                 "precision and recall are unmeasured — the classes are regex matches over "
-                "title and abstract, not validated labels. Read the chart as "
+                "title and abstract, not human-validated labels. Read the chart as "
                 f'"among the {stats["coverage"]:.0%} of articles this rule recognises", '
                 "never as a description of the corpus. Generate a sample with "
                 "`lake-research-map evidence taxonomy` to replace this notice with "
                 "measured per-class precision."
             )
+            if not assisted_labels.empty:
+                st.info(
+                    f"An assisted draft contains {len(assisted_labels):,} labels. It remains "
+                    "in the audit trail but is excluded from validation metrics until "
+                    "independent human review and adjudication are complete."
+                )
         else:
             display = scored.copy()
             for column in ("precision", "recall", "f1"):

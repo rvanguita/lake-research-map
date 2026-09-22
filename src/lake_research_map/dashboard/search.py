@@ -64,6 +64,7 @@ def _rank_by_similarity(
     ranked_indices = candidate_indices[np.argsort(scores[candidate_indices])[::-1]]
     result = embedded.iloc[ranked_indices].copy()
     result["score"] = scores[ranked_indices]
+    result["dense_rank"] = np.arange(1, len(result) + 1)
     return result.reset_index(drop=True)
 
 
@@ -94,7 +95,10 @@ def semantic_search(query: str, chunks_df: pd.DataFrame, top_k: int = 10) -> pd.
 def build_vector_index(matrix: np.ndarray):
     """Build an accelerated k-NN vector search index (NearestNeighbors with cosine metric).
 
-    Enables efficient neighborhood indexing for fast vector retrieval at scale.
+    Retained as a benchmarkable scale-up path, not the current serving path:
+    WP-25 found vectorized brute-force search adequate for the present corpus.
+    Keeping this isolated adapter makes the threshold decision reproducible
+    without silently changing the dashboard's retrieval implementation.
     """
     from sklearn.neighbors import NearestNeighbors
 
@@ -192,6 +196,7 @@ def bm25_search(
     ranked_order = matched_indices[np.argsort(-scores[matched_indices])][:top_k]
     result = chunks_df.iloc[ranked_order].copy()
     result["bm25_score"] = scores[ranked_order]
+    result["bm25_rank"] = np.arange(1, len(result) + 1)
     return result.reset_index(drop=True)
 
 
@@ -227,17 +232,21 @@ def hybrid_search_rrf(
     candidate_scores: dict[int, float] = {}
     dense_score_map: dict[int, float] = {}
     bm25_score_map: dict[int, float] = {}
+    dense_rank_map: dict[int, int] = {}
+    bm25_rank_map: dict[int, int] = {}
     candidate_rows: dict[int, pd.Series] = {}
 
     for rank, (idx, row) in enumerate(dense_df.iterrows()):
         c_id = int(row.get("id", idx))
         dense_score_map[c_id] = float(row.get("score", 0.0))
+        dense_rank_map[c_id] = int(row.get("dense_rank", rank + 1))
         candidate_scores[c_id] = candidate_scores.get(c_id, 0.0) + (1.0 / (rrf_k + rank + 1))
         candidate_rows[c_id] = row
 
     for rank, (idx, row) in enumerate(bm25_df.iterrows()):
         c_id = int(row.get("id", idx))
         bm25_score_map[c_id] = float(row.get("bm25_score", 0.0))
+        bm25_rank_map[c_id] = int(row.get("bm25_rank", rank + 1))
         candidate_scores[c_id] = candidate_scores.get(c_id, 0.0) + (1.0 / (rrf_k + rank + 1))
         if c_id not in candidate_rows:
             candidate_rows[c_id] = row
@@ -250,6 +259,8 @@ def hybrid_search_rrf(
         r["score"] = round(rrf_s, 5)
         r["dense_score"] = round(dense_score_map.get(c_id, 0.0), 4)
         r["bm25_score"] = round(bm25_score_map.get(c_id, 0.0), 3)
+        r["dense_rank"] = dense_rank_map.get(c_id)
+        r["bm25_rank"] = bm25_rank_map.get(c_id)
         rows.append(r)
 
     return pd.DataFrame(rows)

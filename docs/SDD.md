@@ -72,18 +72,18 @@ JSON list fields are convenient at current scale but are not substitutes for ide
 | Table | Grain and key | Current contract | Known limitation |
 |---|---|---|---|
 | `lit_source_files` | One active path; unique `path` | SHA-256 plus dataset/revision lineage | Active projection only; immutable history is held by revisions and manifests |
-| `lit_config` | One source; unique `source` | Parsed search provenance plus raw text | Multiple searches/versions per source cannot coexist |
+| `lit_config` | One search report; unique `source_file` | Publisher plus free-text query/filter/year/URL provenance | Historical completeness still depends on the manually exported report |
 | `lit_ieee_csv_rows` | One active CSV row; `(source_file, row_index)` | Original fields retained as JSON with version/revision lineage | Historical parsed rows are replayed from archived source bytes rather than retained inline |
 | `lit_bib_entries` | One parsed entry; `(source, bib_key, source_file)` | Robust BibTeX parsing, including adjacent IEEE entries | Parser output is preserved, but not the exact byte range per entry |
 | `lit_pdf_files` | One active file; unique `filename` | Original path, archive path, hash, size, and lineage | Filename uniqueness still assumes a flat PDF directory |
 
-**Current:** every consumed CSV, BibTeX, configuration, enrichment cache, and PDF is retained once in `data/.lake_research_map/objects` by SHA-256. `lit_source_blobs`, `lit_source_revisions`, `lit_dataset_source_files`, and `lit_source_changes` preserve immutable manifests and add/modify/rename/remove events. Raw child rows reference their version and revision; missing paths and children are removed transactionally from the active projection.
+**Current:** every consumed CSV, BibTeX, configuration, enrichment cache, and PDF is retained once in `data/.lake_research_map/objects` by SHA-256. `lit_source_blobs`, `lit_source_revisions`, `lit_dataset_source_files`, and `lit_source_changes` preserve immutable manifests and add/modify/rename/remove events. Raw child rows reference their version and revision. The default append policy retains archived active paths that are absent from a partial download; explicit snapshot mode treats the supplied set as authoritative and removes missing paths and children transactionally.
 
 ### 3.3 Bronze database
 
 `bronze.lit_articles` has one harmonized source record, keyed by `(source, source_id)`. It normalizes DOI, authors, keywords, numeric fields, and publication metadata while retaining Raw back-references. IEEE-only metadata is nullable/not applicable for Elsevier.
 
-Current enrichment fills missing citation/reference counts from `data/enrichment_cache.json`; IEEE values take precedence when present.
+Current enrichment fills missing citation/reference counts from `data/enrichment_cache.json`; IEEE values take precedence when present. The append-only `lit_enrichment_observations` table and as-of selector govern live OpenAlex refreshes, but the active reference corpus currently contains no persisted provider observations, so citation timing falls back to the documented environment/calendar basis.
 
 **Current contract:**
 
@@ -125,7 +125,7 @@ Gold articles are rebuilt, while chunks are reconciled by comparing stored and d
 
 **Current:** Gold is the canonical input for corpus-level dashboard analyses when its minimum readiness contract passes: the table must be non-empty; DOI must be populated and unique; and the common analytical columns must exist. If that contract fails, the selector falls back to Silver and then Bronze, and every analytical page displays a degraded-mode warning with the reason. This protects approved Gold merges without turning incomplete initialization into a hard dashboard failure.
 
-**Current extension:** the pipeline only materializes a candidate into the live Gold projection after persisted blocking checks pass. `WP-04` still needs to make every analytical loader verify the publication pointer explicitly rather than relying on the materialized projection plus the legacy structural readiness check.
+**Current extension:** the pipeline only materializes a candidate into the live Gold projection after persisted blocking checks pass. Gold dashboard reads resolve through the active publication pointer; the structural readiness check governs only the explicitly labeled Silver/Bronze degraded fallback.
 
 ### 3.6 Embedding contract
 
@@ -155,7 +155,7 @@ Screening labels remain target governed data rather than dashboard session state
 | Stage | Current behavior | Gap |
 |---|---|---|
 | Raw | Content-addressed scan, immutable manifest/revisions, transactional active reconciliation | Archive garbage collection is not automated |
-| Bronze | Transactional rebuild with file-qualified natural keys and dataset lineage | Enrichment observations are not yet independently versioned |
+| Bronze | Transactional rebuild with file-qualified natural keys and dataset lineage; append-only provider observations | The active corpus has no live provider observations yet |
 | Silver | Transactional DOI rebuild/rejection audit with dataset lineage | PDF matcher validation remains in `WP-05` |
 | Gold | Build immutable candidate article/chunk snapshot; reuse compatible unchanged vectors | Database uniqueness for legacy live chunk keys remains application-enforced |
 | Embed | Fill candidate binary/JSON vectors and block incompatible/non-finite output | Immutable model revision/text hash remain in `WP-06` |
@@ -255,11 +255,11 @@ Logs use structured fields with parent run ID, stage run ID, and dataset version
 - 100% abstract embedding compatibility before Semantic publication.
 - Zero duplicate normalized DOI in Silver/Gold.
 - Zero unreviewed data mutation initiated directly by dashboard page code.
-- Full test suite under the repository's five-second target on the reference environment; performance regressions are measured separately from correctness.
+- Full test suite remains green; correctness and Streamlit behavior are measured separately from wall-clock performance because local load dominates elapsed time.
 
 ## 8. Security and privacy
 
-- Create separate database roles for bootstrap/migration, pipeline writes, and dashboard reads. Grants are limited to `lit_*` tables even though databases are shared.
+- The local single-user deployment relies on the enforced `lit_*` naming boundary in application code. A shared or multi-user deployment must create separate bootstrap, pipeline-write, and dashboard-read roles with database-enforced least privilege before exposure.
 - Credentials remain in environment/secrets facilities and are never rendered or included in exported DataFrames.
 - SQL identifiers are fixed allowlisted values; user values use parameter binding.
 - Airflow's current “all admins” simple-auth setup is acceptable only for an isolated local environment. Binding it to a non-loopback or shared network requires authentication, authorization, TLS/reverse-proxy controls, and removal of unauthenticated admin access.
@@ -270,7 +270,7 @@ Logs use structured fields with parent run ID, stage run ID, and dataset version
 
 ### 9.1 Current baseline
 
-The repository has 303 pytest tests. They run with isolated in-memory SQLite sessions and additionally cover deterministic fingerprints, content-addressed retention, rename detection, Bronze deletion propagation, isolated Gold candidates, embedding contract failures, atomic materialization, exact Gold reactivation, an end-to-end correlated pipeline fixture, Airflow parent correlation, temporal enrichment observations, persistent human-review evidence, the durable-label-to-calibration join with its approval digests, the injected-fixture citation-graph crawl, and automatic abandoned-run recovery. Ruff lint and format checks are required.
+The repository has 314 passing pytest tests plus two opt-in MySQL tests skipped in the default run. They run with isolated in-memory SQLite sessions and additionally cover deterministic fingerprints, content-addressed retention, rename detection, Bronze deletion propagation, isolated Gold candidates, embedding contract failures, atomic materialization, exact Gold reactivation, an end-to-end correlated pipeline fixture, Airflow parent correlation, temporal enrichment observations, persistent human-review evidence, retrieval metrics, provenance coverage, persisted semantic diagnostics, the durable-label-to-calibration join with its approval digests, the injected-fixture citation-graph crawl, automatic abandoned-run recovery, and the plausible-year bound that keeps in-press records dated to next year inside every trend. The MySQL acceptance tests cover JSON/NULL/BLOB round trips, rollback, advisory locks, and the idempotent `lit_config` uniqueness migration. Ruff lint and format checks are required.
 
 SQLite remains the default fast suite. MySQL-specific acceptance is recorded separately against MySQL 8.4 and must be rerun for changes to JSON/NULL behavior, BLOBs, DDL, transactions, or advisory locks.
 

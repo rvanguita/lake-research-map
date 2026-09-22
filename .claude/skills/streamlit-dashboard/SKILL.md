@@ -94,32 +94,34 @@ rules exist to keep it from drifting back.
   should go through the `dataviz` skill first; this dashboard's palette
   already came from it.
 
-### Light/dark theme support
+### Fixed dark theme
 
-The dashboard has **its own** dark/light control — a radio in the sidebar
-(`theme.render_theme_toggle()`, called at the very top of `app.main()`,
-before `apply_dashboard_theme()`) — deliberately **not** Streamlit's built-in
-theme toggle or `st.context.theme.type`. That API's own docstring says the
-theme type "may be incorrect ... when the app is first loaded within a
-session" and "when the user changes the theme in the settings menu" (see
-Streamlit GitHub issue #11920) — i.e. it's unreliable at exactly the two
-moments a user would notice. An earlier version of this dashboard used it
-and light mode intermittently didn't apply; don't reintroduce that.
+The dashboard has exactly one theme. The base palette — page and sidebar
+backgrounds, text, primary, and the Plotly categorical colors — comes from
+`.streamlit/config.toml`, which Streamlit applies itself. No module injects
+page CSS.
 
-The single source of truth is `st.session_state["dashboard_theme_mode"]`
-(`"dark"` by default, so a fresh session looks exactly like before this
-existed). `theme._active_theme_type()` reads that key, `theme._tokens()`
-returns the matching palette (`_DARK_TOKENS` / `_LIGHT_TOKENS`), and
-`apply_dashboard_theme()` / `polish_figure_layout()` build their CSS /
-Plotly font/grid colors from it. **Never hardcode a hex color for chart
-backgrounds or the injected CSS** — add a new token to both dicts instead, or
-the color will be wrong in one of the two themes. A data color scale (e.g.
-`color_continuous_scale` on a heatmap or scatter) is not chrome and is fine to
-hardcode — it colors marks by value, not the page/chart background.
+An earlier version had a sidebar light/dark radio backed by
+`st.session_state["dashboard_theme_mode"]`, and an `apply_dashboard_theme()`
+that wrote ~200 lines of `<style>`. Both are gone. `PRD.md` NFR-07 now requires
+a *fixed* dark theme, and the CSS injector had become dead code that nothing
+called while `config.toml` quietly did the real work — it was removed on
+2026-09-22 rather than left to be read as the styling entry point.
+
+What remains is the token set `config.toml` cannot reach. `theme._tokens()`
+returns `_DARK_TOKENS`, and `theme._active_theme_type()` returns `"dark"`
+unconditionally. Call the public `theme_tokens()` from a page or component that
+colors its own inline HTML, or a Plotly Indicator (which `polish_figure_layout`
+does not touch) — see `components.hero_banner` or
+`quality._embedding_readiness`. **Never hardcode a hex color for chart
+backgrounds or inline chrome**: add a token instead, so one edit moves every
+surface using it. A data color scale (e.g. `color_continuous_scale` on a
+heatmap or scatter) is not chrome and is fine to hardcode — it colors marks by
+value, not the page or chart background.
 
 The chart canvas itself is the one exception: `theme.CHART_PAPER_BG`
 (`rgba(0,0,0,0)`) is a plain module constant, not a token, because a
-transparent canvas is correct in both themes — it lets the page's gradient
+transparent canvas is the right default — it lets the page's gradient
 through instead of laying a flat slab over it. `chart_bg` is still a token and
 still solid, for the things that need a real color to stand on (the gauge track
 in `quality.py`, the partial-year marker halo in `forecasting.py`, the hover
@@ -131,8 +133,8 @@ transparent one gives an unreadable tooltip and invisible modebar icons.
 template** — `polish_figure_layout` does this and says why. Streamlit's frontend
 runs `layoutWithThemeDefaults` over every Plotly spec, *including* with
 `theme=None`, and fills `paper_bgcolor`, `plot_bgcolor` and `font` from
-Streamlit's own theme (which follows the browser/system setting, not our
-toggle) whenever the figure's layout doesn't carry them. It never reads the
+Streamlit's own theme (which follows the browser/system setting, not
+`config.toml`) whenever the figure's layout doesn't carry them. It never reads the
 template. Declaring them template-only is what made every chart render on a
 near-black background; `tests/test_theme.py` guards it.
 

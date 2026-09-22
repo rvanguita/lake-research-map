@@ -4,7 +4,7 @@
 
 **Evidence cutoff:** 2026-09-21
 
-**Implementation baseline:** the active 2026-09-21 Gold version `2974743a…` contains 3,115 articles and 7,552 chunks, all carrying complete embedding metadata; the application has 10 registered dashboard pages and 229 automated tests.
+**Implementation baseline:** the active 2026-09-21 Gold version `2974743a…` contains 3,115 articles and 7,552 chunks, all carrying complete embedding metadata; the application has 10 registered dashboard pages and 314 passing automated tests (plus two opt-in MySQL tests skipped by the default run) as measured on 2026-09-22.
 
 **Related documents:** [SDD.md](SDD.md), [ROADMAP.md](ROADMAP.md), [METHODOLOGY.md](METHODOLOGY.md)
 
@@ -155,7 +155,7 @@ Every inferential or predictive result must report effect size, uncertainty, sam
 | `NFR-03` | Integrity | Dataset and stage contracts block publication of incompatible derived data. |
 | `NFR-04` | Auditability | Exclusions, overrides, quality failures, and pipeline errors are retained. |
 | `NFR-05` | Performance | Current corpus remains responsive without distributed compute; scaling changes require benchmarks. |
-| `NFR-06` | Security | Database roles are limited to required `lit_*` tables; secrets are not committed or sent to the browser. |
+| `NFR-06` | Security | Only `lit_*` tables are addressed; secrets are not committed or sent to the browser. A shared or multi-user deployment must restore database-enforced least privilege. |
 | `NFR-07` | Accessibility | UI labels are non-empty, English, legible in the fixed dark theme, and usable without color alone. |
 | `NFR-08` | Testability | Mathematical logic remains Streamlit-free; UI behavior has headless smoke coverage. |
 
@@ -173,7 +173,7 @@ Each analytical question has exactly one canonical page. Overview may link to a 
 | **Engineering evidence** | Which methods, objectives, uncertainties, networks, and tools occur? | Multi-label engineering taxonomy | Labeled audit set, precision/recall, unknown/ambiguous coverage |
 | **Trends and fronts** | What can be projected, with what historical error? | Persistence-baseline skill, rolling-origin forecast, held-out interval coverage, Bass/burst diagnostics | Skill and coverage by horizon (every fold is currently one-step), MASE, Bass parameter stability |
 | **Screening and discovery** | What should be reviewed, included, or reconciled? | Margin, themes, projections with bootstrap ARI and trustworthiness, isolation, duplicate queue, persistent review protocols/labels | Collect independent labels; persist stability; sweep cluster count |
-| **Quality and RAG** | Are metadata, text, embeddings, and retrieval fit for use? | Coverage matrix, PDF selection bias, chunk diagnostics, anomaly audit, search | Add Recall@k/MRR/nDCG benchmark |
+| **Quality and RAG** | Are metadata, text, embeddings, and retrieval fit for use? | Coverage matrix, PDF selection bias, chunk diagnostics, anomaly audit, inspectable dense/BM25/RRF search | Apply the implemented Recall@k/MRR/nDCG/latency harness to labeled technical queries |
 | **Pipeline and provenance** | Can results be traced and trusted operationally? | Funnel, runs, rejections, source configuration, quality gates | Snapshot, freshness, removal reconciliation |
 
 Visualization selection follows the question: bars for discrete comparisons, lines for ordered time, ECDF/CCDF for distributions, scatterplots for associations with uncertainty, heatmaps for dense matrices, and tables when exact values or audit context dominate. Multiple chart types for the same knowledge are alternatives behind one selector, not separate claims.

@@ -134,6 +134,60 @@ _ADDITIVE_COLUMNS: dict[str, dict[str, tuple[str, tuple[str, ...]]]] = {
 }
 
 
+def _migrate_config_uniqueness(engine) -> None:
+    """Key search reports by file instead of collapsing them by publisher.
+
+    Early versions allowed one ``lit_config`` row per source. That loses the
+    provenance of later searches from the same publisher. This constraint-only
+    migration does not rewrite rows: the former source uniqueness guarantees
+    that existing ``source_file`` values are already distinct.
+    """
+    if engine.dialect.name != "mysql":
+        return
+    inspector = inspect(engine)
+    if not inspector.has_table("lit_config"):
+        return
+    unique_constraints = inspector.get_unique_constraints("lit_config")
+    indexes = inspector.get_indexes("lit_config")
+    source_unique = next(
+        (
+            constraint
+            for constraint in unique_constraints
+            if constraint.get("column_names") == ["source"]
+        ),
+        None,
+    )
+    file_unique = next(
+        (
+            constraint
+            for constraint in unique_constraints
+            if constraint.get("column_names") == ["source_file"]
+        ),
+        None,
+    )
+    source_index = next(
+        (
+            index
+            for index in indexes
+            if index.get("column_names") == ["source"] and not index.get("unique")
+        ),
+        None,
+    )
+    if source_unique is None and file_unique is not None and source_index is not None:
+        return
+
+    clauses = []
+    if source_unique is not None:
+        clauses.append(f"DROP INDEX `{source_unique['name']}`")
+    if file_unique is None:
+        clauses.append("ADD UNIQUE INDEX `uq_lit_config_source_file` (`source_file`)")
+    if source_index is None:
+        clauses.append("ADD INDEX `ix_lit_config_source` (`source`)")
+    if clauses:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE `lit_config` " + ", ".join(clauses)))
+
+
 def create_tables() -> None:
     for layer, module in _MODELS.items():
         engine = get_engine(layer)
@@ -155,6 +209,8 @@ def create_tables() -> None:
                 for name, ddl in missing:
                     conn.execute(text(f"ALTER TABLE `{table}` ADD COLUMN `{name}` {ddl}"))
                 conn.commit()
+        if layer == "raw":
+            _migrate_config_uniqueness(engine)
 
 
 def bootstrap() -> None:

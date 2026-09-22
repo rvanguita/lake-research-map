@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import math
 from dataclasses import dataclass, field
+from pathlib import PurePosixPath
 from typing import Any
 
 import numpy as np
@@ -21,6 +22,7 @@ from lake_research_map.db.gold_models import (
 )
 from lake_research_map.db.raw_models import (
     BibEntry,
+    Config,
     DatasetSourceFile,
     IeeeCsvRow,
     PdfFile,
@@ -68,16 +70,38 @@ def _result(
 
 def raw_contract(session: Session, version_id: str) -> list[CheckResult]:
     manifest = session.scalars(select(SourceFile)).all()
+    configs = session.scalars(select(Config)).all()
     version_rows = session.scalars(
         select(DatasetSourceFile).where(DatasetSourceFile.dataset_version_id == version_id)
     ).all()
     paths = {row.path for row in manifest}
     child_paths = {
+        *(row.source_file for row in configs),
         *(row.source_file for row in session.scalars(select(BibEntry)).all()),
         *(row.source_file for row in session.scalars(select(IeeeCsvRow)).all()),
         *(row.path for row in session.scalars(select(PdfFile)).all()),
     }
     uniform = {row.dataset_version_id for row in manifest}
+    input_directories = {
+        (row.source, str(PurePosixPath(row.path).parent))
+        for row in manifest
+        if row.kind in {"bib", "csv"}
+    }
+    provenance_directories = {
+        (row.source, str(PurePosixPath(row.source_file).parent))
+        for row in configs
+        if "todo" not in row.raw_text.casefold()
+    }
+    # ``data/config.csv`` is the legacy ScienceDirect report for files in
+    # ``data/elsevier``. It must not cover the newer Science Direct directory.
+    if any(
+        row.source == "elsevier"
+        and row.source_file == "data/config.csv"
+        and "todo" not in row.raw_text.casefold()
+        for row in configs
+    ):
+        provenance_directories.add(("elsevier", "data/elsevier"))
+    missing_provenance = sorted(input_directories - provenance_directories)
     return [
         _result("raw.non_empty_manifest", bool(manifest), len(manifest), "> 0"),
         _result(
@@ -98,6 +122,14 @@ def raw_contract(session: Session, version_id: str) -> list[CheckResult]:
             len(child_paths - paths),
             0,
             details={"orphan_paths": sorted(child_paths - paths)[:20]},
+        ),
+        _result(
+            "raw.search_provenance_coverage",
+            not missing_provenance,
+            len(input_directories) - len(missing_provenance),
+            len(input_directories),
+            severity="warning",
+            details={"missing_source_directories": missing_provenance},
         ),
     ]
 

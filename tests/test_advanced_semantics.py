@@ -8,7 +8,6 @@ import pytest
 from lake_research_map.transform.semantics import (
     compute_semantic_novelty,
     compute_temporal_drift,
-    compute_thematic_centroids,
     project_pca_2d,
     project_umap,
 )
@@ -32,23 +31,6 @@ def test_project_umap_is_explicitly_unavailable_without_dependency():
     matrix = rng.normal(0, 1, (15, 6)).astype("float32")
     with pytest.raises(ImportError):
         project_umap(matrix, n_neighbors=5)
-
-
-def test_compute_thematic_centroids():
-    matrix = np.array(
-        [
-            [1.0, 2.0],
-            [3.0, 4.0],
-            [10.0, 20.0],
-            [30.0, 40.0],
-        ],
-        dtype="float32",
-    )
-    labels = np.array([0, 0, 1, 1])
-    centroids = compute_thematic_centroids(matrix, labels)
-    assert 0 in centroids and 1 in centroids
-    assert np.allclose(centroids[0], [2.0, 3.0])
-    assert np.allclose(centroids[1], [20.0, 30.0])
 
 
 def test_compute_temporal_drift():

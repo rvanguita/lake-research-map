@@ -23,6 +23,7 @@ from lake_research_map.db.gold_models import (
     DatasetSemantics,
     DatasetVersion,
     PublicationState,
+    SemanticRun,
     Semantics,
 )
 from lake_research_map.db.raw_models import BibEntry, IeeeCsvRow
@@ -243,6 +244,63 @@ def test_versioned_gold_build_does_not_mutate_live_publication(silver_session, g
     ):
         with pytest.raises(ValueError, match="already published"):
             rebuild()
+
+
+def test_semantic_run_persists_the_diagnostics_that_produced_its_map(gold_session, monkeypatch):
+    from lake_research_map.dashboard import analytics
+    from lake_research_map.transform import semantics, versioned_gold
+
+    gold_session.add(DatasetVersion(version_id="v1", status="candidate"))
+    vectors = [
+        np.array([1.0, 0.0], dtype=np.float32),
+        np.array([0.0, 1.0], dtype=np.float32),
+    ]
+    for index, vector in enumerate(vectors):
+        gold_session.add(
+            DatasetChunk(
+                dataset_version_id="v1",
+                doi=f"10.1/{index}",
+                seq=0,
+                chunk_type="abstract",
+                text=f"Article {index}",
+                char_len=9,
+                embedding_bin=vector.tobytes(),
+            )
+        )
+    gold_session.commit()
+
+    reduced = np.array([[0.0, 0.0], [1.0, 1.0]])
+    monkeypatch.setattr(versioned_gold, "reduced_space", lambda _matrix: reduced)
+    monkeypatch.setattr(
+        versioned_gold,
+        "discover_themes",
+        lambda _matrix, _texts: (np.array([0, 1]), {0: "A", 1: "B"}),
+    )
+    monkeypatch.setattr(versioned_gold, "project_2d", lambda _matrix: reduced)
+    monkeypatch.setattr(versioned_gold, "near_duplicate_pairs", lambda *_args: [])
+    monkeypatch.setattr(
+        analytics,
+        "semantic_stability_diagnostics",
+        lambda *_args: {"valid": True, "bootstrap_ari_mean": 0.9},
+    )
+    monkeypatch.setattr(
+        semantics,
+        "theme_sweep",
+        lambda _matrix: [{"k": 2, "silhouette": 0.5}],
+    )
+
+    versioned_gold.build_dataset_semantics(
+        gold_session,
+        "v1",
+        anchor_vectors=(vectors[0], vectors[1]),
+    )
+
+    run = gold_session.query(SemanticRun).one()
+    assert run.stability == {
+        "valid": True,
+        "bootstrap_ari_mean": 0.9,
+        "k_sweep": [{"k": 2, "silhouette": 0.5}],
+    }
 
 
 def _candidate(session, version_id: str, doi: str, value: float) -> None:
