@@ -1144,13 +1144,28 @@ def _run_review_command(args: argparse.Namespace) -> None:
             scope = f"{len(subject_ids)} subjects" if subject_ids else "every article"
             print(f"Created {count} assignments over {scope}.")
         elif args.review_action == "export":
-            count = export_assignments(
-                session,
-                workflow=args.workflow,
-                dataset_version_id=args.version_id,
-                reviewer_id=args.reviewer,
-                output_path=Path(args.output),
-            )
+            # Each workflow reviews a different object, so the context comes
+            # from a different layer: rejected records live in Bronze, author
+            # spellings in Silver, PDF filenames in Raw. They are opened here
+            # and closed in the `finally` below, because transform builders
+            # take sessions and never open their own.
+            context_sessions = {
+                "silver_session": get_session("silver"),
+                "bronze_session": get_session("bronze"),
+                "raw_session": get_session("raw"),
+            }
+            try:
+                count = export_assignments(
+                    session,
+                    workflow=args.workflow,
+                    dataset_version_id=args.version_id,
+                    reviewer_id=args.reviewer,
+                    output_path=Path(args.output),
+                    **context_sessions,
+                )
+            finally:
+                for context_session in context_sessions.values():
+                    context_session.close()
             print(f"Exported {count} assignments to {args.output}.")
         elif args.review_action == "import":
             count = import_labels(
