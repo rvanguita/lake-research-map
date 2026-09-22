@@ -121,8 +121,8 @@ def render() -> None:
             _render_contract_status(quality_df)
         elif has_pipeline_data:
             st.info(
-                "There are still no contracts persisted; the diagnosis below is just one "
-                "Legacy verification on the loaded tables."
+                "There are still no persisted contracts; the diagnosis below is only a legacy "
+                "verification over the loaded tables."
             )
             _drift_check(funnel_df)
         if has_pipeline_data:

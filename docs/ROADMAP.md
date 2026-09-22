@@ -26,7 +26,7 @@ Dependencies use work-package IDs. Horizons are sequencing bands rather than cal
 
 ## 2. Delivered baseline
 
-The following capabilities are implemented and covered by the current 322 passing tests plus two opt-in MySQL tests skipped in the default run (229 before this cycle, followed by regression, application-wide page, evidence-workflow, retrieval, provenance, semantic-persistence, MySQL migration, and year-bound coverage):
+The following capabilities are implemented and covered by the current 343 passing tests plus two opt-in MySQL tests skipped in the default run (229 before this cycle, followed by regression, application-wide page, evidence-workflow, retrieval, provenance, semantic-persistence, MySQL migration, and year-bound coverage):
 
 - Raw/Bronze/Silver/Gold ingestion and transformations with DOI normalization and rejection audit.
 - Local PDF inventory/matching, full-text extraction, chunk reconciliation, and local BGE embeddings.
@@ -264,7 +264,8 @@ This baseline does not imply that every analytical method is confirmatory. The l
 
 ### `WP-21` — Integrate validated analyses into existing pages
 
-- **Status:** Partially delivered; the Impact, Screening, Researchers, and Trends increments landed on 2026-09-21, and temporal tie dynamics shipped with `WP-19` on 2026-09-22 -- it never depended on an evidence package. Retrieval benchmark, taxonomy validation and identity audit remain blocked on theirs.
+- **Status:** Partially delivered; the Impact, Screening, Researchers, and Trends increments landed on 2026-09-21, and temporal tie dynamics shipped with `WP-19` on 2026-09-22 -- it never depended on an evidence package. Two further increments landed on 2026-09-22 that had been recorded as blocked but were not: the **Pipeline and provenance** bullet (active version and freshness) was never blocked at all, and the **retrieval benchmark** needed a surface rather than labels. Taxonomy validation and identity audit remain genuinely blocked on theirs.
+- **Evidence:** `article_population_status()` had returned `dataset_version_id` since `WP-04` and no page ever read it -- only `is_canonical` was consumed -- so nine of ten pages reported figures that could not be tied to a snapshot, against `PRD.md` §10's first success criterion. `loaders.render_population_provenance` now states the version, its publication time, and the filtered-versus-total population, rendered once inside `require_articles` so a new page cannot forget it, and in `loaders` rather than `components` because that module imports this one. The retrieval harness (`dashboard/retrieval_eval.py`) and the pooled sampler were likewise reachable only from `tests/`: the project could compute Recall@k, MRR and nDCG and had nowhere to show them. The Quality and RAG page now scores all three modes over the versioned query set, and refuses the conclusion rather than the computation -- with only the AI-assisted pass stored, it prints the table under an explicit **not approved evidence** warning naming `WP-13`'s requirement for two independent reviewers. A sweep for the unpunctuated half of the dropped-clause defect also ran over every page and repaired six captions, among them one claiming articles "are typical of Researches" and one ending mid-phrase on `the card '`.
 - **Objective:** Add knowledge without adding pages or decorative charts.
 - **Justification:** New methods should extend established workflows and preserve navigation stability.
 - **Dependencies:** `WP-10` through `WP-19`, `WP-20`.

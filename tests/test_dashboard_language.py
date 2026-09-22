@@ -74,6 +74,19 @@ def _empty_metric_labels(path: Path, source: str) -> list[str]:
 
 
 def test_adjacent_dashboard_strings_do_not_start_a_lowercase_clause_after_period():
+    """Catch the half of the dropped-clause defect that can be caught precisely.
+
+    The migration also dropped clauses *without* leaving the period behind, so
+    a fragment ends mid-sentence on a bare word and the next opens with a
+    capital. Sweeping for that on 2026-09-22 found six real defects -- among
+    them a caption claiming articles "are typical of Researches" and another
+    ending on a bare `the card '` -- but it cannot be automated without false
+    positives, because a fragment legitimately continues into a proper noun
+    ("consolidated through the " + "Raw -> Bronze -> Silver -> Gold layers.").
+    Re-run it by hand after any bulk copy edit:
+
+        left.endswith(" ") and left.rstrip()[-1].isalpha() and right[:1].isupper()
+    """
     failures = []
     ignored = {tokenize.NL, tokenize.NEWLINE, tokenize.INDENT, tokenize.DEDENT, tokenize.COMMENT}
     for path in _python_sources():
@@ -89,12 +102,10 @@ def test_adjacent_dashboard_strings_do_not_start_a_lowercase_clause_after_period
                 except (SyntaxError, ValueError):
                     pass
                 else:
-                    if (
-                        isinstance(left, str)
-                        and isinstance(right, str)
-                        and left.endswith(". ")
-                        and right[:1].islower()
-                    ):
+                    if not (isinstance(left, str) and isinstance(right, str)):
+                        previous = token
+                        continue
+                    if left.endswith(". ") and right[:1].islower():
                         failures.append(f"{path}:{token.start[0]}: lowercase clause {right[:40]!r}")
             previous = token
     assert not failures, "\n".join(failures)
