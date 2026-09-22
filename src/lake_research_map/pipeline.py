@@ -1080,13 +1080,17 @@ def _run_evidence_command(args: argparse.Namespace) -> None:
             # Retrieval pools the live search modes, so it needs the embedded
             # corpus rather than the silver metadata the others read.
             from lake_research_map.dashboard import loaders
+            from lake_research_map.dashboard.search import hybrid_search_rrf
+
+            # Loaded once: every query pools over the same chunk population,
+            # and re-reading it per query would be ten full table scans.
+            chunk_frame = loaders.chunk_search_data()
+            if chunk_frame.empty:
+                raise ValueError("no embedded chunks to retrieve over; run `--stage embed` first")
 
             def _retrieve(text: str, depth: int) -> list[str]:
-                frame = loaders.chunk_search_data()
-                from lake_research_map.dashboard.search import hybrid_search
-
-                hits = hybrid_search(text, frame, top_k=depth)
-                return [str(doi) for doi in hits.get("doi", [])]
+                hits = hybrid_search_rrf(text, chunk_frame, top_k=depth)
+                return [str(doi) for doi in hits["doi"]] if "doi" in hits else []
 
             subjects, stats = evidence_samples.retrieval_candidates(_retrieve, depth=limit or 10)
             workflow = "retrieval"
