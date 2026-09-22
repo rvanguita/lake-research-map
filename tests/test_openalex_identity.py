@@ -92,7 +92,9 @@ def test_the_citation_crawl_persists_edges_and_counts_truncation(bronze_session,
         lambda work_id, **kwargs: crawled[work_id],
     )
 
-    args = argparse.Namespace(max_works=10, delay=0.0, max_pages=None)
+    args = argparse.Namespace(
+        max_works=10, delay=0.0, max_pages=None, refresh_all=False, commit_every=25
+    )
     stats = pipeline_module._refresh_citation_edges(bronze_session, args)
 
     assert stats["works_crawled"] == 2
