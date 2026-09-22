@@ -152,6 +152,46 @@ def _series_forecast(source: str | None) -> ForecastResult:
     return loaders.volume_forecast(source)
 
 
+def _horizon_backtest_table(result) -> None:
+    """Score the chosen model separately at every horizon it is asked to predict.
+
+    Every fold used to be one step ahead, so the second forecast year appeared
+    on the chart with no validation behind it at all. A two-year claim has to
+    be backtested two years out or labelled as unvalidated.
+    """
+    backtests = getattr(result, "horizon_backtests", None)
+    if not backtests or len(backtests) < 2:
+        return
+
+    rows = []
+    for step, year in enumerate(result.forecast_years, start=1):
+        stats = backtests.get(step) or {}
+        mase = stats.get("mase")
+        rows.append(
+            {
+                "Horizon": f"{step}-year ({year})",
+                "CV MAE": ("n/a" if stats.get("cv_mae") is None else f"{stats['cv_mae']:.1f}"),
+                "MASE": "n/a" if mase is None else f"{mase:.2f}",
+                "Beats naive": "—" if mase is None else ("yes" if mase < 1 else "no"),
+                "Interval coverage": (
+                    "not testable" if stats.get("coverage") is None else f"{stats['coverage']:.0%}"
+                ),
+            }
+        )
+
+    with st.expander("Backtest by forecast horizon", expanded=False):
+        st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+        st.caption(
+            "Each horizon is scored on folds whose training window ends that many years "
+            "before the target, so a two-year number never borrows one-year information. "
+            "MASE divides the error by the average one-step change in the series, which is "
+            "what makes it comparable across series of different size: below 1 beats a "
+            'naive carry-forward, above 1 loses to it. "Not testable" means the series '
+            "is too short to hold folds back at that horizon — an unknown coverage is "
+            "reported as unknown rather than filled in from the shorter horizon."
+        )
+
+
 def _baseline_skill_label(skill: float | None) -> str:
     """A forecast that does not beat last-year-repeated has to say so.
 
@@ -220,6 +260,8 @@ def _render_series_forecast(label: str, color: str, result: ForecastResult) -> N
             ),
         ]
     )
+
+    _horizon_backtest_table(result)
 
     fig = go.Figure()
 

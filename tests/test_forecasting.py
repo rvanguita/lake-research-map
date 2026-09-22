@@ -206,3 +206,74 @@ def test_interval_coverage_abstains_when_no_folds_can_be_held_out():
     result = fit_and_forecast(short)
 
     assert result.empirical_interval_coverage is None
+
+
+def test_horizon_backtests_score_each_forecast_year_separately():
+    """WP-18: a two-year projection scored one step ahead is not validated.
+
+    The far end of the chart must either carry its own backtest or say it
+    cannot be tested -- it must not silently inherit the one-year number.
+    """
+    import numpy as np
+
+    from lake_research_map.dashboard.forecasting import fit_and_forecast
+
+    years = list(range(2010, 2026))
+    series = pd.Series([10 + 3 * i for i in range(len(years))], index=years, dtype=float)
+
+    result = fit_and_forecast(series)
+
+    assert set(result.horizon_backtests) == {1, 2}
+    for _step, stats in result.horizon_backtests.items():
+        assert set(stats) == {"cv_mae", "mase", "baseline_skill", "coverage"}
+        if stats["mase"] is not None:
+            assert np.isfinite(stats["mase"])
+    # A clean linear series must beat a naive carry-forward at one step.
+    assert result.mase is not None and result.mase < 1.0
+
+
+def test_rolling_origin_cv_hides_the_forecast_window_at_longer_horizons():
+    """A 2-step fold must not see the year immediately before its target."""
+    import numpy as np
+
+    from lake_research_map.dashboard.forecasting import _rolling_origin_cv
+
+    years = np.arange(2010, 2024)
+    # Flat through 2020, then a jump in 2021. Scoring 2022 one step ahead
+    # trains through 2021 and sees the jump; two steps ahead stops at 2020 and
+    # cannot. That is exactly the information a 2-year claim must not borrow.
+    values = np.array([10.0] * 11 + [90.0] * 3)
+    cv_years = (2022,)
+
+    one_step = _rolling_origin_cv(years, values, cv_years, horizon=1)
+    two_step = _rolling_origin_cv(years, values, cv_years, horizon=2)
+
+    # The baseline carries the last observed value forward, so hiding an extra
+    # year strictly costs it accuracy here.
+    assert two_step["baseline"] > one_step["baseline"]
+
+
+def test_bass_diffusion_reports_parameter_uncertainty():
+    """`curve_fit` returns a covariance; the peak year must not be a bare point."""
+    import numpy as np
+
+    from lake_research_map.dashboard.forecasting import fit_bass_diffusion_nls
+
+    years = np.arange(2005, 2026)
+    steps = np.arange(len(years))
+    p, q, m = 0.03, 0.4, 1000.0
+    cumulative = (1 - np.exp(-(p + q) * steps)) / (1 + (q / p) * np.exp(-(p + q) * steps))
+    clean = np.diff(np.concatenate([[0.0], cumulative * m]))
+
+    exact = fit_bass_diffusion_nls(years, clean)
+    assert exact["valid"] is True
+    assert exact["p_stderr"] is not None and exact["q_stderr"] is not None
+    assert exact["t_peak_low"] is not None and exact["t_peak_high"] is not None
+    assert exact["t_peak_low"] <= exact["t_peak"] <= exact["t_peak_high"]
+
+    # Noise must widen the interval rather than leave it unchanged.
+    rng = np.random.default_rng(1)
+    noisy = fit_bass_diffusion_nls(years, np.clip(clean + rng.normal(0, 40, len(clean)), 0, None))
+    exact_width = exact["t_peak_high"] - exact["t_peak_low"]
+    noisy_width = noisy["t_peak_high"] - noisy["t_peak_low"]
+    assert noisy_width > exact_width
