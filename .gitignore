@@ -52,3 +52,8 @@ htmlcov/
 
 # OS
 .DS_Store
+
+# Human-review working area: stratified samples and in-progress label files.
+# Reproducible from `lake-research-map evidence ...`, and a labelling file in
+# progress would turn every decision into a diff.
+review/
