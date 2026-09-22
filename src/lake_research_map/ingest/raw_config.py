@@ -1,9 +1,10 @@
-"""Parse the two data/{ieee,elsevier}/config.csv provenance files.
+"""Parse every configured publisher search-provenance report.
 
-Per CLAUDE.md these are NOT parseable tables -- each is free text recording
-the search query, filters, year range and full search URL that produced that
-export. This loader extracts those fields with regexes but always keeps the
-full raw text too, so nothing is lost if the extraction misses something.
+These files are not tabular CSVs. Each is free text recording the query,
+filters, year range, and full search URL that produced one export batch. The
+loader extracts those fields with regexes but retains the complete text. Rows
+are keyed by source file, not publisher, because one publisher can have many
+separately reproducible searches.
 """
 
 from __future__ import annotations
@@ -53,7 +54,7 @@ def _parse_config_text(raw_text: str) -> dict:
 
 
 def load_configs(session: Session) -> int:
-    """Parse both config.csv files into lit_raw.config. Returns rows written."""
+    """Parse configured reports into ``lit_config`` and return rows written."""
     written = 0
     for source, config_path in SEARCH_CONFIG_PATHS:
         if not config_path.exists():
@@ -64,13 +65,15 @@ def load_configs(session: Session) -> int:
         raw_text = config_path.read_text(encoding="utf-8", errors="replace")
         parsed = _parse_config_text(raw_text)
 
-        existing = session.scalar(select(Config).where(Config.source == source))
+        stored_path = relative_path(config_path)
+        existing = session.scalar(select(Config).where(Config.source_file == stored_path))
         if existing is None:
-            existing = Config(source=source)
+            existing = Config(source=source, source_file=stored_path)
             session.add(existing)
 
+        existing.source = source
         existing.raw_text = raw_text
-        existing.source_file = relative_path(config_path)
+        existing.source_file = stored_path
         existing.query_string = parsed["query_string"]
         existing.filters = parsed["filters"]
         existing.year_range = parsed["year_range"]

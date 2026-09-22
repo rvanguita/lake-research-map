@@ -122,12 +122,12 @@ def test_hybrid_search_rrf_merges_dense_and_sparse():
             {
                 "id": 1,
                 "text": "Solar power distribution planning",
-                "embedding": [1.0, 0.0, 0.0],
+                "embedding_bin": np.array([1.0, 0.0, 0.0], dtype=np.float32).tobytes(),
             },
             {
                 "id": 2,
                 "text": "Battery storage coordination",
-                "embedding": [0.0, 1.0, 0.0],
+                "embedding_bin": np.array([0.0, 1.0, 0.0], dtype=np.float32).tobytes(),
             },
         ]
     )
@@ -138,3 +138,6 @@ def test_hybrid_search_rrf_merges_dense_and_sparse():
     assert "score" in res.columns
     assert "dense_score" in res.columns
     assert "bm25_score" in res.columns
+    assert "dense_rank" in res.columns
+    assert "bm25_rank" in res.columns
+    assert res.iloc[0]["dense_rank"] == 1

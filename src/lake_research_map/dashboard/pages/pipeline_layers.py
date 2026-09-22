@@ -45,13 +45,13 @@ def _render_search_provenance() -> None:
             st.code(str(row.get("query_string") or "—"), language=None, wrap_lines=True)
             columns = st.columns(2)
             columns[0].metric("Year range", str(row.get("year_range") or "—"))
-            columns[1].metric("Filtros", str(row.get("filters") or "—"))
+            columns[1].metric("Filters", str(row.get("filters") or "—"))
             search_url = row.get("search_url")
             if search_url:
                 st.link_button(
-                    "Abrir busca original", str(search_url), icon=":material/open_in_new:"
+                    "Open original search", str(search_url), icon=":material/open_in_new:"
                 )
-            st.caption(f"Arquivo: {row.get('source_file') or '—'}")
+            st.caption(f"File: {row.get('source_file') or '—'}")
 
 
 def render() -> None:
@@ -70,8 +70,8 @@ def render() -> None:
     if runs_df.empty:
         hero_banner(
             "No execution history",
-            "Perform the pipeline to popularize the historical — "
-            "The statistics are automatically recorded at each execution.",
+            "Run the pipeline to populate its history. Statistics are recorded automatically "
+            "for each execution.",
         )
     else:
         last = runs_df.iloc[0]
@@ -127,7 +127,7 @@ def render() -> None:
             _drift_check(funnel_df)
         if has_pipeline_data:
             _metadata_coverage_by_layer()
-            st.subheader("Crude counting per table")
+            st.subheader("Raw row count by table")
             st.dataframe(row_counts, hide_index=True, width="stretch")
         else:
             st.info("There are still no layers to compare.")
@@ -160,8 +160,8 @@ def _render_contract_status(quality_df: pd.DataFrame) -> None:
     metric_row(
         [
             ("Verifications", f"{len(latest):,}", "last result by contract"),
-            ("Bloqueios", f"{len(failures):,}", "severidade error"),
-            ("Alertas", f"{len(warnings):,}", "non-blockers"),
+            ("Blocking failures", f"{len(failures):,}", "error severity"),
+            ("Warnings", f"{len(warnings):,}", "non-blocking"),
         ]
     )
     if failures.empty:
@@ -169,7 +169,7 @@ def _render_contract_status(quality_df: pd.DataFrame) -> None:
     else:
         st.error(
             f"{len(failures)} blocking contract(s) failed; the candidate version cannot "
-            "ser publicada."
+            "be published."
         )
     display = latest[
         [
@@ -183,13 +183,13 @@ def _render_contract_status(quality_df: pd.DataFrame) -> None:
         ]
     ].rename(
         columns={
-            "stage": "Etapa",
-            "check_id": "Contrato",
-            "severity": "Severidade",
-            "passed": "Aprovado",
-            "observed": "Observado",
-            "expected": "Esperado",
-            "checked_at": "Verificado em",
+            "stage": "Stage",
+            "check_id": "Contract",
+            "severity": "Severity",
+            "passed": "Passed",
+            "observed": "Observed",
+            "expected": "Expected",
+            "checked_at": "Checked at",
         }
     )
     st.dataframe(display, hide_index=True, width="stretch")
@@ -207,8 +207,8 @@ def _render_version_audit(versions_df: pd.DataFrame, publication_df: pd.DataFram
         working = publication_df.iloc[0].get("working_version_id")
     metric_row(
         [
-            ("Active version", str(active)[:12] if active else "—", "Gold publicado"),
-            ("Working version", str(working)[:12] if working else "—", "pipeline atual"),
+            ("Active version", str(active)[:12] if active else "—", "published Gold"),
+            ("Working version", str(working)[:12] if working else "—", "current pipeline"),
             ("Registered versions", f"{len(versions_df):,}", None),
         ]
     )
@@ -233,7 +233,7 @@ def _render_execution_audit(executions_df: pd.DataFrame, runs_df: pd.DataFrame) 
     st.subheader("Correlated executions and stages")
     if executions_df.empty:
         if runs_df.empty:
-            st.info("Run the pipeline to popularize the history.")
+            st.info("Run the pipeline to populate its history.")
         else:
             st.dataframe(runs_df, hide_index=True, width="stretch")
         return
@@ -386,7 +386,7 @@ def _retention_by_stage(funnel_df: pd.DataFrame) -> None:
 
 
 def _drift_check(funnel_df: pd.DataFrame) -> None:
-    st.subheader("")
+    st.subheader("Raw-to-Bronze drift")
     drift = funnel_df.copy()
     drift["drift"] = drift["bronze"] - drift["raw"]
     drift_display = drift[["source", "raw", "bronze", "drift"]].copy()
@@ -396,10 +396,10 @@ def _drift_check(funnel_df: pd.DataFrame) -> None:
     st.dataframe(drift_display, hide_index=True, width="stretch")
     if has_drift:
         st.warning(
-            "Bronze is upsert-only and never removes lines "
-            "orphans (`_upsert` in `bronze_articles.py`) — if a `.bib`/CSV file is removed from `data/`, "
-            "A positive `bronze > raw` is this symptom; investigate before "
-            "trusting bronze counts as a faithful mirror of the current raw layer."
+            "Under the append source policy, Bronze retains records from archived inputs that are "
+            "absent from the current download. A positive `bronze > raw` can therefore reflect "
+            "retained history rather than corruption; inspect the source-change audit before treating "
+            "Bronze as a mirror of the files currently on disk."
         )
     else:
         st.success("Bronze and Raw are aligned to both bases — no drift signal.")
@@ -415,7 +415,7 @@ def _metadata_coverage_by_layer() -> None:
         "abstract": "Abstract",
         "keywords": "Keywords",
         "citation_count": "Citations",
-        "has_pdf": "PDF vinculado",
+        "has_pdf": "Linked PDF",
     }
     rows = []
     for layer in ("bronze", "silver", "gold"):
@@ -454,12 +454,12 @@ def _metadata_coverage_by_layer() -> None:
             CATEGORICAL_PALETTE[0],
             CATEGORICAL_PALETTE[2],
         ],
-        labels={"field": "Campo", "coverage": "Preenchimento (%)", "layer": "Layer"},
+        labels={"field": "Field", "coverage": "Completeness (%)", "layer": "Layer"},
     )
     fig.update_traces(hovertemplate="<b>%{x}</b><br>%{data.name}: %{y:.1f}%<extra></extra>")
     render_chart(
         fig,
-        caption="Shows what each layer gains and loses: gold projects silver discarding `issn`, `volume`, "
-        "`issue`, `pages` and quality flags — but maintains `sources` (added in this refactoring) "
-        "to allow the break IEEE/Elsevier also in gold.",
+        caption="Shows what each layer gains and loses. Gold projects Silver without `issn`, `volume`, "
+        "`issue`, `pages`, or Silver-only quality flags, while retaining `sources` so the IEEE/Elsevier "
+        "breakdown remains available in Gold.",
     )

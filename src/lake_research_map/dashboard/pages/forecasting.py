@@ -342,9 +342,9 @@ def _render_series_forecast(label: str, color: str, result: ForecastResult) -> N
     )
     render_chart(
         fig,
-        caption=f"Bars = observed (including partial {HOLDOUT_YEAR}). Dotted line = model fit "
-        "in history. "
-        "records already indexed for the next year, shown apart because they are not the final total of it.",
+        caption=f"Bars are observed volumes, including partial {HOLDOUT_YEAR}; the dotted line is "
+        "the historical model fit. Any records already indexed for the following year are shown "
+        "separately because they do not represent that year's final total.",
     )
 
     with st.expander("📋 Comparison of candidate models"):
@@ -479,8 +479,9 @@ def _keyword_growth_ranking() -> None:
             render_chart(
                 fig,
                 caption=f"The same forecasting engine used for publication volume, applied to each keyword with at "
-                f"least {MIN_KEYWORD_OCCURRENCES} occurrences in the corpus. The same caveat applies: {HOLDOUT_YEAR} is a "
-                "Partial year and corpus is incomplete — read as a directional sign, not as an exact number.",
+                f"least {MIN_KEYWORD_OCCURRENCES} occurrences in the corpus. The same caveat applies: "
+                f"{HOLDOUT_YEAR} is partial and the corpus is incomplete, so interpret the projection "
+                "as directional rather than exact.",
             )
 
     with st.expander("📋 Complete table of topics evaluated"):
@@ -490,9 +491,9 @@ def _keyword_growth_ranking() -> None:
 def _bass_diffusion_analysis() -> None:
     st.subheader("📊 Bass Diffusion Model for Emerging Technologies")
     st.caption(
-        "The Bass Diffusion Model (1969) models the cycle of adoption of technological innovations. "
-        "separating the external influence of innovators (p) from the influence of internal contagion/imitation (q). "
-        "It allows estimating the theoretical saturation capacity (m) and the year of peak of publications (t*)."
+        "The Bass diffusion model represents the adoption cycle of technological innovations by "
+        "separating innovators' external influence (p) from internal imitation effects (q). It also "
+        "estimates theoretical saturation (m) and the peak publication year (t*)."
     )
     from lake_research_map.dashboard.forecasting import fit_bass_diffusion_nls
 

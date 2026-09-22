@@ -2,9 +2,8 @@
 
 Provides free, public bibliographic enrichment without requiring an API key.
 OpenAlex allows up to 10 requests/second without authentication (polite pool
-when including an email in headers or query params).
-
-Touches `data/enrichment_cache.json` to store enriched counts incrementally.
+when including an email in headers or query params). Responses are persisted
+as append-only observations rather than rewriting a local cache file.
 """
 
 from __future__ import annotations
@@ -15,7 +14,6 @@ import logging
 import os
 import time
 from datetime import UTC, datetime
-from pathlib import Path
 from urllib.parse import quote
 
 import requests
@@ -29,7 +27,7 @@ from lake_research_map.db.bronze_models import (
     EnrichmentObservation,
     ExternalWork,
 )
-from lake_research_map.ingest.enrichment import ENRICHMENT_CACHE_PATH, _normalize_doi
+from lake_research_map.ingest.enrichment import _normalize_doi
 
 logger = logging.getLogger(__name__)
 
@@ -272,63 +270,6 @@ def _persist_openalex_evidence(session: Session, result: dict, observed_at: date
             landing_page_url=location.get("landing_page_url"),
         )
     )
-
-
-def enrich_cache_from_openalex(
-    dois: list[str],
-    *,
-    cache_path: Path | None = None,
-    max_fetch: int = 50,
-    delay: float = 0.1,
-    email: str | None = None,
-) -> dict:
-    """Enrich missing entries in `data/enrichment_cache.json` using OpenAlex.
-
-    Operates incrementally: skips DOIs already present with non-null citation_count.
-    Writes back to the cache file after completion.
-    """
-    path = cache_path or ENRICHMENT_CACHE_PATH
-    cache: dict[str, dict[str, int | None]] = {}
-    if path.exists():
-        try:
-            cache = json.loads(path.read_text())
-        except (OSError, json.JSONDecodeError):
-            cache = {}
-
-    to_fetch: list[str] = []
-    for raw_doi in dois:
-        norm = _normalize_doi(raw_doi)
-        if not norm:
-            continue
-        existing = cache.get(norm)
-        if existing is None or existing.get("citation_count") is None:
-            to_fetch.append(norm)
-
-    fetched_count = 0
-    updated_count = 0
-
-    for doi in to_fetch[:max_fetch]:
-        result = fetch_openalex_work(doi, email=email)
-        fetched_count += 1
-        if result and (
-            result["citation_count"] is not None or result["reference_count"] is not None
-        ):
-            cache[doi] = result
-            updated_count += 1
-        if delay > 0:
-            time.sleep(delay)
-
-    if updated_count > 0:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(cache, indent=2, sort_keys=True))
-
-    return {
-        "requested": len(dois),
-        "pending": len(to_fetch),
-        "fetched": fetched_count,
-        "updated": updated_count,
-        "total_cache_entries": len(cache),
-    }
 
 
 # ---------------------------------------------------------------------------

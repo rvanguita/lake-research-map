@@ -26,7 +26,7 @@ LAYER_TABLES = {
         "lit_bib_entries",
         "lit_pdf_files",
     ],
-    "bronze": ["lit_articles"],
+    "bronze": ["lit_articles", "lit_enrichment_observations"],
     "silver": ["lit_articles"],
     "gold": [
         "lit_articles",
@@ -134,6 +134,17 @@ def load_search_configs() -> pd.DataFrame:
     return pd.read_sql_table("lit_config", engine)
 
 
+def load_enrichment_observation_times() -> pd.DataFrame:
+    """Observation timestamps for time-varying bibliometric metadata."""
+    if not table_exists("bronze", "lit_enrichment_observations"):
+        return pd.DataFrame(columns=["observed_at"])
+    engine = get_engine("bronze")
+    table = Table("lit_enrichment_observations", MetaData(), autoload_with=engine)
+    if "observed_at" not in table.c:
+        return pd.DataFrame(columns=["observed_at"])
+    return pd.read_sql_query(select(table.c.observed_at), engine)
+
+
 def assess_gold_articles(df: pd.DataFrame) -> tuple[str, ...]:
     """Return reasons why a Gold frame is not safe as the analytical population."""
     if df.empty:
@@ -194,12 +205,6 @@ def select_articles_layer() -> tuple[str, pd.DataFrame, dict[str, object]]:
     )
 
 
-def pick_best_articles_layer() -> tuple[str, pd.DataFrame]:
-    """Backward-compatible wrapper around the canonical layer selector."""
-    layer, df, _ = select_articles_layer()
-    return layer, df
-
-
 def load_articles_all_layers() -> dict[str, pd.DataFrame]:
     """Load `articles` from bronze, silver, and gold in one call.
 
@@ -238,6 +243,24 @@ def load_chunks() -> pd.DataFrame:
 def load_semantics() -> pd.DataFrame:
     """Per-article semantic signals from `gold.lit_semantics` (`--stage semantic`)."""
     return load_active_dataset_table("lit_dataset_semantics")
+
+
+def load_active_semantic_run() -> pd.DataFrame:
+    """Latest semantic-run manifest attached to the active Gold version."""
+    version_id = active_dataset_version()
+    if version_id is None or not table_exists("gold", "lit_semantic_runs"):
+        return pd.DataFrame()
+    engine = get_engine("gold")
+    table = Table("lit_semantic_runs", MetaData(), autoload_with=engine)
+    if "dataset_version_id" not in table.c:
+        return pd.DataFrame()
+    statement = (
+        select(table)
+        .where(table.c.dataset_version_id == version_id)
+        .order_by(table.c.created_at.desc())
+        .limit(1)
+    )
+    return pd.read_sql_query(statement, engine)
 
 
 def load_duplicate_pairs() -> pd.DataFrame:

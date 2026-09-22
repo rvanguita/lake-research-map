@@ -93,12 +93,13 @@ class SourceChange(Base):
 
 
 class Config(Base):
-    """Parsed provenance from data/{ieee,elsevier}/config.csv (free text)."""
+    """One parsed search-provenance report per source file."""
 
     __tablename__ = "lit_config"
+    __table_args__ = (UniqueConstraint("source_file", name="uq_lit_config_source_file"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    source: Mapped[str] = mapped_column(String(32), unique=True)
+    source: Mapped[str] = mapped_column(String(32), index=True)
     query_string: Mapped[str | None] = mapped_column(Text, nullable=True)
     filters: Mapped[str | None] = mapped_column(Text, nullable=True)
     year_range: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -110,7 +111,7 @@ class Config(Base):
 
 
 class IeeeCsvRow(Base):
-    """One row per line of data/ieee/export*.csv, columns kept as text."""
+    """One row per IEEE metadata CSV line, with columns kept as text."""
 
     __tablename__ = "lit_ieee_csv_rows"
 

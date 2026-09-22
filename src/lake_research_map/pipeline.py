@@ -1381,7 +1381,11 @@ def _run_evidence_command(args: argparse.Namespace) -> None:
             # Retrieval pools the live search modes, so it needs the embedded
             # corpus rather than the silver metadata the others read.
             from lake_research_map.dashboard import loaders
-            from lake_research_map.dashboard.search import hybrid_search_rrf
+            from lake_research_map.dashboard.search import (
+                bm25_search,
+                hybrid_search_rrf,
+                semantic_search,
+            )
 
             # Loaded once: every query pools over the same chunk population,
             # and re-reading it per query would be ten full table scans.
@@ -1397,8 +1401,19 @@ def _run_evidence_command(args: argparse.Namespace) -> None:
                 )
 
             def _retrieve(text: str, depth: int) -> list[str]:
-                hits = hybrid_search_rrf(text, chunk_frame, top_k=depth)
-                return [str(doi) for doi in hits["doi"]] if "doi" in hits else []
+                frames = (
+                    semantic_search(text, chunk_frame, top_k=depth),
+                    bm25_search(text, chunk_frame, top_k=depth),
+                    hybrid_search_rrf(text, chunk_frame, top_k=depth),
+                )
+                # Preserve each mode's rank order before de-duplicating the
+                # pooled judgement candidates. No mode supplies the ground
+                # truth for its competitors.
+                return list(
+                    dict.fromkeys(
+                        str(doi) for hits in frames if "doi" in hits for doi in hits["doi"]
+                    )
+                )
 
             subjects, stats = evidence_samples.retrieval_candidates(_retrieve, depth=limit or 10)
             workflow = "retrieval"

@@ -15,7 +15,7 @@ import os
 import shutil
 import subprocess
 import tempfile
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -91,8 +91,10 @@ def _supported_paths(data_dir: Path) -> list[tuple[Path, str, str]]:
         }
         config_paths = (
             ("ieee", data_dir / "ieee" / "config.csv"),
+            ("ieee", data_dir / "references" / "IEEE Xplore" / "config.csv"),
             ("elsevier", data_dir / "elsevier" / "config.csv"),
             ("elsevier", data_dir / "config.csv"),
+            ("elsevier", data_dir / "references" / "Science Direct" / "config.csv"),
         )
     for source, config in config_paths:
         if config.is_file():
@@ -238,10 +240,6 @@ def build_fingerprint(
         code_sha256=code_sha,
         curation_sha256=curation_sha,
     )
-
-
-def source_as_dict(source: ScannedSource) -> dict[str, Any]:
-    return asdict(source)
 
 
 def diff_manifests(

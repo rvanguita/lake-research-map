@@ -20,7 +20,7 @@ from lake_research_map.dashboard.components import (
     render_chart,
     require_columns,
 )
-from lake_research_map.dashboard.search import hybrid_search_rrf, semantic_search
+from lake_research_map.dashboard.search import bm25_search, hybrid_search_rrf, semantic_search
 from lake_research_map.dashboard.theme import (
     CATEGORICAL_PALETTE,
     CHART_HEIGHT,
@@ -138,7 +138,7 @@ def _ieee_extras(articles_df: pd.DataFrame) -> None:
             ("🔷 IEEE articles", f"{n_ieee:,}", None),
             ("🌍 With identified country", f"{with_country:,}", f"{with_country / n_ieee:.0%}"),
             (
-                "🗓️ Com data online",
+                "🗓️ With an online date",
                 f"{int(ieee_only['online_date'].notna().sum()):,}"
                 if "online_date" in ieee_only.columns
                 else "n/a",
@@ -198,9 +198,9 @@ def _ieee_extras(articles_df: pd.DataFrame) -> None:
                 )
                 render_chart(
                     fig,
-                    caption="`Online Date` is the unique** corpus field with finer resolution than the "
-                    "year — in all the rest of the dashboard only the year survives. "
-                    "and the gap between online publication and formal edition.",
+                    caption="`Online Date` is the **only** corpus field with finer resolution than "
+                    "year; elsewhere in the dashboard only the publication year survives. It can "
+                    "reveal seasonality and the lag between online publication and the formal issue.",
                 )
 
     if sub_tipo.open:
@@ -372,11 +372,9 @@ def _fulltext_coverage(articles_df: pd.DataFrame, chunks_df: pd.DataFrame) -> No
         metric_row(
             [
                 (
-                    "",
+                    "📄 PDFs without extracted text",
                     f"{max(n_pdf_no_chunks, 0):,}",
-                    "extraction failed or empty PDF"
-                    if n_pdf_no_chunks > 0
-                    else "todos processados",
+                    "extraction failed or empty PDF" if n_pdf_no_chunks > 0 else "all processed",
                 ),
             ]
         )
@@ -485,8 +483,8 @@ def _metadata_coverage(articles_df: pd.DataFrame) -> None:
         "reference_count": "References",
         "has_pdf": "PDF available",
     }
-    coverage["Campo"] = coverage["field"].map(labels).fillna(coverage["field"])
-    matrix = coverage.pivot(index="Campo", columns="source", values="coverage")
+    coverage["Field"] = coverage["field"].map(labels).fillna(coverage["field"])
+    matrix = coverage.pivot(index="Field", columns="source", values="coverage")
     st.subheader("Completeness of common fields by source")
     fig = px.imshow(
         matrix,
@@ -495,28 +493,28 @@ def _metadata_coverage(articles_df: pd.DataFrame) -> None:
         text_auto=".0%",
         aspect="auto",
         color_continuous_scale="Blues",
-        labels={"x": "Source", "y": "Campo", "color": "Cobertura"},
+        labels={"x": "Source", "y": "Field", "color": "Completeness"},
     )
-    fig.update_layout(xaxis_title="Source", yaxis_title="Campo")
+    fig.update_layout(xaxis_title="Source", yaxis_title="Field")
     render_chart(
         fig,
-        caption="Each cell uses only the articles of the indicated source as a denominator. "
-        "Availability, not simple existence of the column. "
-        "separately below to avoid classifying structural absence of Elsevier as a failure.",
+        caption="Each cell uses only articles from the indicated source as its denominator and "
+        "measures usable values, not merely whether the column exists. IEEE-only fields are reported "
+        "separately below so Elsevier's structural absence is not misclassified as a quality failure.",
     )
-    exact = coverage[["Campo", "source", "n_total", "n_present", "coverage"]].rename(
+    exact = coverage[["Field", "source", "n_total", "n_present", "coverage"]].rename(
         columns={
             "source": "Source",
             "n_total": "Total",
-            "n_present": "Presentes",
-            "coverage": "Cobertura",
+            "n_present": "Present",
+            "coverage": "Completeness",
         }
     )
     st.dataframe(
         exact,
         hide_index=True,
         width="stretch",
-        column_config={"Cobertura": st.column_config.ProgressColumn(format="percent")},
+        column_config={"Completeness": st.column_config.ProgressColumn(format="percent")},
     )
 
 
@@ -614,9 +612,8 @@ def _chunk_length_histogram(chunks_df: pd.DataFrame) -> None:
     render_chart(
         fig,
         height=CHART_HEIGHT,
-        caption=f"The axis extends to the {CHUNK_MAX_CHARS:,}-character ceiling used to split the "
-        "texto completo (`gold_articles.CHUNK_MAX_CHARS`); fragmentos excessivamente curtos perdem "
-        "Semantic context.",
+        caption=f"The axis extends to the {CHUNK_MAX_CHARS:,}-character ceiling used to split full "
+        "text (`gold_articles.CHUNK_MAX_CHARS`). Very short fragments lose semantic context.",
     )
 
 
@@ -653,9 +650,7 @@ def _chunks_per_article(chunks_df: pd.DataFrame) -> None:
     )
 
 
-def _render_result_card(
-    row: pd.Series, term_pattern: re.Pattern | None, score: float | None
-) -> None:
+def _render_result_card(row: pd.Series, term_pattern: re.Pattern | None) -> None:
     text = str(row["text"])
     if term_pattern:
         match = term_pattern.search(text)
@@ -672,8 +667,15 @@ def _render_result_card(
     chunk_type = row.get("chunk_type", "")
     with st.container(border=True):
         header = f"**{chunk_type}**"
-        if score is not None:
-            header += f" · similaridade {score:.2f}"
+        if pd.notna(row.get("score")):
+            label = "RRF score" if pd.notna(row.get("dense_score")) else "dense score"
+            header += f" · {label} {float(row['score']):.3f}"
+        if pd.notna(row.get("dense_rank")):
+            header += f" · dense rank {int(row['dense_rank'])}"
+        if pd.notna(row.get("bm25_score")):
+            header += f" · BM25 {float(row['bm25_score']):.3f}"
+        if pd.notna(row.get("bm25_rank")):
+            header += f" · BM25 rank {int(row['bm25_rank'])}"
         if doi:
             header += f" · [{doi}](https://doi.org/{doi})"
         st.markdown(header)
@@ -692,16 +694,15 @@ def _search_demo(chunks_df: pd.DataFrame) -> None:
         )
     else:
         st.caption(
-            "This simulates a keyword retrieval, *not** a real semantic search — the column "
-            "`embedding` has not yet been completed (see the indicator above; turn the `embed` step of the "
-            "pipeline). "
-            "answer context."
+            "This is keyword retrieval, **not** semantic search: embeddings are not yet available. "
+            "Run the `embed` stage to enable dense and hybrid retrieval. Keyword matches are useful "
+            "for exact terms but do not measure semantic relevance."
         )
     if chunks_df.empty or "doi" not in chunks_df.columns:
         st.info("No chunk available in this layer/filter.")
         return
 
-    search_mode = "Hybrid (Vetorial + BM25 RRF)"
+    search_mode = "Hybrid (vector + BM25 RRF)"
     if has_embeddings:
         col_q, col_m = st.columns([3, 2])
         with col_q:
@@ -712,7 +713,11 @@ def _search_demo(chunks_df: pd.DataFrame) -> None:
         with col_m:
             search_mode = st.radio(
                 "Recovery algorithm:",
-                options=["Hybrid (Vetorial + BM25 RRF)", "Vetorial Puro (BGE-Small)"],
+                options=[
+                    "Hybrid (vector + BM25 RRF)",
+                    "Dense vector (BGE-Small)",
+                    "BM25 lexical",
+                ],
                 horizontal=True,
             )
     else:
@@ -739,9 +744,12 @@ def _search_demo(chunks_df: pd.DataFrame) -> None:
         if "Hybrid" in search_mode:
             matches = hybrid_search_rrf(query, scoped, top_k=SEARCH_DEMO_MAX_RESULTS)
             caption_mode = "Hybrid Search RRF (BGE-Small + BM25 Okapi)"
-        else:
+        elif search_mode.startswith("Dense"):
             matches = semantic_search(query, scoped, top_k=SEARCH_DEMO_MAX_RESULTS)
             caption_mode = "Dense vector search (BGE-Small)"
+        else:
+            matches = bm25_search(query, scoped, top_k=SEARCH_DEMO_MAX_RESULTS)
+            caption_mode = "BM25 lexical search"
         st.caption(
             f"{caption_mode} — Top {len(matches):,} most relevant chunks (of {len(scoped):,} available)."
         )
@@ -756,20 +764,19 @@ def _search_demo(chunks_df: pd.DataFrame) -> None:
 
     term_pattern = re.compile(re.escape(query), re.IGNORECASE)
     for _, row in matches.iterrows():
-        score = float(row["score"]) if has_embeddings and "score" in row else None
-        _render_result_card(row, term_pattern, score)
+        _render_result_card(row, term_pattern)
 
     if not has_embeddings and n_total_matches > SEARCH_DEMO_MAX_RESULTS:
         st.caption(f"Showing {SEARCH_DEMO_MAX_RESULTS} of {n_total_matches:,} results.")
 
 
 def _bibliometric_anomalies_audit(articles_df: pd.DataFrame) -> None:
-    st.subheader("Isolation Forest (Isolation Forest)")
+    st.subheader("Unsupervised anomaly audit (Isolation Forest)")
     st.caption(
-        "The Isolation Forest algorithm isolates atypical observations through random partitioning of space "
-        "multidimensional attributes (year of publication, citation count, references, co-authors and authors) "
-        "Thematic relevance).Anomalous articles require fewer divisions to be isolated, revealing "
-        "Recent hyper-cited publications, unusual mega-teams, metadata deviations or indexing noise."
+        "Isolation Forest identifies atypical observations by randomly partitioning a multidimensional "
+        "feature space: publication year, citation and reference counts, co-author count, and thematic "
+        "relevance. Articles isolated with fewer partitions may be recent highly cited papers, unusual "
+        "mega-teams, metadata deviations, or indexing noise."
     )
 
     signals = loaders.semantics()
