@@ -2394,6 +2394,44 @@ def detect_bibliometric_anomalies(df: pd.DataFrame, contamination: float = 0.03)
     return res
 
 
+# The regexes `optimization_methods_taxonomy` classifies with, hoisted to module
+# scope so a sampler drawing strata for human review matches on exactly the same
+# rule the dashboard displays. Re-deriving the match from the label text (which
+# `evidence taxonomy` did at first) silently produced zero classes and asked
+# reviewers to label a stratum the classifier does not recognise.
+OPTIMIZATION_METHOD_PATTERNS: dict[str, re.Pattern[str]] = {
+    "Multi-objective Optimization": re.compile(r"multi-objective|pareto"),
+    "Genetic Algorithms (GA)": re.compile(r"genetic algorithm|\bga\b"),
+    "Particle Swarm Optimization (PSO)": re.compile(r"particle swarm|\bpso\b"),
+    "Mixed-Integer Linear Programming (MILP)": re.compile(r"milp|mixed-integer linear"),
+    "Machine Learning & AI": re.compile(
+        r"machine learning|deep learning|reinforcement learning|neural network"
+    ),
+    "Other Metaheuristics": re.compile(
+        r"differential evolution|harmony search|simulated annealing|ant colony"
+    ),
+    "Stochastic Programming": re.compile(r"stochastic programming|scenario-based"),
+    "Robust Optimization": re.compile(r"robust optimization|robust approach"),
+    "Conical / Convex Relaxation (SOCP)": re.compile(
+        r"second-order cone|conic|convex relaxation|socp"
+    ),
+}
+
+
+def taxonomy_haystack(frame: pd.DataFrame) -> pd.Series:
+    """Lowercased title + abstract, the exact text the taxonomy matches against.
+
+    Keywords are deliberately excluded because the classifier excludes them;
+    a sampler that searched a wider field would build strata the dashboard
+    disagrees with.
+    """
+    return (
+        frame.get("title", pd.Series("", index=frame.index)).fillna("").astype(str)
+        + " "
+        + frame.get("abstract", pd.Series("", index=frame.index)).fillna("").astype(str)
+    ).str.lower()
+
+
 def optimization_methods_taxonomy(df: pd.DataFrame) -> dict:
     """Extract and quantify optimization methods used across the corpus.
 
@@ -2412,23 +2450,7 @@ def optimization_methods_taxonomy(df: pd.DataFrame) -> dict:
     if df.empty:
         return {"summary_df": pd.DataFrame(), "temporal_df": pd.DataFrame()}
 
-    opt_patterns = {
-        "Multi-objective Optimization": re.compile(r"multi-objective|pareto"),
-        "Genetic Algorithms (GA)": re.compile(r"genetic algorithm|\bga\b"),
-        "Particle Swarm Optimization (PSO)": re.compile(r"particle swarm|\bpso\b"),
-        "Mixed-Integer Linear Programming (MILP)": re.compile(r"milp|mixed-integer linear"),
-        "Machine Learning & AI": re.compile(
-            r"machine learning|deep learning|reinforcement learning|neural network"
-        ),
-        "Other Metaheuristics": re.compile(
-            r"differential evolution|harmony search|simulated annealing|ant colony"
-        ),
-        "Stochastic Programming": re.compile(r"stochastic programming|scenario-based"),
-        "Robust Optimization": re.compile(r"robust optimization|robust approach"),
-        "Conical / Convex Relaxation (SOCP)": re.compile(
-            r"second-order cone|conic|convex relaxation|socp"
-        ),
-    }
+    opt_patterns = OPTIMIZATION_METHOD_PATTERNS
 
     if "_cached_titles_abs" not in df.columns:
         df["_cached_titles_abs"] = (

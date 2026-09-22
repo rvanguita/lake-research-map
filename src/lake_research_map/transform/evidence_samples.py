@@ -253,58 +253,37 @@ def stratify_taxonomy(
 ) -> tuple[list[str], dict]:
     """Sample DOIs per taxonomy class, with an explicit unclassified stratum.
 
+    The strata come from `OPTIMIZATION_METHOD_PATTERNS` and are matched against
+    the same title+abstract text the classifier uses, so a reviewer labels the
+    exact class the dashboard would assign. An earlier version re-derived the
+    match from the words in each label, which matched nothing and reported the
+    whole corpus as unclassified.
+
     The unclassified stratum is not optional. Precision measured only on
     articles the regex already matched cannot see false negatives, and a
     taxonomy that silently drops a third of the corpus is the failure mode
     most worth catching.
     """
-    from lake_research_map.dashboard.analytics import optimization_methods_taxonomy
+    from lake_research_map.dashboard.analytics import (
+        OPTIMIZATION_METHOD_PATTERNS,
+        taxonomy_haystack,
+    )
 
     if frame.empty or "doi" not in frame.columns:
-        return [], {"classes": {}, "unclassified": 0}
+        return [], {"classes": {}, "unclassified": 0, "population": 0}
 
-    working = frame.copy()
-    for column, default in (("title", ""), ("abstract", ""), ("keywords", None)):
-        if column not in working.columns:
-            working[column] = [[] for _ in range(len(working))] if default is None else default
-    # The classifier reads `year` and `citation_count` for its summary columns.
-    # Padding them keeps sampling independent of which layer the frame came
-    # from -- the stratification only needs the text fields.
-    if "year" not in working.columns:
-        working["year"] = 2020
-    if "citation_count" not in working.columns:
-        working["citation_count"] = 0
-
-    try:
-        taxonomy = optimization_methods_taxonomy(working)
-    except (KeyError, ValueError):
-        logger.debug("taxonomy sampling: classifier failed", exc_info=True)
-        return [], {"classes": {}, "unclassified": 0, "reason": "classifier_failed"}
-
-    haystack = (
-        working["title"].fillna("").astype(str)
-        + " "
-        + working["abstract"].fillna("").astype(str)
-        + " "
-        + working["keywords"].apply(
-            lambda value: " ".join(value) if isinstance(value, list) else str(value or "")
-        )
-    ).str.lower()
+    working = frame.dropna(subset=["doi"]).copy()
+    if working.empty:
+        return [], {"classes": {}, "unclassified": 0, "population": 0}
+    haystack = taxonomy_haystack(working)
 
     rng = np.random.default_rng(seed)
     subjects: list[str] = []
     class_counts: dict[str, int] = {}
     matched_any = pd.Series(False, index=working.index)
 
-    summary = taxonomy.get("summary")
-    labels = list(summary["method"]) if isinstance(summary, pd.DataFrame) else []
-    for label in labels:
-        # Match on the label's own words; the classifier's internal patterns
-        # are not exported, and a reviewer only needs a stratum, not the rule.
-        tokens = [token for token in re.split(r"[^a-z0-9]+", label.lower()) if len(token) > 3]
-        if not tokens:
-            continue
-        hit = haystack.apply(lambda text, tk=tokens: any(token in text for token in tk))
+    for label, pattern in OPTIMIZATION_METHOD_PATTERNS.items():
+        hit = haystack.str.contains(pattern, regex=True)
         matched_any |= hit
         pool = working[hit]
         class_counts[label] = int(len(pool))
@@ -375,12 +354,24 @@ def retrieval_candidates(
     which modes to pool.
     """
     results: dict[str, list[str]] = {}
+    failures: dict[str, str] = {}
     for query_id, text in queries:
         try:
             results[query_id] = list(retrieve(text, depth))
-        except Exception:
-            logger.debug("retrieval sampling: query %r failed", query_id, exc_info=True)
+        except Exception as exc:
+            # A retrieval backend that cannot run is a hard failure, not an
+            # empty result set. Logging it at debug turned a broken call into
+            # "0 judgements" with nothing to explain it, which is exactly how
+            # an unusable sample reaches a reviewer.
+            logger.warning("retrieval sampling: query %s failed: %s", query_id, exc)
+            failures[query_id] = f"{type(exc).__name__}: {exc}"
             results[query_id] = []
     subjects, stats = pool_retrieval_results(results, depth=depth)
     stats["query_set_size"] = len(queries)
+    stats["failed_queries"] = failures
+    if failures and not subjects:
+        raise RuntimeError(
+            f"every retrieval query failed ({len(failures)}/{len(queries)}); "
+            f"first error: {next(iter(failures.values()))}"
+        )
     return subjects, stats
