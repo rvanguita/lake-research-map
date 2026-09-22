@@ -5,6 +5,7 @@ from __future__ import annotations
 import networkx as nx
 import numpy as np
 import pandas as pd
+import pytest
 
 from lake_research_map.dashboard.analytics import (
     age_normalized_citations,
@@ -249,8 +250,38 @@ def test_detect_structural_breaks():
     assert res["has_break"] is True
     assert res["break_year"] == 2010
     assert res["f_stat"] > 10.0
-    assert res["p_value"] < 0.001
     assert res["post_mean"] > res["pre_mean"]
+
+    # WP-16: the breakpoint is searched, so the reported p-value is empirical.
+    # It cannot resolve below 1/(draws+1), and asserting otherwise would be
+    # asking a permutation test for precision it does not have.
+    assert res["p_value"] < 0.05
+    assert res["p_value"] >= res["p_value_resolution"]
+    assert res["p_value_naive"] < 0.001  # the F-table value this replaces
+    assert res["bootstrap_samples"] == 200
+
+
+def test_searched_breakpoint_p_value_controls_false_positives():
+    """The F table is the wrong null for a maximum taken over every split.
+
+    Read against it, pure noise looks like a regime change about a third of
+    the time. The permutation p-value is what brings that back near nominal,
+    and that gap is the whole reason this statistic is bootstrapped.
+    """
+    from lake_research_map.dashboard.analytics import detect_structural_breaks
+
+    rng = np.random.default_rng(3)
+    trials = 60
+    naive_hits = 0
+    bootstrap_hits = 0
+    for seed in range(trials):
+        res = detect_structural_breaks(rng.normal(0, 1, 20), n_bootstrap=100, seed=seed)
+        naive_hits += res["p_value_naive"] < 0.05
+        bootstrap_hits += res["p_value"] < 0.05
+
+    assert naive_hits / trials > 0.20  # the defect: far above the nominal 5%
+    assert bootstrap_hits / trials < 0.15  # near nominal, allowing for 60 trials
+    assert bootstrap_hits < naive_hits
 
 
 def test_conceptual_atypicality_analysis():
@@ -333,3 +364,56 @@ def test_citation_determinants_glm_rejects_undersized_sample():
     assert "age_specifications" not in res
     assert "candidate_aic" not in res
     assert res["coefficients"] == []
+
+
+def test_mann_kendall_serial_correction_deflates_a_random_walk():
+    """A random walk has no trend, but Mann-Kendall reads one anyway.
+
+    That is the whole point of the Hamed-Rao correction: the independence
+    assumption manufactures significance out of autocorrelation. White noise
+    and a genuine trend must both come through it untouched.
+    """
+    rng = np.random.default_rng(5)
+
+    walk = np.cumsum(rng.normal(0, 1, 40))
+    res = mann_kendall_trend(walk)
+    assert res["serial_correction_factor"] > 1.5
+    assert res["p_value_serial_corrected"] > res["p_value_independent"]
+    # `p_value` stays the independent test unless the caller opts in.
+    assert res["p_value"] == res["p_value_independent"]
+    assert mann_kendall_trend(walk, serial_correction=True)["p_value"] == pytest.approx(
+        res["p_value_serial_corrected"]
+    )
+
+    noise = rng.normal(0, 1, 40)
+    assert mann_kendall_trend(noise)["serial_correction_factor"] == pytest.approx(1.0)
+
+    real_trend = np.arange(40) + rng.normal(0, 1, 40)
+    corrected = mann_kendall_trend(real_trend, serial_correction=True)
+    assert corrected["trend"] == "growing"
+    assert corrected["p_value"] < 0.01
+
+
+def test_mann_kendall_short_series_reports_a_neutral_correction():
+    # Below ten points the lag correlations are too noisy to correct with, so
+    # the factor must be exactly neutral rather than a guess.
+    res = mann_kendall_trend(np.array([1.0, 3.0, 2.0, 5.0, 4.0]))
+    assert res["serial_correction_factor"] == 1.0
+    assert res["p_value_serial_corrected"] == pytest.approx(res["p_value_independent"])
+
+
+def test_linear_slope_with_ci_reports_the_spread_a_ranking_hides():
+    from lake_research_map.dashboard.analytics import linear_slope_with_ci
+
+    clean = linear_slope_with_ci(np.arange(10), 2.0 * np.arange(10))
+    assert clean["slope"] == pytest.approx(2.0)
+    assert clean["ci_low"] <= clean["slope"] <= clean["ci_high"]
+
+    # Three noisy points have a slope but no usable precision: the interval
+    # has to straddle zero, which is exactly what the chart now shows.
+    noisy = linear_slope_with_ci([1, 2, 3], [5, 1, 6])
+    assert noisy["ci_low"] < 0 < noisy["ci_high"]
+    assert noisy["p_value"] > 0.05
+
+    degenerate = linear_slope_with_ci([1, 2], [1, 2])
+    assert np.isnan(degenerate["slope"])  # fewer than three points
