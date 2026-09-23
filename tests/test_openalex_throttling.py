@@ -207,25 +207,33 @@ def test_the_citing_batch_halts_after_five_throttled_works(bronze_session, monke
         )
     bronze_session.commit()
 
-    calls: list[str] = []
+    calls: list[list[str]] = []
+
+    def _all_throttled(work_ids, **kwargs):
+        calls.append(list(work_ids))
+        return {
+            work_id: {"citing_work_ids": [], "truncated": True, "throttled": True, "error": None}
+            for work_id in work_ids
+        }
+
     monkeypatch.setattr(
-        "lake_research_map.ingest.openalex.fetch_openalex_citing_works",
-        lambda work_id, **kwargs: (
-            calls.append(work_id),
-            {"citing_work_ids": [], "truncated": True, "pages": 0, "throttled": True},
-        )[1],
+        "lake_research_map.ingest.openalex.fetch_openalex_citing_batch", _all_throttled
     )
 
     stats = pipeline_module._refresh_citation_edges(
         bronze_session,
         argparse.Namespace(
-            max_works=20, delay=0.0, max_pages=1, refresh_all=False, commit_every=25
+            max_works=20, delay=0.0, max_pages=1, refresh_all=False, commit_every=25, batch_size=1
         ),
     )
 
     assert len(calls) == CONSECUTIVE_FAILURE_LIMIT
     assert stats["stopped_early"] == "rate_limited"
     assert stats["throttled_works"] == CONSECUTIVE_FAILURE_LIMIT
+    # The defect this guards: a throttled work used to be stamped as crawled
+    # and truncated, so the resume skipped it forever.
+    assert stats["works_crawled"] == 0
+    assert all(work.citing_crawled_at is None for work in bronze_session.query(ExternalWork).all())
 
 
 def test_a_wait_longer_than_the_cap_skips_retrying_entirely(monkeypatch):

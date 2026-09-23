@@ -26,7 +26,7 @@ Dependencies use work-package IDs. Horizons are sequencing bands rather than cal
 
 ## 2. Delivered baseline
 
-The following capabilities are implemented and covered by the current 369 passing tests plus two opt-in MySQL tests skipped in the default run (229 before this cycle, followed by regression, application-wide page, evidence-workflow, retrieval, provenance, semantic-persistence, MySQL migration, and year-bound coverage):
+The following capabilities are implemented and covered by the current 382 passing tests plus two opt-in MySQL tests skipped in the default run (229 before this cycle, followed by regression, application-wide page, evidence-workflow, retrieval, provenance, semantic-persistence, MySQL migration, and year-bound coverage):
 
 - Raw/Bronze/Silver/Gold ingestion and transformations with DOI normalization and rejection audit.
 - Local PDF inventory/matching, full-text extraction, chunk reconciliation, and local BGE embeddings.
@@ -108,7 +108,7 @@ This baseline does not imply that every analytical method is confirmatory. The l
 
 ### `WP-07` — Enrichment observations and temporal semantics
 
-- **Status:** Append-only observation, as-of selection, response provenance, and OpenAlex evidence schema implemented. The refresh gate was unsatisfiable until 2026-09-22 -- see Evidence -- and now needs only `OPENALEX_EMAIL`. The first live refresh ran on 2026-09-22 and observed **1,000 of 3,115 DOIs (32.1%)** before OpenAlex returned `X-RateLimit-Remaining: 0` against a limit of 1,000 per window; the remaining ~2,115 DOIs plus 73 throttled ones need roughly three further windows. Partial by quota, not by defect -- see `docs/evidence/2026-09-22-openalex-crawl.md`. The remaining DOIs are now one batched pass rather than two windows: the refresh OR-joins 50 DOIs per request, so the corpus costs 63 requests instead of 3,115.
+- **Status:** Complete on 2026-09-23. The OpenAlex refresh has observed **3,099 of 3,115 corpus DOIs (99.5%)**; the remaining 16 are `not_found` -- OpenAlex holds no record for them -- and the 75 that were throttled in the first window succeeded on retry. The pass is batched (50 DOIs per request, so the corpus costs 63 requests rather than 3,115), resumable, publisher-proportional in order (`ADR-07`), and stops itself on throttling. Observations are append-only with `observed_at`, so a later refresh adds a snapshot rather than rewriting one, and the dashboard reads its citation-age year from the latest persisted observation. See `docs/evidence/2026-09-23-openalex-closure.md`.
 
 - **Objective:** Make citation/reference data reproducible and refreshable.
 - **Justification:** The current cache stores only latest counts and cannot support an as-of analysis.
@@ -294,7 +294,7 @@ This baseline does not imply that every analytical method is confirmatory. The l
 
 ### `WP-23` — Reference-year and citation-history ingestion
 
-- **Status:** OpenAlex work and annual-count persistence implemented, and coverage measured for the first time on 2026-09-22: **819 of 1,000 observed works (81.9%) carry annual counts**, median 4 years, range 2012-2026. The 80% gate passes against the observed population and fails against the corpus (819/3,115 = 26.3%), because the crawl itself is only 32.1% complete. `audit citation-years` reports the observed population as the denominator on purpose: a work OpenAlex never resolved cannot have a trajectory, and mixing the two would make an unrun crawl look like missing data at the provider.
+- **Status:** Annual trajectories: **gate passes** -- 3,055 of 3,099 observed works (98.6%) have a known trajectory, of which 677 are never-cited works whose empty series is a known zero, not a gap. 584 works published before 2012 are left-censored because the provider's series begins in 2012, so longevity and Sleeping Beauty may use only the 2,515 works whose history is complete from publication. Cited-reference years: **gate fails today at 6.4%** of 89,700 reference pairs; the resolver (`enrichment resolve-references`, 50 works per request) is implemented and tested, and is running across the next two quota windows. Closes when `audit citation-years` reports both verdicts as PASS.
 
 - **Objective:** Enable valid literature-age and delayed-recognition analyses.
 - **Justification:** Price's index, citation longevity, and Sleeping Beauty metrics cannot be reconstructed from cumulative counts.
@@ -304,7 +304,7 @@ This baseline does not imply that every analytical method is confirmatory. The l
 
 ### `WP-24` — Citation graph and verified access data
 
-- **Status:** Incoming-edge collection and the coverage audit are implemented, fixture-tested, and reachable from the CLI as of 2026-09-22. First measurement the same day: **backward coverage 917 of 1,000 observed works (91.7%), forward coverage 0%** -- the forward crawl never ran, because the OpenAlex quota was exhausted by the backward pass. Usable population for a disruption index is therefore 0, which is this package's documented outcome for inadequate coverage rather than a defect. The forward pass also turned out to have no 429 handling at all, which a live run would have discovered the hard way; that is fixed and tested -- see `docs/evidence/2026-09-22-openalex-crawl.md`.
+- **Status:** Both completion gates **pass**: graph integrity (0 self-loops, 0 dangling edges, and 100% agreement between OpenAlex's `referenced_works` and `cites:` indexes over the 3,314 corpus-internal pairs that can be cross-checked) and access validation (all 50 articles the IEEE CSV licenses CC/OAPA are open in OpenAlex; the two sources name the same CC licence in 95.7% of 46 pairs). Backward coverage is 100% -- 324 works report zero references and are known, not missing. Forward coverage is 875 of 3,099 (28.2%), so the disruption index stays unavailable, which the completion rule explicitly allows; the batched forward crawl (233 requests for the rest) runs in the next quota window, after which the gates are re-run over the whole graph and the package closes. OACA stays unavailable regardless: no confounder-controlled model exists.
 
 - **Objective:** Enable disruption and access-association research with the required observables.
 - **Justification:** CD disruption requires forward/backward citation relations; OACA requires verified access status and confounder control.
