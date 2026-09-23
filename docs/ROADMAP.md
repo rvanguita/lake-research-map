@@ -26,7 +26,7 @@ Dependencies use work-package IDs. Horizons are sequencing bands rather than cal
 
 ## 2. Delivered baseline
 
-The following capabilities are implemented and covered by the current 322 passing tests plus two opt-in MySQL tests skipped in the default run (229 before this cycle, followed by regression, application-wide page, evidence-workflow, retrieval, provenance, semantic-persistence, MySQL migration, and year-bound coverage):
+The following capabilities are implemented and covered by the current 361 passing tests plus two opt-in MySQL tests skipped in the default run (229 before this cycle, followed by regression, application-wide page, evidence-workflow, retrieval, provenance, semantic-persistence, MySQL migration, and year-bound coverage):
 
 - Raw/Bronze/Silver/Gold ingestion and transformations with DOI normalization and rejection audit.
 - Local PDF inventory/matching, full-text extraction, chunk reconciliation, and local BGE embeddings.
@@ -108,7 +108,7 @@ This baseline does not imply that every analytical method is confirmatory. The l
 
 ### `WP-07` — Enrichment observations and temporal semantics
 
-- **Status:** Append-only observation, as-of selection, response provenance, and OpenAlex evidence schema implemented. The refresh gate was unsatisfiable until 2026-09-22 -- see Evidence -- and now needs only `OPENALEX_EMAIL`; running the refresh remains open.
+- **Status:** Append-only observation, as-of selection, response provenance, and OpenAlex evidence schema implemented. The refresh gate was unsatisfiable until 2026-09-22 -- see Evidence -- and now needs only `OPENALEX_EMAIL`. The first live refresh ran on 2026-09-22 and observed **1,000 of 3,115 DOIs (32.1%)** before OpenAlex returned `X-RateLimit-Remaining: 0` against a limit of 1,000 per window; the remaining ~2,115 DOIs plus 73 throttled ones need roughly three further windows. Partial by quota, not by defect -- see `docs/evidence/2026-09-22-openalex-crawl.md`. The remaining DOIs are now one batched pass rather than two windows: the refresh OR-joins 50 DOIs per request, so the corpus costs 63 requests instead of 3,115.
 
 - **Objective:** Make citation/reference data reproducible and refreshable.
 - **Justification:** The current cache stores only latest counts and cannot support an as-of analysis.
@@ -264,7 +264,8 @@ This baseline does not imply that every analytical method is confirmatory. The l
 
 ### `WP-21` — Integrate validated analyses into existing pages
 
-- **Status:** Partially delivered; the Impact, Screening, Researchers, and Trends increments landed on 2026-09-21, and temporal tie dynamics shipped with `WP-19` on 2026-09-22 -- it never depended on an evidence package. Retrieval benchmark, taxonomy validation and identity audit remain blocked on theirs.
+- **Status:** Partially delivered; the Impact, Screening, Researchers, and Trends increments landed on 2026-09-21, and temporal tie dynamics shipped with `WP-19` on 2026-09-22 -- it never depended on an evidence package. Two further increments landed on 2026-09-22 that had been recorded as blocked but were not: the **Pipeline and provenance** bullet (active version and freshness) was never blocked at all, and the **retrieval benchmark** needed a surface rather than labels. Taxonomy validation and identity audit remain genuinely blocked on theirs.
+- **Evidence:** `article_population_status()` had returned `dataset_version_id` since `WP-04` and no page ever read it -- only `is_canonical` was consumed -- so nine of ten pages reported figures that could not be tied to a snapshot, against `PRD.md` §10's first success criterion. `loaders.render_population_provenance` now states the version, its publication time, and the filtered-versus-total population, rendered once inside `require_articles` so a new page cannot forget it, and in `loaders` rather than `components` because that module imports this one. The retrieval harness (`dashboard/retrieval_eval.py`) and the pooled sampler were likewise reachable only from `tests/`: the project could compute Recall@k, MRR and nDCG and had nowhere to show them. The Quality and RAG page now scores all three modes over the versioned query set, and refuses the conclusion rather than the computation -- with only the AI-assisted pass stored, it prints the table under an explicit **not approved evidence** warning naming `WP-13`'s requirement for two independent reviewers. A sweep for the unpunctuated half of the dropped-clause defect also ran over every page and repaired six captions, among them one claiming articles "are typical of Researches" and one ending mid-phrase on `the card '`.
 - **Objective:** Add knowledge without adding pages or decorative charts.
 - **Justification:** New methods should extend established workflows and preserve navigation stability.
 - **Dependencies:** `WP-10` through `WP-19`, `WP-20`.
@@ -293,7 +294,7 @@ This baseline does not imply that every analytical method is confirmatory. The l
 
 ### `WP-23` — Reference-year and citation-history ingestion
 
-- **Status:** OpenAlex work and annual-count persistence implemented; credentialed coverage validation remains open.
+- **Status:** OpenAlex work and annual-count persistence implemented, and coverage measured for the first time on 2026-09-22: **819 of 1,000 observed works (81.9%) carry annual counts**, median 4 years, range 2012-2026. The 80% gate passes against the observed population and fails against the corpus (819/3,115 = 26.3%), because the crawl itself is only 32.1% complete. `audit citation-years` reports the observed population as the denominator on purpose: a work OpenAlex never resolved cannot have a trajectory, and mixing the two would make an unrun crawl look like missing data at the provider.
 
 - **Objective:** Enable valid literature-age and delayed-recognition analyses.
 - **Justification:** Price's index, citation longevity, and Sleeping Beauty metrics cannot be reconstructed from cumulative counts.
@@ -303,7 +304,7 @@ This baseline does not imply that every analytical method is confirmatory. The l
 
 ### `WP-24` — Citation graph and verified access data
 
-- **Status:** Incoming-edge collection and the coverage audit are implemented, fixture-tested, and reachable from the CLI as of 2026-09-22; running them needs `OPENALEX_EMAIL` and a live crawl, so measured coverage remains open.
+- **Status:** Incoming-edge collection and the coverage audit are implemented, fixture-tested, and reachable from the CLI as of 2026-09-22. First measurement the same day: **backward coverage 917 of 1,000 observed works (91.7%), forward coverage 0%** -- the forward crawl never ran, because the OpenAlex quota was exhausted by the backward pass. Usable population for a disruption index is therefore 0, which is this package's documented outcome for inadequate coverage rather than a defect. The forward pass also turned out to have no 429 handling at all, which a live run would have discovered the hard way; that is fixed and tested -- see `docs/evidence/2026-09-22-openalex-crawl.md`.
 
 - **Objective:** Enable disruption and access-association research with the required observables.
 - **Justification:** CD disruption requires forward/backward citation relations; OACA requires verified access status and confounder control.

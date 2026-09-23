@@ -1214,13 +1214,46 @@ def _configure_enrichment_commands(subparsers) -> None:
     actions = enrichment.add_subparsers(dest="enrichment_action", required=True)
     refresh = actions.add_parser("refresh-openalex", help="Refresh the active DOI population")
     refresh.add_argument("--max-fetch", type=int, default=100)
-    refresh.add_argument("--delay", type=float, default=0.1)
+    # 0.1s is exactly OpenAlex's stated 10 req/s ceiling, so a live crawl on
+    # 2026-09-22 was throttled outright after ~1,100 requests and never
+    # recovered. Headroom costs minutes over 3,115 DOIs; being blocked costs
+    # the whole run.
+    refresh.add_argument("--delay", type=float, default=0.25)
+    refresh.add_argument(
+        "--refresh-all",
+        action="store_true",
+        help="Re-observe DOIs that already succeeded, for a deliberate as-of snapshot "
+        "instead of gap-filling",
+    )
+    refresh.add_argument(
+        "--commit-every",
+        type=int,
+        default=25,
+        help="Persist progress every N fetches so an interrupt keeps what it already got",
+    )
+    refresh.add_argument(
+        "--store-payload",
+        action="store_true",
+        help="Also store each raw Work JSON; adds hundreds of MB over the corpus and "
+        "nothing reads it back",
+    )
     citations = actions.add_parser(
         "refresh-citations",
         help="Crawl incoming citation edges for works already observed in Bronze",
     )
     citations.add_argument("--max-works", type=int, default=50)
     citations.add_argument("--delay", type=float, default=0.2)
+    citations.add_argument(
+        "--refresh-all",
+        action="store_true",
+        help="Re-crawl works already carrying a crawl timestamp",
+    )
+    citations.add_argument(
+        "--commit-every",
+        type=int,
+        default=25,
+        help="Persist progress every N works so an interrupt keeps what it already got",
+    )
     citations.add_argument(
         "--max-pages",
         type=int,
@@ -1262,7 +1295,15 @@ def _run_enrichment_command(args: argparse.Namespace) -> None:
         # for it would fail with "no active dataset version", which says
         # nothing about the command the operator actually ran.
         if args.enrichment_action == "refresh-citations":
-            print(_refresh_citation_edges(bronze_session, args))
+            citing_stats = _refresh_citation_edges(bronze_session, args)
+            print(citing_stats)
+            if citing_stats.get("stopped_early"):
+                print(
+                    "Stopped early: five consecutive works came back throttled. Progress is "
+                    "committed and a re-run resumes from the first uncrawled work."
+                )
+            elif citing_stats["remaining"]:
+                print(f"{citing_stats['remaining']} works still uncrawled. Re-run to continue.")
             return
         state = gold_session.get(PublicationState, 1)
         if state is None or not state.active_version_id:
@@ -1277,8 +1318,25 @@ def _run_enrichment_command(args: argparse.Namespace) -> None:
             dois,
             max_fetch=args.max_fetch,
             delay=args.delay,
+            refresh_all=args.refresh_all,
+            commit_every=args.commit_every,
+            store_payload=args.store_payload,
         )
         print(stats)
+        if stats.get("stopped_early"):
+            print(
+                f"Stopped early: OpenAlex returned {stats['stopped_early']} five times in a "
+                "row, so the run halted instead of spending the rest of the batch on an API "
+                "that had stopped answering. Everything fetched is committed. Check the "
+                "logged X-RateLimit headers above: when the limit is a per-window quota "
+                "rather than a rate, a larger --delay buys nothing and the only fix is to "
+                "wait for the reset. Re-running then resumes from here."
+            )
+        elif stats["remaining"]:
+            print(
+                f"{stats['remaining']} DOIs still unobserved. Re-run the same command to "
+                "continue; it resumes from where this run stopped."
+            )
     finally:
         bronze_session.close()
         gold_session.close()
@@ -1302,36 +1360,89 @@ def _refresh_citation_edges(bronze_session, args: argparse.Namespace) -> dict:
     from lake_research_map.db.bronze_models import ExternalWork
     from lake_research_map.ingest.openalex import (
         CITING_MAX_PAGES,
+        CONSECUTIVE_FAILURE_LIMIT,
         fetch_openalex_citing_works,
         persist_incoming_edges,
     )
 
     observed_at = datetime.now(UTC).replace(tzinfo=None)
-    work_ids = bronze_session.scalars(
-        select(ExternalWork.provider_work_id)
+    works = bronze_session.scalars(
+        select(ExternalWork)
         .where(ExternalWork.provider == "openalex")
         .order_by(ExternalWork.provider_work_id)
     ).all()
-    if not work_ids:
+    if not works:
         raise ValueError(
             "no OpenAlex works have been observed yet; run `enrichment refresh-openalex` first"
         )
 
+    # Same resumability rule as the backward pass: without it,
+    # `works[:max_works]` is the same leading slice on every invocation and the
+    # crawl re-requests works it already has instead of advancing. A work is
+    # "done" when it carries a crawl timestamp, not when it has an edge --
+    # a work nobody cites produces no edge and would otherwise be retried
+    # forever.
+    pending = [w for w in works if getattr(w, "citing_crawled_at", None) is None]
+    if getattr(args, "refresh_all", False):
+        pending = list(works)
+    batch = pending[: args.max_works]
+    logger.info(
+        "openalex citing crawl: %d works, %d already crawled, %d pending, crawling %d",
+        len(works),
+        len(works) - len(pending),
+        len(pending),
+        len(batch),
+    )
+
     max_pages = args.max_pages or CITING_MAX_PAGES
-    edges = truncated = crawled = 0
-    for work_id in work_ids[: args.max_works]:
+    edges = truncated = crawled = throttled = 0
+    consecutive_throttles = 0
+    stopped_early = None
+    for position, work in enumerate(batch, start=1):
+        work_id = work.provider_work_id
         result = fetch_openalex_citing_works(work_id, max_pages=max_pages)
         edges += persist_incoming_edges(
             bronze_session, work_id, result["citing_work_ids"], observed_at
         )
+        work.citing_crawled_at = observed_at
+        work.citing_truncated = bool(result["truncated"])
         truncated += int(result["truncated"])
         crawled += 1
+
+        # Same policy as the backward pass: a work whose forward set was cut
+        # short by throttling is not evidence that the crawl succeeded, and
+        # five in a row means the API has stopped answering.
+        if result.get("throttled"):
+            throttled += 1
+            consecutive_throttles += 1
+        else:
+            consecutive_throttles = 0
+        if consecutive_throttles >= CONSECUTIVE_FAILURE_LIMIT:
+            stopped_early = "rate_limited"
+            bronze_session.commit()
+            logger.warning(
+                "openalex citing crawl: stopping after %d consecutive throttled works at "
+                "%d/%d; progress is committed and the next run resumes here",
+                consecutive_throttles,
+                position,
+                len(batch),
+            )
+            break
+
+        commit_every = getattr(args, "commit_every", 25)
+        if commit_every and position % commit_every == 0:
+            bronze_session.commit()
+            logger.info("openalex citing crawl: %d/%d works, %d edges", position, len(batch), edges)
         if args.delay:
             time.sleep(args.delay)
     bronze_session.commit()
     return {
-        "works_known": len(work_ids),
+        "works_known": len(works),
+        "already_crawled": len(works) - len(pending),
         "works_crawled": crawled,
+        "remaining": max(len(pending) - crawled, 0),
+        "throttled_works": throttled,
+        "stopped_early": stopped_early,
         "edges_inserted": edges,
         "truncated_works": truncated,
         "observed_at": observed_at.isoformat(),
@@ -1453,6 +1564,10 @@ def _configure_audit_commands(subparsers) -> None:
         "citation-graph",
         help="Measure forward/backward citation coverage and whether disruption is usable",
     )
+    actions.add_parser(
+        "citation-years",
+        help="Measure annual citation-count coverage behind Price/longevity analyses",
+    )
 
 
 def _audit_citation_graph() -> None:
@@ -1487,11 +1602,13 @@ def _audit_citation_graph() -> None:
             f"({coverage['backward_coverage']:.1%})"
         )
         print(
-            f"Forward (cites:):    {coverage['with_forward']} ({coverage['forward_coverage']:.1%})"
+            f"Forward crawled:     {coverage['with_forward']} "
+            f"({coverage['forward_coverage']:.1%}), of which {coverage['truncated']} truncated"
         )
+        print(f"  with citing edges: {coverage['with_forward_edges']}")
         print(
             f"Usable for CD:       {coverage['usable_for_disruption']} "
-            f"({coverage['disruption_coverage']:.1%}) -- works with both directions"
+            f"({coverage['disruption_coverage']:.1%}) -- both directions, not truncated"
         )
         if coverage["disruption_coverage"] < 0.80:
             print(
@@ -1502,9 +1619,68 @@ def _audit_citation_graph() -> None:
         session.close()
 
 
+def _audit_citation_years() -> None:
+    """Report WP-23's coverage gate over annual citation counts.
+
+    `CitationYearCount` rows are written by every successful OpenAlex
+    observation and read by nothing, so the package's own completion rule --
+    "coverage and validation gates pass; only then may Price, longevity, or
+    Sleeping Beauty panels enter WP-21 review" -- had no instrument behind it.
+
+    Coverage is reported against the *observed* population rather than the
+    corpus: a work OpenAlex never resolved cannot have a trajectory, and
+    mixing the two denominators would make an unrun crawl look like missing
+    data at the provider.
+    """
+    from lake_research_map.db.bronze_models import CitationYearCount, ExternalWork
+
+    bootstrap()
+    session = get_session("bronze")
+    try:
+        works = session.scalars(
+            select(ExternalWork.provider_work_id).where(ExternalWork.provider == "openalex")
+        ).all()
+        if not works:
+            print(
+                "No OpenAlex works observed, so annual-count coverage is 0 by absence rather "
+                "than by measurement. Run `enrichment refresh-openalex` first."
+            )
+            return
+        rows = session.execute(
+            select(
+                CitationYearCount.provider_work_id,
+                func.count(),
+                func.min(CitationYearCount.year),
+                func.max(CitationYearCount.year),
+            )
+            .where(CitationYearCount.provider == "openalex")
+            .group_by(CitationYearCount.provider_work_id)
+        ).all()
+        with_series = {row[0] for row in rows}
+        population = len(set(works))
+        covered = len(with_series & set(works))
+        spans = [row[1] for row in rows if row[0] in set(works)]
+        print(f"Observed works:      {population}")
+        print(f"With annual counts:  {covered} ({covered / population:.1%})")
+        if spans:
+            spans.sort()
+            print(f"Years per work:      min {spans[0]}, median {spans[len(spans) // 2]}")
+            print(f"Year range:          {min(r[2] for r in rows)}-{max(r[3] for r in rows)}")
+        if covered / population < 0.80:
+            print(
+                "Below 80%: Price's index, citation longevity and Sleeping Beauty stay "
+                "unavailable, which is WP-23's documented outcome for inadequate coverage."
+            )
+    finally:
+        session.close()
+
+
 def _run_audit_command(args: argparse.Namespace) -> None:
     if args.audit_action == "citation-graph":
         _audit_citation_graph()
+        return
+    if args.audit_action == "citation-years":
+        _audit_citation_years()
         return
 
     from lake_research_map.db.gold_models import (

@@ -195,9 +195,9 @@ def _relevance_screening(scored: pd.DataFrame) -> None:
     st.divider()
     st.subheader("🤖 Active-learning-assisted screening (uncertainty sampling)")
     st.caption(
-        "Articles where the contrasting margin is closer to zero (|Δ| ≈ 0) represent the "
-        "Prioritizing the manual inspection of these cases accelerates the decision-making of maximum ambiguity. "
-        "Systematic screening refinement (SLR) with the lowest human reading effort."
+        "Articles whose contrastive margin sits closest to zero (|Δ| ≈ 0) are the cases of "
+        "maximum ambiguity. Prioritizing manual inspection of those accelerates systematic "
+        "screening refinement at the lowest human reading effort."
     )
     uncertain = scored[scored["relevance_margin"].notna()].copy()
     uncertain["abs_margin"] = uncertain["relevance_margin"].abs()

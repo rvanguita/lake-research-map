@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from sqlalchemy import JSON, Date, DateTime, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, Date, DateTime, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from lake_research_map.db.time import naive_utc_now
@@ -96,6 +96,13 @@ class ExternalWork(Base):
     title: Mapped[str | None] = mapped_column(Text, nullable=True)
     first_observed_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False)
     last_observed_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False)
+    # WP-24: when the forward (`cites:`) crawl last ran for this work, and
+    # whether it hit its page budget. Edge presence cannot answer either: a
+    # work with genuinely no citing papers produces no edge and is
+    # indistinguishable from one never crawled, which makes forward coverage
+    # unmeasurable and lets a resumable crawl restart from the beginning.
+    citing_crawled_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    citing_truncated: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 
 
 class CitationYearCount(Base):

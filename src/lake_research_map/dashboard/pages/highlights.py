@@ -293,8 +293,8 @@ def _top_referenced(articles_df: pd.DataFrame) -> None:
         download_key="most_referenced_articles",
     )
     st.caption(
-        "Articles ordered by the size of the bibliography — high counts are typical of "
-        "Researches, comprehensive literature reviews and state of the art studies."
+        "Articles ordered by the size of their bibliography — high counts are typical of "
+        "surveys, comprehensive literature reviews and state-of-the-art studies."
     )
 
 

@@ -72,6 +72,12 @@ _ADDITIVE_COLUMNS: dict[str, dict[str, tuple[str, tuple[str, ...]]]] = {
     # WP-24: how a citation edge was observed (complete reference list vs. a
     # paginated cites: crawl), which the coverage audit needs.
     "lit_citation_edges": {"discovered_via": ("VARCHAR(32) NULL", ("bronze",))},
+    # WP-24: whether a work's forward crawl ran and whether it was truncated.
+    # Edge presence cannot say: an uncited work and an uncrawled one look alike.
+    "lit_external_works": {
+        "citing_crawled_at": ("DATETIME NULL", ("bronze",)),
+        "citing_truncated": ("BOOLEAN NULL", ("bronze",)),
+    },
     # ROADMAP #1: binary embedding storage (migration from JSON to BLOB).
     "lit_chunks": {
         "embedding_bin": ("LONGBLOB NULL", ("gold",)),

@@ -466,7 +466,7 @@ def require_articles() -> pd.DataFrame:
         reasons = " ".join(status["fallback_reasons"])
         st.warning(
             f"Degraded mode: analyses use the `{status['layer']}` layer instead of the curated "
-            f"curated Gold dataset. {reasons}"
+            f"Gold dataset. {reasons}"
         )
     _, df = filtered_articles()
     if df.empty:
@@ -475,7 +475,48 @@ def require_articles() -> pd.DataFrame:
             "Expand the year, the source or the journal in the sidebar."
         )
         st.stop()
+    render_population_provenance(status, shown=len(df), total=len(all_articles))
     return df
+
+
+@st.cache_data(ttl=300)
+def active_version_published_at() -> str | None:
+    """Publication timestamp of the version the dashboard is reading."""
+    versions = dataset_versions()
+    if versions.empty or "status" not in versions.columns:
+        return None
+    active = versions[versions["status"].eq("active")]
+    if active.empty or "published_at" not in active.columns:
+        return None
+    published = pd.to_datetime(active.iloc[0]["published_at"], errors="coerce")
+    return None if pd.isna(published) else published.strftime("%Y-%m-%d %H:%M")
+
+
+def render_population_provenance(status: dict[str, object], *, shown: int, total: int) -> None:
+    """State which dataset version produced the numbers, and over how many rows.
+
+    `PRD.md` §10 requires every published analytical result to identify a
+    dataset version and its population coverage. `article_population_status()`
+    had been computing `dataset_version_id` since `WP-04` and no page ever read
+    it -- only `is_canonical` was consumed -- so nine of ten pages reported
+    figures that could not be tied to a snapshot. Rendered here rather than in
+    `components.py` because that module imports this one, and once in
+    `require_articles` rather than per page so a new page cannot forget it.
+    """
+    version_id = status.get("dataset_version_id")
+    parts: list[str] = []
+    if version_id:
+        parts.append(f"Dataset `{str(version_id)[:12]}`")
+        if published := active_version_published_at():
+            parts.append(f"published {published}")
+    else:
+        parts.append(f"Layer `{status.get('layer', 'unknown')}` (no published version)")
+    parts.append(
+        f"{shown:,} of {total:,} articles after filters"
+        if shown != total
+        else f"{total:,} articles"
+    )
+    st.caption(" · ".join(parts))
 
 
 @st.cache_data(ttl=None)

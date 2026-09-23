@@ -51,6 +51,96 @@ def _user_agent(email: str | None) -> str:
     return f"lake-research-map/1.0 ({PROJECT_URL}; mailto:{contact})"
 
 
+# A crawl that has been told to stop must stop. The corpus refresh on
+# 2026-09-22 collected 73 consecutive HTTP 429s while the loop kept going,
+# spending four requests and seven seconds of backoff per DOI against an API
+# that had already refused -- roughly 8,000 futile requests had it run to the
+# end. Five, rather than one: an isolated 429 is noise, five in a row is a
+# policy.
+CONSECUTIVE_FAILURE_LIMIT = 5
+# `Retry-After` is honoured but capped: a header is a hint from a service, not
+# a licence to park the process for an hour.
+MAX_RETRY_AFTER_SECONDS = 60.0
+_THROTTLE_HEADERS = (
+    "retry-after",
+    "x-ratelimit-limit",
+    "x-ratelimit-remaining",
+    "x-ratelimit-reset",
+)
+
+
+def retry_after_seconds(response) -> float | None:
+    """What the server asked us to wait, or None when it did not say."""
+    try:
+        raw = response.headers.get("Retry-After")
+    except AttributeError:  # a fake response in a test may carry no headers
+        return None
+    if not raw:
+        return None
+    try:
+        return max(float(str(raw).strip()), 0.0)
+    except ValueError:
+        # The header also allows an HTTP-date. Falling back to the guess beats
+        # carrying a second parser for a value we only compare against a cap.
+        return None
+
+
+def retrying_is_futile(response) -> bool:
+    """True when the server's own wait exceeds anything worth sleeping through.
+
+    OpenAlex answered the exhausted quota with `Retry-After: 19587` -- 5.4
+    hours. Sleeping the capped 60s and trying again three times just spends
+    three minutes to be refused three more times. When the server names a wait
+    that long, the honest move is to surface the refusal immediately and let
+    the circuit breaker end the batch.
+    """
+    asked = retry_after_seconds(response)
+    return asked is not None and asked > MAX_RETRY_AFTER_SECONDS
+
+
+def backoff_seconds(response, retry_count: int) -> float:
+    """How long to wait before retrying, preferring what the server said.
+
+    The previous version always guessed `min(2**n, 8)` and discarded the
+    `Retry-After` header in which OpenAlex states the answer exactly. Guessing
+    short is what turns a brief throttle into a sustained one.
+    """
+    asked = retry_after_seconds(response)
+    if asked is not None:
+        return min(asked, MAX_RETRY_AFTER_SECONDS)
+    return float(min(2**retry_count, 8))
+
+
+def _log_throttle_headers(response) -> None:
+    """Say what the server actually reported, once per process.
+
+    Without this the only evidence of a block is a column of 429s, which
+    cannot distinguish a burst limit from a daily quota from a `mailto` that
+    never reached the polite pool -- and that distinction is what decides the
+    delay to re-run with.
+    """
+    global _THROTTLE_LOGGED
+    if _THROTTLE_LOGGED:
+        return
+    try:
+        headers = {
+            name: value
+            for name, value in response.headers.items()
+            if name.lower() in _THROTTLE_HEADERS
+        }
+    except AttributeError:
+        return
+    _THROTTLE_LOGGED = True
+    logger.warning(
+        "OpenAlex throttled this client (HTTP %s); headers: %s",
+        getattr(response, "status_code", "?"),
+        headers or "none returned",
+    )
+
+
+_THROTTLE_LOGGED = False
+
+
 def fetch_openalex_work(
     doi: str,
     *,
@@ -111,8 +201,9 @@ def fetch_openalex_observation(
                     "error_message": None,
                 }
             if response.status_code == 429 or response.status_code >= 500:
-                if retry_count < max_retries:
-                    time.sleep(min(2**retry_count, 8))
+                _log_throttle_headers(response)
+                if retry_count < max_retries and not retrying_is_futile(response):
+                    time.sleep(backoff_seconds(response, retry_count))
                     continue
                 return {
                     "doi": clean_doi,
@@ -153,6 +244,127 @@ def fetch_openalex_observation(
     raise AssertionError("retry loop must return")
 
 
+# OpenAlex OR-joins up to 50 values in one filter, so a DOI population can be
+# fetched in ceil(n/50) requests instead of n. That is not a micro-optimisation
+# here: the quota is 1,000 requests per window, so one-request-per-DOI made the
+# 3,115-DOI corpus a four-window, ~22-hour job, while batching makes it 63
+# requests. It is also the polite way to ask -- the same data for a sixtieth of
+# the load.
+OPENALEX_FILTER_BATCH = 50
+
+
+def fetch_openalex_batch(
+    dois: list[str],
+    *,
+    timeout: float = 30.0,
+    email: str | None = None,
+    api_key: str | None = None,
+    max_retries: int = 3,
+    session_factory=None,
+) -> dict[str, dict]:
+    """Fetch a batch of DOIs in one request, keyed by normalized DOI.
+
+    Returns the same per-DOI result shape as `fetch_openalex_observation`, so
+    the persistence path does not care which one produced it. A DOI the
+    response does not carry is reported `not_found`: OpenAlex simply omits
+    unknown works from a filtered result, and treating an omission as an error
+    would retry it forever.
+    """
+    get = session_factory or requests.get
+    clean = [doi for doi in (_normalize_doi(value) for value in dois) if doi]
+    if not clean:
+        return {}
+
+    resolved_email = email or os.environ.get("OPENALEX_EMAIL")
+    resolved_key = api_key or os.environ.get("OPENALEX_API_KEY")
+    params = {
+        "filter": "doi:" + "|".join(f"https://doi.org/{doi}" for doi in clean),
+        "per-page": len(clean),
+    }
+    if resolved_email:
+        params["mailto"] = resolved_email
+    if resolved_key:
+        params["api_key"] = resolved_key
+
+    def _failure(status: str, http_status, retry_count: int, message: str) -> dict[str, dict]:
+        return {
+            doi: {
+                "doi": doi,
+                "status": status,
+                "http_status": http_status,
+                "retry_count": retry_count,
+                "error_message": message,
+            }
+            for doi in clean
+        }
+
+    for retry_count in range(max_retries + 1):
+        try:
+            response = get(
+                OPENALEX_BASE_URL,
+                params=params,
+                headers={"User-Agent": _user_agent(resolved_email)},
+                timeout=timeout,
+            )
+            status_code = getattr(response, "status_code", 200)
+            if status_code == 429 or status_code >= 500:
+                _log_throttle_headers(response)
+                if retry_count < max_retries and not retrying_is_futile(response):
+                    time.sleep(backoff_seconds(response, retry_count))
+                    continue
+                # The whole batch shares one verdict, which is what lets the
+                # circuit breaker see a throttle as a throttle rather than as
+                # fifty unrelated failures.
+                return _failure(
+                    "rate_limited" if status_code == 429 else "error",
+                    status_code,
+                    retry_count,
+                    f"OpenAlex returned HTTP {status_code}",
+                )
+            response.raise_for_status()
+            payload = response.json()
+        except (requests.RequestException, ValueError) as exc:
+            if retry_count < max_retries:
+                time.sleep(min(2**retry_count, 8))
+                continue
+            logger.warning("OpenAlex batch request failed: %s", exc)
+            return _failure("error", None, retry_count, str(exc))
+
+        results: dict[str, dict] = {}
+        for work in payload.get("results") or []:
+            doi = _normalize_doi(work.get("doi"))
+            if not doi:
+                continue
+            body = json.dumps(work, sort_keys=True, separators=(",", ":"))
+            referenced = work.get("referenced_works") or []
+            cited_by = work.get("cited_by_count")
+            results[doi] = {
+                "doi": doi,
+                "provider_work_id": work.get("id"),
+                "status": "success",
+                "http_status": status_code,
+                "citation_count": int(cited_by) if cited_by is not None else None,
+                "reference_count": len(referenced),
+                "response_sha256": hashlib.sha256(body.encode("utf-8")).hexdigest(),
+                "retry_count": retry_count,
+                "payload": work,
+                "error_message": None,
+            }
+        for doi in clean:
+            results.setdefault(
+                doi,
+                {
+                    "doi": doi,
+                    "status": "not_found",
+                    "http_status": status_code,
+                    "retry_count": retry_count,
+                    "error_message": None,
+                },
+            )
+        return results
+    raise AssertionError("retry loop must return")
+
+
 def refresh_openalex_observations(
     session: Session,
     dois: list[str],
@@ -160,50 +372,138 @@ def refresh_openalex_observations(
     observed_at: datetime | None = None,
     max_fetch: int = 100,
     delay: float = 0.1,
+    refresh_all: bool = False,
+    commit_every: int = 25,
+    store_payload: bool = False,
+    batch_size: int = OPENALEX_FILTER_BATCH,
 ) -> dict[str, int]:
-    """Append one reproducible observation batch to Bronze."""
+    """Append a reproducible observation batch to Bronze, resumably.
+
+    Resumability is the point. The skip used to compare `observed_at` against
+    *this run's* `batch_time`, which a previous run can never equal, while the
+    work list was always `sorted(dois)[:max_fetch]` -- the same leading slice
+    every time. A corpus of 3,115 DOIs at the default `max_fetch=100` therefore
+    re-fetched the same first hundred on every invocation and never reached the
+    hundred-and-first. Skipping DOIs that already carry a *successful*
+    observation is what lets run N+1 continue where run N stopped.
+
+    Failed and not-found observations are retried rather than skipped: a 429 or
+    a timeout says nothing about the DOI, and OpenAlex does add records over
+    time. `refresh_all=True` re-observes everything, which is the right mode for
+    a deliberate as-of snapshot rather than gap-filling.
+
+    Progress is committed every `commit_every` rows. The single commit at the
+    end meant an interrupt at request 3,000 discarded all 3,000, which on a
+    crawl this long is the likely outcome rather than the unlucky one.
+    """
     batch_time = (observed_at or datetime.now(UTC)).replace(tzinfo=None)
     normalized = sorted({_normalize_doi(doi) for doi in dois if _normalize_doi(doi)})
+
+    already: set[str] = set()
+    if not refresh_all:
+        already = set(
+            session.scalars(
+                select(EnrichmentObservation.doi).where(
+                    EnrichmentObservation.provider == "openalex",
+                    EnrichmentObservation.status == "success",
+                )
+            ).all()
+        )
+    pending = [doi for doi in normalized if doi not in already]
+    batch = pending[:max_fetch]
+
+    logger.info(
+        "openalex refresh: %d DOIs, %d already observed, %d pending, fetching %d",
+        len(normalized),
+        len(already & set(normalized)),
+        len(pending),
+        len(batch),
+    )
+
     inserted = success = 0
-    for doi in normalized[:max_fetch]:
-        existing = session.scalar(
-            select(EnrichmentObservation.id).where(
-                EnrichmentObservation.provider == "openalex",
-                EnrichmentObservation.doi == doi,
-                EnrichmentObservation.observed_at == batch_time,
-            )
-        )
-        if existing is not None:
-            continue
-        result = fetch_openalex_observation(doi)
-        session.add(
-            EnrichmentObservation(
-                provider="openalex",
-                doi=doi,
-                provider_work_id=result.get("provider_work_id"),
-                observed_at=batch_time,
-                status=result["status"],
-                http_status=result.get("http_status"),
-                citation_count=result.get("citation_count"),
-                reference_count=result.get("reference_count"),
-                response_sha256=result.get("response_sha256"),
-                retry_count=result.get("retry_count", 0),
-                payload=result.get("payload"),
-                error_message=result.get("error_message"),
-            )
-        )
-        if result["status"] == "success":
-            _persist_openalex_evidence(session, result, batch_time)
-        inserted += 1
-        success += int(result["status"] == "success")
+    consecutive_failures = 0
+    stopped_early: str | None = None
+
+    # One request per `OPENALEX_FILTER_BATCH` DOIs rather than per DOI. The
+    # loop below still walks DOIs one at a time so the breaker, the commit
+    # cadence and the stats keep counting subjects, not requests.
+    def _resolve(chunk: list[str]) -> dict[str, dict]:
+        """One request for the whole chunk, or the per-DOI path when batching is off."""
+        if batch_size > 1:
+            return fetch_openalex_batch(chunk)
+        return {doi: fetch_openalex_observation(doi) for doi in chunk}
+
+    position = 0
+    for chunk_start in range(0, len(batch), max(batch_size, 1)):
+        chunk = batch[chunk_start : chunk_start + max(batch_size, 1)]
+        resolved = _resolve(chunk)
         if delay:
             time.sleep(delay)
+
+        for doi in chunk:
+            position += 1
+            result = resolved[doi]
+            session.add(
+                EnrichmentObservation(
+                    provider="openalex",
+                    doi=doi,
+                    provider_work_id=result.get("provider_work_id"),
+                    observed_at=batch_time,
+                    status=result["status"],
+                    http_status=result.get("http_status"),
+                    citation_count=result.get("citation_count"),
+                    reference_count=result.get("reference_count"),
+                    response_sha256=result.get("response_sha256"),
+                    retry_count=result.get("retry_count", 0),
+                    # The whole Work JSON is tens of kilobytes and nothing in
+                    # the project reads it back: `_persist_openalex_evidence`
+                    # lifts the annual counts, reference edges and access
+                    # status into their own tables, and `response_sha256`
+                    # already proves what was received. Storing it for 3,115
+                    # works would add hundreds of megabytes to a MySQL server
+                    # this project shares with unrelated ones, so it is opt-in.
+                    payload=result.get("payload") if store_payload else None,
+                    error_message=result.get("error_message"),
+                )
+            )
+            if result["status"] == "success":
+                _persist_openalex_evidence(session, result, batch_time)
+            inserted += 1
+            success += int(result["status"] == "success")
+
+            if result["status"] in {"rate_limited", "error"}:
+                consecutive_failures += 1
+            else:
+                consecutive_failures = 0
+            if consecutive_failures >= CONSECUTIVE_FAILURE_LIMIT:
+                stopped_early = result["status"]
+                logger.warning(
+                    "openalex refresh: stopping after %d consecutive %s responses at %d/%d; "
+                    "progress is committed and the next run resumes here",
+                    consecutive_failures,
+                    stopped_early,
+                    position,
+                    len(batch),
+                )
+                break
+
+            if commit_every and position % commit_every == 0:
+                session.commit()
+                logger.info("openalex refresh: %d/%d fetched, %d ok", position, len(batch), success)
+
+        if stopped_early:
+            break
+
     session.commit()
     return {
         "requested": len(normalized),
-        "fetched": min(len(normalized), max_fetch),
+        "already_observed": len(already & set(normalized)),
+        "pending": len(pending),
+        "fetched": inserted,
         "inserted": inserted,
         "success": success,
+        "stopped_early": stopped_early,
+        "remaining": max(len(pending) - success, 0),
     }
 
 
@@ -282,6 +582,9 @@ def _persist_openalex_evidence(session: Session, result: dict, observed_at: date
 # silently treated as "no more citations".
 CITING_PAGE_SIZE = 200
 CITING_MAX_PAGES = 5
+# Same retry budget as the backward pass, so one throttled page does not
+# discard a work's whole forward set.
+CITING_MAX_RETRIES = 3
 
 
 def fetch_openalex_citing_works(
@@ -324,12 +627,33 @@ def fetch_openalex_citing_works(
             params["mailto"] = resolved_email
         if resolved_key:
             params["api_key"] = resolved_key
-        response = get(
-            OPENALEX_BASE_URL,
-            params=params,
-            headers={"User-Agent": _user_agent(resolved_email)},
-            timeout=30,
-        )
+        # The forward pass had no 429 handling at all -- a bare
+        # `raise_for_status()` -- so the first throttled page killed a crawl of
+        # a thousand works. It was never exercised against the live API, which
+        # is exactly why that went unnoticed.
+        response = None
+        for retry_count in range(CITING_MAX_RETRIES + 1):
+            response = get(
+                OPENALEX_BASE_URL,
+                params=params,
+                headers={"User-Agent": _user_agent(resolved_email)},
+                timeout=30,
+            )
+            status = getattr(response, "status_code", 200)
+            if status == 429 or status >= 500:
+                _log_throttle_headers(response)
+                if retry_count < CITING_MAX_RETRIES and not retrying_is_futile(response):
+                    time.sleep(backoff_seconds(response, retry_count))
+                    continue
+                # Out of retries: report the partial set as truncated rather
+                # than as a complete crawl that found nothing more.
+                return {
+                    "citing_work_ids": list(dict.fromkeys(citing)),
+                    "truncated": True,
+                    "pages": pages,
+                    "throttled": True,
+                }
+            break
         response.raise_for_status()
         payload = response.json()
         pages += 1
@@ -349,6 +673,7 @@ def fetch_openalex_citing_works(
         "citing_work_ids": list(dict.fromkeys(citing)),
         "truncated": truncated,
         "pages": pages,
+        "throttled": False,
     }
 
 
@@ -407,23 +732,52 @@ def citation_graph_coverage(session: Session, work_ids: list[str]) -> dict:
         select(CitationEdge.citing_work_id, CitationEdge.cited_work_id, CitationEdge.discovered_via)
     ).all()
     backward: set[str] = set()
-    forward: set[str] = set()
+    forward_edges: set[str] = set()
     for citing, cited, via in rows:
         if via == "referenced_works" and citing in wanted:
             backward.add(citing)
         elif via == "cites_query" and cited in wanted:
-            forward.add(cited)
+            forward_edges.add(cited)
 
+    # Forward coverage is a property of the crawl, not of the edges it found.
+    # Counting works that have an incoming edge silently excludes every work
+    # nobody cites -- for which the correct answer, "zero citing works", is
+    # known and usable. A truncated crawl is the opposite case: it produced
+    # edges but its tail is missing, so it is excluded from the usable set.
+    crawled: set[str] = set()
+    truncated: set[str] = set()
+    try:
+        for work_id, crawled_at, was_truncated in session.execute(
+            select(
+                ExternalWork.provider_work_id,
+                ExternalWork.citing_crawled_at,
+                ExternalWork.citing_truncated,
+            ).where(ExternalWork.provider == "openalex")
+        ).all():
+            if work_id in wanted and crawled_at is not None:
+                crawled.add(work_id)
+                if was_truncated:
+                    truncated.add(work_id)
+    except Exception:  # pragma: no cover - pre-migration database
+        # Before the additive migration the columns do not exist; fall back to
+        # edge presence so the audit degrades instead of failing.
+        logger.warning("forward-crawl columns unavailable; falling back to edge presence")
+        crawled = set(forward_edges)
+
+    forward = crawled or forward_edges
     population = len(set(wanted))
-    both = backward & forward
+    both = (backward & forward) - truncated
     return {
         "population": population,
         "with_backward": len(backward),
         "with_forward": len(forward),
+        "with_forward_edges": len(forward_edges),
+        "truncated": len(truncated),
         "backward_coverage": len(backward) / population,
         "forward_coverage": len(forward) / population,
         # The disruption index needs both directions for the same work, so the
-        # usable population is the intersection, never the larger of the two.
+        # usable population is the intersection, never the larger of the two,
+        # and never a work whose forward tail was cut off.
         "usable_for_disruption": len(both),
         "disruption_coverage": len(both) / population,
     }
