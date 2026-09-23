@@ -85,12 +85,20 @@ class MySQLSettings:
 
     @classmethod
     def from_env(cls) -> MySQLSettings:
-        role = os.environ.get("LAKE_RESEARCH_MAP_DB_ROLE", "pipeline").strip().upper()
+        """Read the one database identity this project has.
+
+        There used to be per-role users (`MYSQL_PIPELINE_*`, `MYSQL_DASHBOARD_*`)
+        selected by `LAKE_RESEARCH_MAP_DB_ROLE`. They were dropped: this is a
+        single-machine deployment, so the isolation they bought did not pay for
+        the failure mode they introduced -- user and password resolved
+        independently, so setting only one half of a role's pair silently
+        connected as the fallback user with the role's credential.
+        """
         return cls(
             host=os.environ.get("MYSQL_HOST", "127.0.0.1"),
             port=int(os.environ.get("MYSQL_PORT", "3306")),
-            user=os.environ.get(f"MYSQL_{role}_USER", os.environ.get("MYSQL_USER", "root")),
-            password=os.environ.get(f"MYSQL_{role}_PASSWORD", os.environ.get("MYSQL_PASSWORD", "")),
+            user=os.environ.get("MYSQL_USER", "root"),
+            password=os.environ.get("MYSQL_PASSWORD", ""),
         )
 
     def database_name(self, layer: str) -> str:

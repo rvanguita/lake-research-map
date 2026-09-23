@@ -299,11 +299,11 @@ Planned data extensions have explicit prerequisites:
 
 ### `ADR-01` — Four physical medallion databases
 
-**Decision:** Retain the current databases and enforce the `lit_*` namespace plus least-privilege roles.
+**Decision:** Retain the current databases and enforce the `lit_*` namespace.
 
 **Alternative:** One database with schemas or one project-specific database.
 
-**Rationale:** Migration risk outweighs current benefit, but shared-database isolation must be treated as a security contract.
+**Rationale:** Migration risk outweighs current benefit, but shared-database isolation must be treated as a security contract. That contract now rests entirely on the table-name prefix: the least-privilege roles that once enforced it in the database were removed on 2026-09-22 as unjustified for a single-machine deployment (`ROADMAP.md` `WP-08`). Only `lit_`-prefixed tables may be created or touched, and nothing but code discipline enforces it.
 
 ### `ADR-02` — Gold is the canonical analytical layer
 

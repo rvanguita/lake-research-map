@@ -515,3 +515,88 @@ def article_table(df: pd.DataFrame, columns: list[str], download_key: str = "") 
             key=f"dl_{download_key}",
             icon=":material/download:",
         )
+
+
+def taxonomy_disclosure(df, taxonomy_name: str, *, key: str = "") -> None:
+    """State what share of the corpus a regex taxonomy actually classifies.
+
+    `WP-12` requires every displayed taxonomy to report its evaluated coverage
+    and either meet a declared minimum precision or be labelled exploratory.
+    None of them has a reviewed sample yet, so all are exploratory — but the
+    coverage is measurable today and is the number that changes how the chart
+    above should be read.
+
+    The distinction matters because a frequency chart drawn over matched
+    articles only answers "among the ones I recognised, which is most common?"
+    while appearing to answer "what does this corpus do?". On five of the seven
+    taxonomies here the recognised share is under a third.
+
+    Precision upgrades itself: once labels exist for this taxonomy the panel
+    reports per-class precision/recall/F1 instead of the exploratory notice,
+    with no further code change.
+    """
+    from lake_research_map.dashboard.analytics import (
+        TAXONOMY_REGISTRY,
+        taxonomy_coverage,
+        taxonomy_precision_from_labels,
+    )
+
+    patterns = TAXONOMY_REGISTRY.get(taxonomy_name)
+    if patterns is None or df is None or getattr(df, "empty", True):
+        return
+    stats = taxonomy_coverage(df, patterns)
+    if not stats["population"]:
+        return
+
+    scored = pd.DataFrame()
+    try:
+        labels = loaders.review_labels("taxonomy")
+        if not labels.empty:
+            scored = taxonomy_precision_from_labels(df, patterns, labels)
+    except Exception:
+        # A missing review table must not take down an analytical page.
+        logger.debug("taxonomy_disclosure: review labels unavailable", exc_info=True)
+
+    with st.expander(f"Coverage and validation — {taxonomy_name}", expanded=False):
+        metric_row(
+            [
+                (
+                    "\U0001f4d0 Corpus classified",
+                    f"{stats['coverage']:.1%}",
+                    f"{stats['classified']:,} of {stats['population']:,} articles",
+                ),
+                (
+                    "\U0001f573️ Matched no class",
+                    f"{stats['unclassified']:,}",
+                    "Invisible to the chart above",
+                ),
+                (
+                    "\U0001f501 In more than one class",
+                    f"{stats['multi_label']:,}",
+                    "Classes overlap; counts are not a partition",
+                ),
+            ]
+        )
+        if scored.empty:
+            st.warning(
+                "**Exploratory.** No reviewed sample exists for this taxonomy, so its "
+                "precision and recall are unmeasured — the classes are regex matches over "
+                "title and abstract, not validated labels. Read the chart as "
+                f'"among the {stats["coverage"]:.0%} of articles this rule recognises", '
+                "never as a description of the corpus. Generate a sample with "
+                "`lake-research-map evidence taxonomy` to replace this notice with "
+                "measured per-class precision."
+            )
+        else:
+            display = scored.copy()
+            for column in ("precision", "recall", "f1"):
+                display[column] = display[column].map(
+                    lambda value: "n/a" if pd.isna(value) else f"{value:.2f}"
+                )
+            st.dataframe(display, hide_index=True, width="stretch")
+            st.caption(
+                "Precision and recall are computed against reviewed labels; `ambiguous` "
+                "rows are excluded from both and counted separately, because a reviewer "
+                "who could not decide is evidence about the class boundary rather than a "
+                "negative. Recall is bounded by what the sample covered, not by the corpus."
+            )

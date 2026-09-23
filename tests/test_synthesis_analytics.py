@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pathlib
+
 import pandas as pd
 
 from lake_research_map.dashboard.analytics import (
@@ -243,3 +245,114 @@ def test_retired_page_controllers_are_removed():
     assert not hasattr(highlights, "_collaboration_team_size")
     assert not hasattr(highlights, "_top_authors")
     assert not hasattr(highlights, "_venue_impact")
+
+
+def test_taxonomy_coverage_reports_what_the_chart_leaves_out():
+    """WP-12: a frequency chart over matched articles only cannot describe a corpus.
+
+    The unclassified share and the multi-label count are the two numbers that
+    change how the chart above should be read: the first says how much is
+    invisible, the second says the per-class counts are not a partition.
+    """
+    import pandas as pd
+
+    from lake_research_map.dashboard.analytics import TAXONOMY_REGISTRY, taxonomy_coverage
+
+    frame = pd.DataFrame(
+        {
+            "doi": ["10.1/a", "10.1/b", "10.1/c", "10.1/d"],
+            "title": [
+                "A genetic algorithm and MILP hybrid",  # two classes
+                "Particle swarm optimization of feeders",  # one class
+                "Cold chain logistics routing",  # none
+                "Warehouse location planning",  # none
+            ],
+            "abstract": [""] * 4,
+        }
+    )
+
+    stats = taxonomy_coverage(frame, TAXONOMY_REGISTRY["Optimization methods"])
+
+    assert stats["population"] == 4
+    assert stats["classified"] == 2
+    assert stats["unclassified"] == 2
+    assert stats["coverage"] == 0.5
+    assert stats["multi_label"] == 1  # the GA+MILP paper
+    assert sum(stats["per_class"].values()) > stats["classified"]  # not a partition
+
+    empty = taxonomy_coverage(pd.DataFrame(), TAXONOMY_REGISTRY["Optimization methods"])
+    assert empty["population"] == 0
+
+
+def test_every_displayed_taxonomy_is_in_the_registry():
+    """`WP-12` says *each* displayed taxonomy discloses coverage. The registry is
+    what makes "each" enumerable rather than a promise, so it must stay in step
+    with the page that renders them."""
+    from lake_research_map.dashboard.analytics import TAXONOMY_REGISTRY
+
+    assert set(TAXONOMY_REGISTRY) == {
+        "Optimization methods",
+        "Objective functions",
+        "Uncertainty paradigms",
+        "Planning horizons",
+        "Computational solvers",
+        "Mathematical complexity",
+        "Benchmark feeders",
+    }
+    page = pathlib.Path("src/lake_research_map/dashboard/pages/synthesis.py").read_text(
+        encoding="utf-8"
+    )
+    for name in TAXONOMY_REGISTRY:
+        assert f'taxonomy_disclosure(df, "{name}")' in page, name
+
+
+def test_precision_scores_only_decided_labels():
+    """`ambiguous` is evidence about the class boundary, not a negative.
+
+    Counting it as one would punish the regex for a reviewer's hesitation and
+    quietly inflate the false-positive count.
+    """
+    import pandas as pd
+
+    from lake_research_map.dashboard.analytics import (
+        TAXONOMY_REGISTRY,
+        taxonomy_precision_from_labels,
+    )
+
+    frame = pd.DataFrame(
+        {
+            "doi": ["10.1/a", "10.1/b", "10.1/c"],
+            "title": [
+                "A genetic algorithm approach",  # matched
+                "A genetic algorithm approach",  # matched
+                "Cold chain logistics",  # not matched
+            ],
+            "abstract": [""] * 3,
+        }
+    )
+    labels = pd.DataFrame(
+        {
+            "subject_id": [
+                "Genetic Algorithms (GA)::10.1/a",  # matched + present -> TP
+                "Genetic Algorithms (GA)::10.1/b",  # matched + absent  -> FP
+                "Genetic Algorithms (GA)::10.1/c",  # unmatched + present -> FN
+                "Genetic Algorithms (GA)::10.1/a",  # ambiguous, excluded
+            ],
+            "label": ["present", "absent", "present", "ambiguous"],
+        }
+    )
+
+    scored = taxonomy_precision_from_labels(
+        frame, TAXONOMY_REGISTRY["Optimization methods"], labels
+    )
+    row = scored[scored["class"] == "Genetic Algorithms (GA)"].iloc[0]
+
+    assert (row["true_positive"], row["false_positive"], row["false_negative"]) == (1, 1, 1)
+    assert row["ambiguous"] == 1
+    assert row["labelled"] == 3  # the ambiguous row is not counted as decided
+    assert row["precision"] == 0.5 and row["recall"] == 0.5
+
+    # No labels at all is the current state: an empty frame, not a crash.
+    assert taxonomy_precision_from_labels(
+        frame, TAXONOMY_REGISTRY["Optimization methods"], pd.DataFrame()
+    ).empty
