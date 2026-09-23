@@ -34,7 +34,23 @@ from lake_research_map.ingest.enrichment import ENRICHMENT_CACHE_PATH, _normaliz
 logger = logging.getLogger(__name__)
 
 OPENALEX_BASE_URL = "https://api.openalex.org/works"
-DEFAULT_USER_AGENT = "lake-research-map/1.0 (https://github.com/rvanguita/lake-research-map; mailto:researcher@example.com)"
+PROJECT_URL = "https://github.com/rvanguita/lake-research-map"
+DEFAULT_USER_AGENT = f"lake-research-map/1.0 ({PROJECT_URL})"
+
+
+def _user_agent(email: str | None) -> str:
+    """Identify the client honestly, or not at all.
+
+    The header used to carry a fixed `mailto:researcher@example.com`. An
+    address nobody reads is worse than no address: it is what OpenAlex would
+    contact about a misbehaving crawl, and it made every run look identically
+    anonymous while claiming otherwise. The contact address now comes from the
+    environment, and the header simply omits it when there is none.
+    """
+    contact = (email or os.environ.get("OPENALEX_EMAIL") or "").strip()
+    if not contact:
+        return DEFAULT_USER_AGENT
+    return f"lake-research-map/1.0 ({PROJECT_URL}; mailto:{contact})"
 
 
 def fetch_openalex_work(
@@ -76,9 +92,9 @@ def fetch_openalex_observation(
         }
 
     url = f"{OPENALEX_BASE_URL}/https://doi.org/{quote(clean_doi, safe='')}"
-    headers = {"User-Agent": DEFAULT_USER_AGENT}
     params = {}
     resolved_email = email or os.environ.get("OPENALEX_EMAIL")
+    headers = {"User-Agent": _user_agent(resolved_email)}
     resolved_key = api_key or os.environ.get("OPENALEX_API_KEY")
     if resolved_email:
         params["mailto"] = resolved_email
@@ -368,7 +384,10 @@ def fetch_openalex_citing_works(
         if resolved_key:
             params["api_key"] = resolved_key
         response = get(
-            OPENALEX_BASE_URL, params=params, headers={"User-Agent": DEFAULT_USER_AGENT}, timeout=30
+            OPENALEX_BASE_URL,
+            params=params,
+            headers={"User-Agent": _user_agent(resolved_email)},
+            timeout=30,
         )
         response.raise_for_status()
         payload = response.json()

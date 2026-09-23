@@ -172,7 +172,9 @@ Screening labels remain target governed data rather than dashboard session state
 7. Record stage metrics, quality results, lineage, duration, and error details against the parent run.
 8. Invalidate dashboard caches after successful publication.
 
-Retry policy is stage-specific. Pure derived stages may retry safely; external enrichment uses bounded retries, timeouts, and durable response status; a failed batch does not masquerade as “not found.” Backfills create new versions rather than rewriting the evidential history.
+Retry policy is stage-specific and declared per stage in `STAGE_POLICY` (`airflow/dags/lake_research_map_dags.py`). Pure derived stages may retry safely; external enrichment uses bounded retries, timeouts, and durable response status; a failed batch does not masquerade as “not found.” Backfills create new versions rather than rewriting the evidential history.
+
+Abandoned executions are recovered without human intervention. `run()` sweeps executions still marked `running` whenever it actually acquired the MySQL advisory lock, because holding that lock proves no other writer is live and therefore that every surviving `running` row was left by a dead process. Under SQLite the lock is bypassed, the flag is false, and no sweep occurs. The manual `maintenance recover-stale` command shares the same implementation and keeps its age cutoff for operators who want one.
 
 ## 5. Additive schema evolution
 
@@ -268,7 +270,7 @@ Logs use structured fields with parent run ID, stage run ID, and dataset version
 
 ### 9.1 Current baseline
 
-The repository has 229 pytest tests. They run with isolated in-memory SQLite sessions and additionally cover deterministic fingerprints, content-addressed retention, rename detection, Bronze deletion propagation, isolated Gold candidates, embedding contract failures, atomic materialization, exact Gold reactivation, an end-to-end correlated pipeline fixture, Airflow parent correlation, temporal enrichment observations, and persistent human-review evidence. Ruff lint and format checks are required.
+The repository has 303 pytest tests. They run with isolated in-memory SQLite sessions and additionally cover deterministic fingerprints, content-addressed retention, rename detection, Bronze deletion propagation, isolated Gold candidates, embedding contract failures, atomic materialization, exact Gold reactivation, an end-to-end correlated pipeline fixture, Airflow parent correlation, temporal enrichment observations, persistent human-review evidence, the durable-label-to-calibration join with its approval digests, the injected-fixture citation-graph crawl, and automatic abandoned-run recovery. Ruff lint and format checks are required.
 
 SQLite remains the default fast suite. MySQL-specific acceptance is recorded separately against MySQL 8.4 and must be rerun for changes to JSON/NULL behavior, BLOBs, DDL, transactions, or advisory locks.
 

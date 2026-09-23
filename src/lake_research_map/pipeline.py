@@ -147,7 +147,12 @@ def _pipeline_lock(execution_id: str):
                     f"execution {execution_id} was not started. "
                     "Wait for it to finish and retry."
                 )
-        yield
+        # Yielding the flag is what lets the caller sweep abandoned runs
+        # safely: holding this lock is proof that no other writer is live, so
+        # anything still marked `running` was left behind by a process that
+        # died. Under SQLite the flag is False and no sweep happens, because
+        # nothing was proven.
+        yield acquired
     finally:
         if acquired:
             try:
@@ -776,8 +781,10 @@ def run(
 ) -> None:
     execution_id = execution_id or str(uuid.uuid4())
     workflow = workflow or stage
-    with _pipeline_lock(execution_id):
+    with _pipeline_lock(execution_id) as exclusive:
         bootstrap()
+        if exclusive:
+            _recover_before_run(execution_id)
         if stage == "all":
             run_all(execution_id=execution_id, trigger=trigger, source_policy=source_policy)
             return
@@ -878,6 +885,31 @@ def _configure_review_commands(subparsers) -> None:
     approve.add_argument("--metrics-json", required=True)
     approve.add_argument("--approved-by", required=True)
     approve.add_argument("--reject", action="store_true")
+    status = actions.add_parser(
+        "status", help="Report labelling progress, agreement, and the disagreement queue"
+    )
+    status.add_argument("--workflow", required=True)
+    status.add_argument("--version-id", required=True)
+    status.add_argument(
+        "--queue-limit",
+        type=int,
+        default=20,
+        help="How many unresolved subjects to list (0 lists none)",
+    )
+    calibrate = actions.add_parser(
+        "calibrate",
+        help="Evaluate the screening threshold against the labels stored in the database",
+    )
+    calibrate.add_argument("--version-id", required=True)
+    calibrate.add_argument(
+        "--min-recall",
+        type=float,
+        default=0.98,
+        help="Sensitivity the selected threshold must reach on the calibration split",
+    )
+    calibrate.add_argument(
+        "--output-json", help="Write the full result, including both digests, to this path"
+    )
 
 
 def _read_subject_file(path: str) -> list[str]:
@@ -901,6 +933,180 @@ def _read_subject_file(path: str) -> list[str]:
     if not subjects:
         raise ValueError(f"{path}: no subject_id values to assign")
     return sorted(dict.fromkeys(subjects))
+
+
+def _print_review_status(session, args: argparse.Namespace) -> None:
+    """Report a review round from the durable tables rather than an upload.
+
+    The agreement report was only ever reachable by uploading a CSV to the
+    dashboard, so the labels the CLI persists had no reader. Progress is
+    broken out per reviewer because a round where one reviewer finished and
+    the other has not started still produces labels, and a single completion
+    figure hides exactly the case that makes kappa meaningless.
+    """
+    import pandas as pd
+
+    from lake_research_map.transform.review_workflows import (
+        assignment_progress,
+        collect_labels,
+    )
+    from lake_research_map.transform.screening_calibration import (
+        label_set_digest,
+        resolve_review_consensus,
+        reviewer_agreement,
+    )
+
+    progress = assignment_progress(
+        session, workflow=args.workflow, dataset_version_id=args.version_id
+    )
+    print(f"Assignments: {progress['assignments']}")
+    print(f"Labelled:    {progress['labelled']} ({progress['outstanding']} outstanding)")
+    for reviewer, count in progress["labelled_by_reviewer"].items():
+        pending = progress["outstanding_by_reviewer"].get(reviewer, 0)
+        print(f"  {reviewer}: {count} labelled, {pending} outstanding")
+
+    rows = collect_labels(session, workflow=args.workflow, dataset_version_id=args.version_id)
+    if not rows:
+        print("No labels have been imported for this workflow and version yet.")
+        return
+    labels = pd.DataFrame(rows)
+    print(f"Label set SHA-256: {label_set_digest(labels)}")
+
+    agreement = reviewer_agreement(labels)
+    if agreement.empty:
+        print("Agreement needs at least two reviewers with binary decisions in common.")
+    else:
+        for row in agreement.itertuples(index=False):
+            kappa = "n/a" if pd.isna(row.kappa) else f"{row.kappa:.3f}"
+            raw = "n/a" if pd.isna(row.raw_agreement) else f"{row.raw_agreement:.1%}"
+            print(
+                f"  {row.reviewer_a} vs {row.reviewer_b}: n={row.n_overlap} "
+                f"agreement={raw} kappa={kappa} ({row.status})"
+            )
+
+    resolved = resolve_review_consensus(labels)
+    unresolved = resolved[~resolved["resolved"]]
+    print(f"Resolved: {int(resolved['resolved'].sum())}, unresolved: {len(unresolved)}")
+    if args.queue_limit and not unresolved.empty:
+        print("Disagreement queue (adjudicate these):")
+        for row in unresolved.head(args.queue_limit).itertuples(index=False):
+            print(f"  {row.doi} [{row.resolution}] reviewers={row.reviewer_count}")
+
+
+def _print_screening_calibration(session, args: argparse.Namespace) -> None:
+    """Calibrate the screening margin against the labels stored in the database.
+
+    Nothing is applied: the command reports the evidence and the two digests
+    that `reviews approve` needs, and the approval stays a human decision.
+    That separation is the point of the package -- a threshold that excludes
+    work is not allowed to select itself.
+    """
+    import pandas as pd
+
+    from lake_research_map.db.gold_models import DatasetSemantics
+    from lake_research_map.transform.embeddings import EMBED_MODEL_NAME
+    from lake_research_map.transform.review_workflows import collect_labels
+    from lake_research_map.transform.screening_calibration import (
+        calibrate_screening_threshold,
+        label_set_digest,
+        resolve_review_consensus,
+        screening_model_digest,
+        validate_review_labels,
+    )
+    from lake_research_map.transform.semantics import ANCHOR_TEXT, OFF_ANCHOR_TEXT
+
+    rows = collect_labels(session, workflow="screening", dataset_version_id=args.version_id)
+    if not rows:
+        raise ValueError(
+            "no screening labels are stored for this version; import reviewer decisions first"
+        )
+
+    scored = pd.DataFrame(
+        session.execute(
+            select(
+                DatasetSemantics.doi,
+                DatasetSemantics.relevance_score,
+                DatasetSemantics.offtopic_score,
+            ).where(DatasetSemantics.dataset_version_id == args.version_id)
+        ).all(),
+        columns=["doi", "relevance_score", "offtopic_score"],
+    )
+    if scored.empty or scored["offtopic_score"].isna().all():
+        raise ValueError(
+            "this version carries no contrastive margin; re-run `--stage semantic` before "
+            "calibrating, because a threshold on the single anchor is not what is approved"
+        )
+    scored["relevance_margin"] = scored["relevance_score"] - scored["offtopic_score"]
+
+    labels, issues = validate_review_labels(
+        pd.DataFrame(rows), known_dois=set(scored["doi"].dropna().astype(str))
+    )
+    # A `reject::` subject is a record dropped before it ever had a margin, so
+    # it cannot take part in a threshold evaluation. It is reported rather than
+    # dropped in silence: a round whose labels mostly vanish at this join looks
+    # identical to a round that was never labelled.
+    if not issues.empty:
+        for row in issues.itertuples(index=False):
+            print(f"  [{row.severity}] {row.code}: {row.doi or ''} {row.detail}")
+    if labels.empty:
+        raise ValueError("no stored label survived validation against the active margins")
+
+    resolved = resolve_review_consensus(labels)
+    result = calibrate_screening_threshold(resolved, scored, min_recall=args.min_recall)
+    labels_digest = label_set_digest(labels)
+
+    print(f"Labels used: {len(labels)} rows over {resolved['doi'].nunique()} subjects")
+    print(f"Label set SHA-256: {labels_digest}")
+    if not result["valid"]:
+        print(f"Not calibratable yet: {result['reason']} (resolved={result['n_resolved']})")
+        print(
+            "The calibration needs at least 40 resolved subjects with 10 in each class. "
+            "Automatic exclusion stays disabled until then, which is the documented "
+            "failure mode rather than an error."
+        )
+        return
+
+    threshold = float(result["threshold"])
+    model_digest = screening_model_digest(
+        embed_model=EMBED_MODEL_NAME,
+        anchor_text=ANCHOR_TEXT,
+        off_anchor_text=OFF_ANCHOR_TEXT,
+        threshold=threshold,
+        min_recall=args.min_recall,
+    )
+    metrics = result["metrics"]
+    intervals = result["confidence_intervals"]
+    print(f"Threshold: margin >= {threshold:+.4f}")
+    print(f"Model SHA-256: {model_digest}")
+    print(f"Fitted on {result['n_calibration']}, evaluated on {result['n_holdout']} held out.")
+    for name in ("recall", "specificity", "precision", "f2", "workload_reduction"):
+        low, high = intervals[name]
+        print(f"  {name}: {metrics[name]:.1%} (95% CI {low:.1%}-{high:.1%})")
+    print(
+        "Nothing was applied. Record the decision with `reviews approve --workflow screening "
+        f"--version-id {args.version_id} --model-sha256 {model_digest} "
+        f"--label-set-sha256 {labels_digest} ...`."
+    )
+
+    if args.output_json:
+        from pathlib import Path
+
+        payload = {
+            "dataset_version_id": args.version_id,
+            "threshold": threshold,
+            "min_recall": args.min_recall,
+            "model_sha256": model_digest,
+            "label_set_sha256": labels_digest,
+            "metrics": metrics,
+            "confidence_intervals": {k: list(v) for k, v in intervals.items()},
+            "n_calibration": result["n_calibration"],
+            "n_holdout": result["n_holdout"],
+            "n_resolved": result["n_resolved"],
+        }
+        path = Path(args.output_json)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+        print(f"Wrote {path}.")
 
 
 def _run_review_command(args: argparse.Namespace) -> None:
@@ -965,6 +1171,10 @@ def _run_review_command(args: argparse.Namespace) -> None:
                 rationale=args.reason,
             )
             print(f"Adjudicated {args.subject_id} as {args.label}.")
+        elif args.review_action == "status":
+            _print_review_status(session, args)
+        elif args.review_action == "calibrate":
+            _print_screening_calibration(session, args)
         else:
             approve_model(
                 session,
@@ -990,18 +1200,55 @@ def _configure_enrichment_commands(subparsers) -> None:
     refresh = actions.add_parser("refresh-openalex", help="Refresh the active DOI population")
     refresh.add_argument("--max-fetch", type=int, default=100)
     refresh.add_argument("--delay", type=float, default=0.1)
+    citations = actions.add_parser(
+        "refresh-citations",
+        help="Crawl incoming citation edges for works already observed in Bronze",
+    )
+    citations.add_argument("--max-works", type=int, default=50)
+    citations.add_argument("--delay", type=float, default=0.2)
+    citations.add_argument(
+        "--max-pages",
+        type=int,
+        default=None,
+        help="Page budget per work; a work that exhausts it is recorded as truncated",
+    )
+
+
+def _require_openalex_identity() -> str:
+    """OpenAlex has no API key; what it asks for is a contact address.
+
+    The gate used to demand `OPENALEX_API_KEY` as well, which no OpenAlex
+    account issues for the public corpus, so every refresh was unreachable by
+    construction -- the same shape of defect as the database roles WP-08
+    removed. The polite-pool address is mandatory because an anonymous crawl
+    of this size is what gets a client rate-limited; a key is accepted when
+    one exists and never required.
+    """
+    email = (os.environ.get("OPENALEX_EMAIL") or "").strip()
+    if not email:
+        raise ValueError(
+            "OPENALEX_EMAIL must be set: OpenAlex identifies polite-pool clients by a contact "
+            "address, and an anonymous crawl of the whole corpus will be throttled. "
+            "OPENALEX_API_KEY is optional and only applies to a premium account."
+        )
+    return email
 
 
 def _run_enrichment_command(args: argparse.Namespace) -> None:
     from lake_research_map.db.gold_models import DatasetArticle, PublicationState
     from lake_research_map.ingest.openalex import refresh_openalex_observations
 
-    if not os.environ.get("OPENALEX_API_KEY") or not os.environ.get("OPENALEX_EMAIL"):
-        raise ValueError("OPENALEX_API_KEY and OPENALEX_EMAIL must be set")
+    _require_openalex_identity()
     bootstrap()
     gold_session = get_session("gold")
     bronze_session = get_session("bronze")
     try:
+        # The forward crawl reads Bronze only. Requiring an active Gold version
+        # for it would fail with "no active dataset version", which says
+        # nothing about the command the operator actually ran.
+        if args.enrichment_action == "refresh-citations":
+            print(_refresh_citation_edges(bronze_session, args))
+            return
         state = gold_session.get(PublicationState, 1)
         if state is None or not state.active_version_id:
             raise ValueError("no active dataset version")
@@ -1020,6 +1267,60 @@ def _run_enrichment_command(args: argparse.Namespace) -> None:
     finally:
         bronze_session.close()
         gold_session.close()
+
+
+def _refresh_citation_edges(bronze_session, args: argparse.Namespace) -> dict:
+    """Collect forward citation edges for works `refresh-openalex` already saw.
+
+    The crawl is driven from `lit_external_works` rather than from DOIs,
+    because `cites:` filters on an OpenAlex work id: a DOI the backward pass
+    never resolved has no id to crawl, and asking for one would be a second
+    lookup per work for no extra evidence.
+
+    Truncation is recorded, not smoothed over. A work whose page budget ran
+    out has an incomplete forward set, and `citation_graph_coverage` has to be
+    able to exclude it -- otherwise a disruption index would be computed over
+    a citation tail that was silently cut off.
+    """
+    import time
+
+    from lake_research_map.db.bronze_models import ExternalWork
+    from lake_research_map.ingest.openalex import (
+        CITING_MAX_PAGES,
+        fetch_openalex_citing_works,
+        persist_incoming_edges,
+    )
+
+    observed_at = datetime.now(UTC).replace(tzinfo=None)
+    work_ids = bronze_session.scalars(
+        select(ExternalWork.provider_work_id)
+        .where(ExternalWork.provider == "openalex")
+        .order_by(ExternalWork.provider_work_id)
+    ).all()
+    if not work_ids:
+        raise ValueError(
+            "no OpenAlex works have been observed yet; run `enrichment refresh-openalex` first"
+        )
+
+    max_pages = args.max_pages or CITING_MAX_PAGES
+    edges = truncated = crawled = 0
+    for work_id in work_ids[: args.max_works]:
+        result = fetch_openalex_citing_works(work_id, max_pages=max_pages)
+        edges += persist_incoming_edges(
+            bronze_session, work_id, result["citing_work_ids"], observed_at
+        )
+        truncated += int(result["truncated"])
+        crawled += 1
+        if args.delay:
+            time.sleep(args.delay)
+    bronze_session.commit()
+    return {
+        "works_known": len(work_ids),
+        "works_crawled": crawled,
+        "edges_inserted": edges,
+        "truncated_works": truncated,
+        "observed_at": observed_at.isoformat(),
+    }
 
 
 def _configure_evidence_commands(subparsers) -> None:
@@ -1118,9 +1419,64 @@ def _configure_audit_commands(subparsers) -> None:
     audit = subparsers.add_parser("audit", help="Run read-only corpus acceptance audits")
     actions = audit.add_subparsers(dest="audit_action", required=True)
     actions.add_parser("reference-corpus", help="Report active version and contract coverage")
+    actions.add_parser(
+        "citation-graph",
+        help="Measure forward/backward citation coverage and whether disruption is usable",
+    )
+
+
+def _audit_citation_graph() -> None:
+    """Report WP-24's coverage gate instead of asserting it was met.
+
+    The gate says CD/disruption stays unavailable unless coverage is adequate,
+    which nothing could evaluate while `citation_graph_coverage` had no caller.
+    The usable population is the intersection of the two directions, so this
+    prints the number that decides the gate rather than the larger of the two
+    that would flatter it.
+    """
+    from lake_research_map.db.bronze_models import ExternalWork
+    from lake_research_map.ingest.openalex import citation_graph_coverage
+
+    bootstrap()
+    session = get_session("bronze")
+    try:
+        work_ids = session.scalars(
+            select(ExternalWork.provider_work_id).where(ExternalWork.provider == "openalex")
+        ).all()
+        if not work_ids:
+            print(
+                "No OpenAlex works observed, so citation coverage is 0 by absence rather than "
+                "by measurement. Run `enrichment refresh-openalex` and then "
+                "`enrichment refresh-citations`."
+            )
+            return
+        coverage = citation_graph_coverage(session, list(work_ids))
+        print(f"Population:          {coverage['population']}")
+        print(
+            f"Backward (refs):     {coverage['with_backward']} "
+            f"({coverage['backward_coverage']:.1%})"
+        )
+        print(
+            f"Forward (cites:):    {coverage['with_forward']} ({coverage['forward_coverage']:.1%})"
+        )
+        print(
+            f"Usable for CD:       {coverage['usable_for_disruption']} "
+            f"({coverage['disruption_coverage']:.1%}) -- works with both directions"
+        )
+        if coverage["disruption_coverage"] < 0.80:
+            print(
+                "Below 80% in both directions: the disruption index stays unavailable, which is "
+                "WP-24's documented outcome for inadequate coverage, not a failure to fix in code."
+            )
+    finally:
+        session.close()
 
 
 def _run_audit_command(args: argparse.Namespace) -> None:
+    if args.audit_action == "citation-graph":
+        _audit_citation_graph()
+        return
+
     from lake_research_map.db.gold_models import (
         DatasetArticle,
         DatasetChunk,
@@ -1175,9 +1531,88 @@ def _configure_maintenance_commands(subparsers) -> None:
     recover.add_argument("--older-than-minutes", type=int, default=30)
 
 
-def _run_maintenance_command(args: argparse.Namespace) -> None:
+def recover_abandoned_executions(
+    session,
+    *,
+    cutoff: datetime | None = None,
+    reason: str = "recovered after stale heartbeat",
+) -> list[str]:
+    """Fail every execution still marked `running` that nothing is driving.
+
+    Callers must already hold the pipeline lock. With `cutoff` set, only runs
+    whose last signal predates it are touched; with `cutoff` None the caller is
+    asserting exclusivity -- the advisory lock is held, so no live writer
+    exists and every `running` row is by definition abandoned.
+
+    Returns the recovered execution ids so the caller can report them; a
+    recovery that happens silently is indistinguishable from one that never
+    ran.
+    """
     from lake_research_map.db.gold_models import PipelineExecution, PipelineRun
 
+    # A missing heartbeat has to count as stale, not as "still alive".
+    # `heartbeat_at` is NULL for every execution that predates the column
+    # and for any process killed before its first batch, so requiring it
+    # to be non-null made the recovery a no-op on exactly the abandoned
+    # runs it exists to clear (NULL < cutoff is NULL, never true).
+    # `started_at` is always present, so fall back to it.
+    last_signal = func.coalesce(PipelineExecution.heartbeat_at, PipelineExecution.started_at)
+    query = select(PipelineExecution).where(PipelineExecution.status == "running")
+    if cutoff is not None:
+        query = query.where(last_signal < cutoff)
+    executions = session.scalars(query).all()
+    for execution in executions:
+        execution.status = "error"
+        execution.finished_at = datetime.now(UTC).replace(tzinfo=None)
+        execution.error_message = reason
+        for run_row in session.scalars(
+            select(PipelineRun).where(
+                PipelineRun.execution_id == execution.execution_id,
+                PipelineRun.status == "running",
+            )
+        ):
+            run_row.status = "error"
+            run_row.finished_at = execution.finished_at
+            run_row.duration_seconds = max(
+                0.0, (execution.finished_at - run_row.started_at).total_seconds()
+            )
+            run_row.error_message = execution.error_message
+    session.commit()
+    return [execution.execution_id for execution in executions]
+
+
+def _recover_before_run(execution_id: str) -> None:
+    """Clear runs abandoned by an earlier crash, before this one starts.
+
+    The manual `maintenance recover-stale` command was the only way a killed
+    run ever stopped reading as `running`, so until someone remembered to type
+    it the execution history claimed a run was in progress that had not existed
+    for days -- and the dashboard's own status came from those rows. This runs
+    under the lock we already hold, which is what makes it safe to treat every
+    surviving `running` row as abandoned rather than waiting out a timeout.
+    """
+    session = get_session("gold")
+    try:
+        recovered = recover_abandoned_executions(
+            session, reason="recovered automatically at the start of a later run"
+        )
+        if recovered:
+            logger.warning(
+                "recovered %d abandoned execution(s) before starting %s: %s",
+                len(recovered),
+                execution_id,
+                ", ".join(recovered),
+            )
+    except Exception:
+        # Recovery is housekeeping. A pipeline run that is otherwise ready
+        # must not be blocked by it.
+        logger.warning("could not recover abandoned executions", exc_info=True)
+        session.rollback()
+    finally:
+        session.close()
+
+
+def _run_maintenance_command(args: argparse.Namespace) -> None:
     if args.older_than_minutes < 1:
         raise ValueError("--older-than-minutes must be positive")
     execution_id = f"recovery-{uuid.uuid4()}"
@@ -1188,39 +1623,8 @@ def _run_maintenance_command(args: argparse.Namespace) -> None:
             cutoff = datetime.now(UTC).replace(tzinfo=None) - timedelta(
                 minutes=args.older_than_minutes
             )
-            # A missing heartbeat has to count as stale, not as "still alive".
-            # `heartbeat_at` is NULL for every execution that predates the column
-            # and for any process killed before its first batch, so requiring it
-            # to be non-null made the recovery a no-op on exactly the abandoned
-            # runs it exists to clear (NULL < cutoff is NULL, never true).
-            # `started_at` is always present, so fall back to it.
-            last_signal = func.coalesce(
-                PipelineExecution.heartbeat_at, PipelineExecution.started_at
-            )
-            executions = session.scalars(
-                select(PipelineExecution).where(
-                    PipelineExecution.status == "running",
-                    last_signal < cutoff,
-                )
-            ).all()
-            for execution in executions:
-                execution.status = "error"
-                execution.finished_at = datetime.now(UTC).replace(tzinfo=None)
-                execution.error_message = "recovered after stale heartbeat"
-                for run_row in session.scalars(
-                    select(PipelineRun).where(
-                        PipelineRun.execution_id == execution.execution_id,
-                        PipelineRun.status == "running",
-                    )
-                ):
-                    run_row.status = "error"
-                    run_row.finished_at = execution.finished_at
-                    run_row.duration_seconds = max(
-                        0.0, (execution.finished_at - run_row.started_at).total_seconds()
-                    )
-                    run_row.error_message = execution.error_message
-            session.commit()
-            print({"recovered": len(executions), "cutoff": cutoff.isoformat()})
+            recovered = recover_abandoned_executions(session, cutoff=cutoff)
+            print({"recovered": len(recovered), "cutoff": cutoff.isoformat()})
         finally:
             session.close()
 
