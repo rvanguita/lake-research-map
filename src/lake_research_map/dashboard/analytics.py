@@ -3605,3 +3605,178 @@ def conceptual_atypicality_analysis(df: pd.DataFrame, top_n_keywords: int = 50) 
         "hit_rate_baseline": round(hit_rate_baseline, 1),
         "cite_p95_threshold": int(cite_p95),
     }
+
+
+# -- Literature age and delayed recognition (WP-21) ---------------------------
+#
+# These three measures became computable once WP-23 dated the cited references
+# (Crossref deposits, OpenAlex otherwise) and WP-24 closed the citation
+# trajectories. Each works on an explicitly stated population: Price's index
+# on works whose reference list is mostly dated, and the two trajectory
+# measures only on works whose citation history is complete from publication.
+
+PRICE_WINDOW_YEARS = 5
+# A reference dated more than one year after the work citing it is a metadata
+# error, not an in-press citation, and would inflate the recent share.
+_MAX_FORWARD_REFERENCE_YEARS = 1
+
+
+def price_index_by_year(
+    refs: pd.DataFrame,
+    *,
+    window: int = PRICE_WINDOW_YEARS,
+    min_works: int = 10,
+    min_dated_share: float = 0.8,
+    n_boot: int = 500,
+    seed: int = 0,
+) -> pd.DataFrame:
+    """Price's index -- the share of references at most `window` years old.
+
+    `refs` has one row per cited reference: `doi`, the citing work's `year`,
+    and `reference_year` (NaN when undated). Works whose list is less than
+    `min_dated_share` dated are left out rather than scored on their dated
+    part: undated references are disproportionately books and reports, which
+    are older, so scoring the dated remainder would bias the index upward.
+
+    The index is a ratio of sums (all recent references over all dated ones in
+    a year), and its interval is a percentile bootstrap that resamples *works*,
+    because references within one list are not independent draws.
+    """
+    columns = ["year", "works", "references", "price_index", "ci_low", "ci_high"]
+    if refs.empty:
+        return pd.DataFrame(columns=columns)
+    frame = refs[["doi", "year", "reference_year"]].copy()
+    frame["year"] = pd.to_numeric(frame["year"], errors="coerce")
+    frame["reference_year"] = pd.to_numeric(frame["reference_year"], errors="coerce")
+    frame = frame.dropna(subset=["year"])
+    age = frame["year"] - frame["reference_year"]
+    frame["dated"] = frame["reference_year"].notna() & (age >= -_MAX_FORWARD_REFERENCE_YEARS)
+    frame["recent"] = frame["dated"] & (age <= window)
+    frame["listed"] = frame["reference_year"].isna() | frame["dated"]
+    per_work = frame.groupby("doi").agg(
+        year=("year", "first"),
+        listed=("listed", "sum"),
+        dated=("dated", "sum"),
+        recent=("recent", "sum"),
+    )
+    per_work = per_work[
+        (per_work["dated"] > 0) & (per_work["dated"] >= min_dated_share * per_work["listed"])
+    ]
+    rng = np.random.default_rng(seed)
+    rows = []
+    for year, group in per_work.groupby("year"):
+        if len(group) < min_works:
+            continue
+        dated = group["dated"].to_numpy(dtype=float)
+        recent = group["recent"].to_numpy(dtype=float)
+        sample = rng.integers(0, len(group), size=(n_boot, len(group)))
+        boot = recent[sample].sum(axis=1) / dated[sample].sum(axis=1)
+        rows.append(
+            {
+                "year": int(year),
+                "works": len(group),
+                "references": int(dated.sum()),
+                "price_index": recent.sum() / dated.sum(),
+                "ci_low": float(np.percentile(boot, 2.5)),
+                "ci_high": float(np.percentile(boot, 97.5)),
+            }
+        )
+    return pd.DataFrame(rows, columns=columns)
+
+
+def _citation_series(
+    trajectories: pd.DataFrame, last_complete_year: int
+) -> dict[str, tuple[int, np.ndarray]]:
+    """Per work: (publication year, citations in years 0..T since publication).
+
+    Citations dated before the publication year (online-first, preprints) are
+    folded into year 0 rather than dropped; the current, incomplete calendar
+    year is cut off so a half-counted year cannot look like a decline.
+    """
+    series: dict[str, tuple[int, np.ndarray]] = {}
+    if trajectories.empty:
+        return series
+    frame = trajectories.dropna(subset=["publication_year"])
+    for doi, group in frame.groupby("doi"):
+        published = int(group["publication_year"].iloc[0])
+        horizon = last_complete_year - published
+        if horizon < 0:
+            continue
+        counts = np.zeros(horizon + 1)
+        observed = group.dropna(subset=["year"])
+        for year, citations in zip(observed["year"], observed["citations"], strict=True):
+            offset = max(int(year) - published, 0)
+            if offset <= horizon:
+                counts[offset] += float(citations)
+        series[str(doi)] = (published, counts)
+    return series
+
+
+def citation_half_lives(
+    trajectories: pd.DataFrame,
+    *,
+    last_complete_year: int,
+    min_age: int = 5,
+    min_citations: int = 10,
+) -> pd.DataFrame:
+    """Years after publication until a work has half its citations so far.
+
+    The half-life is bounded by the work's age -- a five-year-old paper cannot
+    have a half-life above four -- so it is reported per publication cohort,
+    never pooled, and only for works at least `min_age` years old with at
+    least `min_citations` citations (below that, one citation moves the answer
+    by years).
+    """
+    columns = ["doi", "publication_year", "age", "total_citations", "half_life"]
+    rows = []
+    for doi, (published, counts) in _citation_series(trajectories, last_complete_year).items():
+        total = counts.sum()
+        age = len(counts) - 1
+        if age < min_age or total < min_citations:
+            continue
+        half_life = int(np.argmax(np.cumsum(counts) >= total / 2))
+        rows.append((doi, published, age, int(total), half_life))
+    return pd.DataFrame(rows, columns=columns)
+
+
+def sleeping_beauty_scores(
+    trajectories: pd.DataFrame, *, last_complete_year: int, min_citations: int = 10
+) -> pd.DataFrame:
+    """Beauty coefficient B and awakening year (Ke et al., 2015, PNAS 112:7426).
+
+    B sums, from publication to the citation peak t_m, how far each year's
+    citations fall below the straight line joining year 0 to the peak,
+    normalized by max(1, c_t). A work that peaks in its first year has B = 0.
+    The awakening year is the year of maximum distance below that line. A peak
+    in the last observed year may be a peak still rising; the table shows t_m
+    so that is visible rather than hidden.
+    """
+    columns = [
+        "doi",
+        "publication_year",
+        "beauty",
+        "peak_year",
+        "peak_citations",
+        "awakening_year",
+        "total_citations",
+    ]
+    rows = []
+    for doi, (published, counts) in _citation_series(trajectories, last_complete_year).items():
+        total = counts.sum()
+        if total < min_citations:
+            continue
+        peak = int(np.argmax(counts))
+        c0, cm = counts[0], counts[peak]
+        if peak == 0:
+            rows.append((doi, published, 0.0, published, int(cm), None, int(total)))
+            continue
+        t = np.arange(peak + 1)
+        observed = counts[: peak + 1]
+        line = c0 + (cm - c0) / peak * t
+        beauty = float(np.sum((line - observed) / np.maximum(1.0, observed)))
+        distance = np.abs((cm - c0) * t - peak * observed + peak * c0) / np.hypot(cm - c0, peak)
+        awakening = int(np.argmax(distance))
+        rows.append(
+            (doi, published, beauty, published + peak, int(cm), published + awakening, int(total))
+        )
+    return pd.DataFrame(rows, columns=columns)

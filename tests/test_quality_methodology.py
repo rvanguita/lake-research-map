@@ -98,3 +98,70 @@ def test_pdf_selection_bias_is_deterministic_and_keeps_missing_counts_missing():
     assert np.isfinite(first.set_index("metric").loc["year", "smd"])
     assert np.isnan(first.set_index("metric").loc["team_size", "smd"])
     assert first.set_index("metric").loc["team_size", "status"] == "zero_variance"
+
+
+def test_a_recorded_blocking_failure_refuses_canonical_gold(monkeypatch):
+    gold = _gold_frame()
+    monkeypatch.setattr(data, "load_articles", lambda layer: gold if layer == "gold" else gold)
+    monkeypatch.setattr(data, "active_dataset_version", lambda: "v1")
+    monkeypatch.setattr(
+        data,
+        "active_version_blocking_failures",
+        lambda version: ("Recorded blocking check failed for this version: doi_unique.",),
+    )
+
+    layer, _, status = data.select_articles_layer()
+
+    # A well-shaped frame is not enough: the pipeline's own verdict wins.
+    assert layer == "silver"
+    assert status["is_canonical"] is False
+    assert any("doi_unique" in reason for reason in status["fallback_reasons"])
+
+
+def test_only_the_latest_run_of_a_check_decides():
+    results = pd.DataFrame(
+        {
+            "check_id": ["doi_unique", "doi_unique", "abstract_present"],
+            "stage_run_id": [1, 2, 1],
+            "passed": [False, True, False],
+        }
+    )
+
+    assert data.blocking_failures(results) == (
+        "Recorded blocking check failed for this version: abstract_present.",
+    )
+    assert data.blocking_failures(results.iloc[:0]) == ()
+
+
+def test_blocking_failures_are_read_from_the_version_only(monkeypatch):
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+
+    from lake_research_map.db.gold_models import Base, QualityResult
+
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        for version, run, check, severity, passed in [
+            ("v1", 1, "doi_unique", "error", False),
+            ("v1", 1, "abstract_rate", "warning", False),
+            ("v0", 1, "title_present", "error", False),
+        ]:
+            session.add(
+                QualityResult(
+                    execution_id="e",
+                    stage_run_id=run,
+                    dataset_version_id=version,
+                    stage="gold",
+                    check_id=check,
+                    severity=severity,
+                    passed=passed,
+                )
+            )
+        session.commit()
+    monkeypatch.setattr(data, "get_engine", lambda layer: engine)
+
+    assert data.active_version_blocking_failures("v1") == (
+        "Recorded blocking check failed for this version: doi_unique.",
+    )
+    assert data.active_version_blocking_failures(None) == ()

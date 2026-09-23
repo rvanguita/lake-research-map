@@ -4,13 +4,10 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from lake_research_map.ingest.openalex import (
-    fetch_openalex_observation,
-    fetch_openalex_work,
-)
+from lake_research_map.ingest.openalex import fetch_openalex_observation
 
 
-def test_fetch_openalex_work_parses_counts():
+def test_fetch_openalex_observation_parses_counts():
     mock_resp = MagicMock()
     mock_resp.status_code = 200
     mock_resp.json.return_value = {
@@ -19,19 +16,19 @@ def test_fetch_openalex_work_parses_counts():
     }
 
     with patch("requests.get", return_value=mock_resp):
-        res = fetch_openalex_work("10.1109/TPWRS.2020.12345")
-        assert res is not None
+        res = fetch_openalex_observation("10.1109/TPWRS.2020.12345")
+        assert res["status"] == "success"
         assert res["citation_count"] == 42
         assert res["reference_count"] == 4
 
 
-def test_fetch_openalex_work_handles_404():
+def test_fetch_openalex_observation_handles_404():
     mock_resp = MagicMock()
     mock_resp.status_code = 404
 
     with patch("requests.get", return_value=mock_resp):
-        res = fetch_openalex_work("10.1109/NONEXISTENT")
-        assert res is None
+        res = fetch_openalex_observation("10.1109/NONEXISTENT")
+        assert res["status"] == "not_found"
 
 
 def test_fetch_openalex_observation_distinguishes_rate_limit():

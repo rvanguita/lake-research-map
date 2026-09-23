@@ -1,7 +1,7 @@
 # lake-research-map
 
 [![Python 3.13](https://img.shields.io/badge/python-3.13-blue.svg)](https://www.python.org/downloads/)
-[![Tests: 406 passed](https://img.shields.io/badge/tests-406%20passed-brightgreen.svg)](tests/)
+[![Tests: 447 passed](https://img.shields.io/badge/tests-447%20passed-brightgreen.svg)](tests/)
 [![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
 [![Streamlit Dashboard](https://img.shields.io/badge/dashboard-Streamlit-FF4B4B.svg)](src/lake_research_map/dashboard/)
 [![Airflow Orchestration](https://img.shields.io/badge/orchestration-Apache%20Airflow-017CEE.svg)](airflow/)
@@ -92,7 +92,7 @@ The Streamlit dashboard (`src/lake_research_map/dashboard/`) is partitioned into
 | **Overview** | High-level article counts plus publisher and publication-category distributions. |
 | **Production & Journals** | Annual output by category, cumulative growth, venue concentration, and CAPES/Qualis coverage. |
 | **Topics & Scientific Structure** | Vocabulary, co-occurrence, semantic themes, Bradford/Zipf diagnostics, and descriptive keyword-combination novelty. |
-| **Impact & Citations** | Reference and citation distributions, age-normalized impact, heavy-tail diagnostics, and an exposure-adjusted count GLM with robust intervals. |
+| **Impact & Citations** | Reference and citation distributions, age-normalized impact, heavy-tail diagnostics, an exposure-adjusted count GLM with robust intervals, and literature age: Price's index, citation half-life and the Sleeping Beauty coefficient. |
 | **Researchers & Collaboration** | Corpus-scoped author productivity and impact, temporal trajectories, co-authorship networks, research lines, and bibliometric laws. |
 | **Engineering Evidence** | Optimization paradigms, objectives, uncertainty, planning horizons, test feeders, and solver evidence. |
 | **Trends & Fronts** | Complete-year volume forecasts with rolling validation and conformal bands, topic trajectories, Bass diagnostics, and two-state Kleinberg bursts. |
@@ -297,7 +297,7 @@ lake-research-map/
 ├── scripts/
 │   ├── generate_hero.py          # Programmatic vector renderer for hero assets
 │   └── git-hooks/                # Pre-commit hook shell scripts
-├── tests/                        # 406 unit/integration tests (SQLite in-memory)
+├── tests/                        # 447 unit/integration tests (SQLite in-memory)
 ├── AGENTS.md                     # Universal guidelines for AI assistants
 ├── CLAUDE.md                     # Source-data quirks and environment notes
 ├── docker-compose.yml            # Airflow + Dashboard container orchestration

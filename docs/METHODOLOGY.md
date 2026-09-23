@@ -4,24 +4,34 @@ This document defines what the dashboard can infer from the current corpus, how 
 
 ## Evidence boundaries
 
-The analytical unit is an article in the active, immutable Gold version. Publication metadata comes from IEEE Xplore and Elsevier exports; citation and reference data may be enriched from append-only OpenAlex observations. The schema now retains annual citation counts, outgoing reference edges, publication years, and access observations, but the active corpus has not yet passed the external-data coverage and confounding gates. These fields therefore remain unavailable as analytical evidence until a credentialed refresh and audit succeed.
+The analytical unit is an article in the active, immutable Gold version. Publication metadata comes from IEEE Xplore and Elsevier exports; citation and reference data are enriched from append-only OpenAlex and Crossref observations in Bronze. Annual citation trajectories and cited-reference years passed their coverage and validation gates on 2026-09-23 (`WP-23`), and the citation graph passed its integrity and access gates (`WP-24`), so the literature-age measures below are now evidence. The disruption index still waits on forward-graph coverage, and open-access association on a confounder-controlled model.
 
 Missing numeric values remain missing. Analytical functions use complete cases and report `n_total`, `n_used`, and coverage whenever a filtered sample can change interpretation. IEEE-only fields such as country, online date, document type, and license must display source coverage and cannot support corpus-wide causal comparisons.
 
-The following indicators are unavailable until their required data is ingested:
+The following indicators remain unavailable until their required data is ingested:
 
-- Price's index: requires publication years for every cited reference.
-- Sleeping Beauty and beauty coefficient: require annual citation trajectories.
-- CD disruption index: requires a forward and backward citation graph.
-- Open Access Citation Advantage: requires verified access status and confounder controls.
-- Citation half-life or longevity: requires citations indexed by citing year.
+- CD disruption index: requires a forward and backward citation graph with at least 80% usable coverage; the forward crawl stood at 28.2% on 2026-09-23.
+- Open Access Citation Advantage: requires verified access status and confounder controls. Access status is verified (`WP-24`); the model is not.
 
-The dashboard does not estimate substitutes under those names, and as of 2026-09-21 it no longer carries
-the code either. Implementations of all five existed but were unreachable from any page, and the
-open-access one substituted a hash of the DOI for real access status whenever too few articles looked
-open access -- inventing a 20% share that was not even stable between processes. They were deleted
-rather than left dormant: an unreachable estimator that fabricates its input is one page wiring away
-from becoming a published result.
+The dashboard does not estimate substitutes under those names. On 2026-09-21 the earlier implementations of
+Price's index, Sleeping Beauty, longevity, disruption and open-access advantage were deleted: all five were
+unreachable from any page, and the open-access one substituted a hash of the DOI for real access status
+whenever too few articles looked open access -- inventing a 20% share that was not even stable between
+processes. An unreachable estimator that fabricates its input is one page wiring away from becoming a
+published result. The three that came back (below) were rewritten against the governed observations, not
+restored.
+
+## Literature age and delayed recognition
+
+Three measures on the Impact page's *Literature age and delayed recognition* tab. Each states its population in the panel, because none of them covers the whole corpus.
+
+**Price's index.** The share of a work's dated references published at most five years before it (de Solla Price, 1970), pooled per publication year as a ratio of sums, with a 95% percentile-bootstrap interval that resamples *works* -- references within one list are not independent draws. Each work is measured on exactly one reference list, chosen by `crossref.reference_years_by_work`: its Crossref deposit when one exists, OpenAlex's `referenced_works` otherwise. The two are never spliced, because Crossref keeps books and reports that OpenAlex does not resolve, so a spliced list would double count. The same function feeds `audit citation-years`, so the panel and the audit cannot describe different populations. A reference without a deposited year is dated by a Crossref DOI lookup or by the corpus's own metadata. Two exclusions guard the index: works whose list is less than 80% dated are left out rather than scored on their dated part, since undated references are disproportionately older books and would bias the share upward; and a reference dated more than one year after its citer is a metadata error, not an in-press citation, and is dropped. Years with fewer than ten works are not shown. Measured 2026-09-23: 2,368 works, 84,846 dated references, pooled index 57.5%, between 41.5% and 63.0% in every year from 2016. The figure describes this query's corpus; no external benchmark is asserted, because published Price's indices vary with the window, the field delimitation and whether books are counted. IET deposits almost no references in Crossref (3 of its 84 works), so 24 more are measured on OpenAlex lists and the remaining 57 have no measurable list; the caption reports per-publisher coverage.
+
+**Citation half-life.** For each work, the number of years after its publication year until it had received half the citations it has through the last complete calendar year. Citations dated before the publication year (online-first) are folded into year zero, and the observation year itself is cut off because it is still being counted. The half-life cannot exceed a work's age, so it is shown per publication cohort and never pooled: the decline toward recent cohorts is partly mechanical. Only works at least five years old with at least ten citations are scored (550 on 2026-09-23); below that, a single citation moves the answer by years.
+
+**Sleeping Beauty coefficient.** Ke et al.'s (2015, *PNAS* 112:7426) beauty coefficient *B*: the sum, from publication to the citation peak *t_m*, of how far each year's citations fall below the straight line joining year zero to the peak, each term normalized by max(1, *c_t*). A work that peaks in its first year, or grows linearly, scores zero. The awakening year is the year of maximum distance below that line. Works with fewer than ten citations are not scored (894 scored). The yearly series begins in 2012, so the longest history is thirteen years: these are works recognized late within that window, not the decades-long sleepers of the original study, and the median *B* is 0. A peak in the last observed year may still be rising; 174 works peak there, and the table shows *t_m* so that stays visible.
+
+Both trajectory measures use only the works whose history is complete from publication (`openalex.trajectory_population`): 2,514 of the 3,099 works OpenAlex resolved. The 584 published before the series starts are left-censored and excluded -- their early years are missing, which would read as sleeping. A never-cited work in the population keeps a zero trajectory rather than vanishing, and only the latest observation of each work's series is read, since an earlier crawl is a snapshot of the same counts rather than additional citations.
 
 ## Citation count model
 

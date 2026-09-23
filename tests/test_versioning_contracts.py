@@ -924,3 +924,34 @@ def test_a_presentation_only_edit_does_not_mint_a_new_version(tmp_path):
     assert caption_edit == first
     # analytics.py feeds the semantic stage's persisted diagnostics.
     assert analytics_edit != first
+
+
+def test_a_stage_records_the_parent_as_input_and_the_candidate_as_output(gold_session):
+    """FR-07: lineage must distinguish what a stage read from what it wrote."""
+    from lake_research_map import pipeline
+    from lake_research_map.db.gold_models import DatasetVersion, PipelineRun
+
+    gold_session.add_all(
+        [
+            DatasetVersion(version_id="v-parent", status="published"),
+            DatasetVersion(version_id="v-child", parent_version_id="v-parent", status="candidate"),
+        ]
+    )
+    gold_session.commit()
+
+    run_id, _ = pipeline._begin_stage(gold_session, "silver", "exec-1", "v-child")
+
+    run = gold_session.get(PipelineRun, run_id)
+    assert (run.input_version_id, run.output_version_id) == ("v-parent", "v-child")
+
+
+def test_the_first_version_has_no_input_version(gold_session):
+    from lake_research_map import pipeline
+    from lake_research_map.db.gold_models import DatasetVersion, PipelineRun
+
+    gold_session.add(DatasetVersion(version_id="v-first", status="candidate"))
+    gold_session.commit()
+
+    run_id, _ = pipeline._begin_stage(gold_session, "raw", "exec-1", "v-first")
+
+    assert gold_session.get(PipelineRun, run_id).input_version_id is None

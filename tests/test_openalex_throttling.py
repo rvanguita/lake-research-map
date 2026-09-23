@@ -166,11 +166,16 @@ def test_the_citing_crawl_survives_a_throttled_page(bronze_session):
                 "status_code": 200,
                 "headers": {},
                 "raise_for_status": lambda self: None,
-                "json": lambda self: {"results": [{"id": "W9"}], "meta": {}},
+                "json": lambda self: {
+                    "results": [{"id": "W9", "referenced_works": ["W1"]}],
+                    "meta": {"count": 1},
+                },
             },
         )()
 
-    result = openalex.fetch_openalex_citing_works("W1", session_factory=_throttle_once, max_pages=1)
+    result = openalex.fetch_openalex_citing_batch(
+        ["W1"], session_factory=_throttle_once, max_pages=1
+    )["W1"]
 
     assert result["citing_work_ids"] == ["W9"]
     assert result["throttled"] is False
@@ -181,7 +186,9 @@ def test_a_persistently_throttled_work_is_reported_as_truncated(bronze_session):
     def _always_429(url, params=None, headers=None, timeout=None):
         return _Response(status_code=429, headers={"Retry-After": "0"})
 
-    result = openalex.fetch_openalex_citing_works("W1", session_factory=_always_429, max_pages=2)
+    result = openalex.fetch_openalex_citing_batch(["W1"], session_factory=_always_429, max_pages=2)[
+        "W1"
+    ]
 
     # An empty forward set from a throttled crawl must never read as "uncited".
     assert result["citing_work_ids"] == []

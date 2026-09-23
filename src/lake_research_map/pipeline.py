@@ -255,8 +255,13 @@ def _complete_skipped_stage(
 
 
 def _begin_stage(session, stage: str, execution_id: str, version_id: str):
-    from lake_research_map.db.gold_models import PipelineRun
+    from lake_research_map.db.gold_models import DatasetVersion, PipelineRun
 
+    # FR-07 lineage: a stage reads the corpus that was active when this
+    # candidate was opened and writes the candidate. Recording the candidate on
+    # both sides made every run look like a no-op transformation of itself.
+    version = session.get(DatasetVersion, version_id)
+    input_version_id = version.parent_version_id if version is not None else None
     started = datetime.now(UTC)
     attempt = (
         session.scalar(
@@ -269,7 +274,7 @@ def _begin_stage(session, stage: str, execution_id: str, version_id: str):
     row = PipelineRun(
         execution_id=execution_id,
         dataset_version_id=version_id,
-        input_version_id=version_id,
+        input_version_id=input_version_id,
         output_version_id=version_id,
         sequence=_STAGE_SEQUENCE[stage],
         attempt=attempt,

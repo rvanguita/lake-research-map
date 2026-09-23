@@ -60,7 +60,7 @@ def test_the_citation_crawl_refuses_a_bronze_layer_with_nothing_to_crawl(bronze_
 def test_the_citation_crawl_persists_edges_and_counts_truncation(bronze_session, monkeypatch):
     """The crawl, the store and the coverage audit had no caller between them.
 
-    This is the wiring test: `fetch_openalex_citing_works` and
+    This is the wiring test: `fetch_openalex_citing_batch` and
     `persist_incoming_edges` were implemented and unit-tested, but nothing in
     the CLI could reach either, so the package's capability existed only in
     the test suite.
