@@ -141,25 +141,6 @@ def _log_throttle_headers(response) -> None:
 _THROTTLE_LOGGED = False
 
 
-def fetch_openalex_work(
-    doi: str,
-    *,
-    timeout: float = 8.0,
-    email: str | None = None,
-) -> dict[str, int | None] | None:
-    """Fetch citation count and reference count from OpenAlex for a given DOI.
-
-    Returns dict with 'citation_count' and 'reference_count', or None if not found/failed.
-    """
-    observation = fetch_openalex_observation(doi, timeout=timeout, email=email)
-    if observation["status"] != "success":
-        return None
-    return {
-        "citation_count": observation["citation_count"],
-        "reference_count": observation["reference_count"],
-    }
-
-
 def fetch_openalex_observation(
     doi: str,
     *,
@@ -648,100 +629,9 @@ def _persist_openalex_evidence(session: Session, result: dict, observed_at: date
 # refresh budget; a truncated crawl is recorded as truncated rather than
 # silently treated as "no more citations".
 CITING_PAGE_SIZE = 200
-CITING_MAX_PAGES = 5
 # Same retry budget as the backward pass, so one throttled page does not
 # discard a work's whole forward set.
 CITING_MAX_RETRIES = 3
-
-
-def fetch_openalex_citing_works(
-    work_id: str,
-    *,
-    session_factory=None,
-    email: str | None = None,
-    api_key: str | None = None,
-    max_pages: int = CITING_MAX_PAGES,
-) -> dict:
-    """List the OpenAlex works that cite `work_id`, following `cites:` pages.
-
-    Returns ``{"citing_work_ids": [...], "truncated": bool, "pages": int}``.
-    `truncated` is the field that matters downstream: without it an incomplete
-    crawl is indistinguishable from a work with few citations, and the
-    disruption index that WP-24 exists to enable would be computed on a
-    forward-citation set that is quietly missing its tail.
-
-    Network-bound. `session_factory` is injected so the pagination logic can be
-    tested without calling OpenAlex.
-    """
-    import requests
-
-    get = session_factory or requests.get
-    resolved_email = email or os.environ.get("OPENALEX_EMAIL")
-    resolved_key = api_key or os.environ.get("OPENALEX_API_KEY")
-
-    citing: list[str] = []
-    cursor = "*"
-    pages = 0
-    truncated = False
-    while pages < max_pages:
-        params = {
-            "filter": f"cites:{work_id}",
-            "per-page": CITING_PAGE_SIZE,
-            "cursor": cursor,
-            "select": "id",
-        }
-        if resolved_email:
-            params["mailto"] = resolved_email
-        if resolved_key:
-            params["api_key"] = resolved_key
-        # The forward pass had no 429 handling at all -- a bare
-        # `raise_for_status()` -- so the first throttled page killed a crawl of
-        # a thousand works. It was never exercised against the live API, which
-        # is exactly why that went unnoticed.
-        response = None
-        for retry_count in range(CITING_MAX_RETRIES + 1):
-            response = get(
-                OPENALEX_BASE_URL,
-                params=params,
-                headers={"User-Agent": _user_agent(resolved_email)},
-                timeout=30,
-            )
-            status = getattr(response, "status_code", 200)
-            if status == 429 or status >= 500:
-                _log_throttle_headers(response)
-                if retry_count < CITING_MAX_RETRIES and not retrying_is_futile(response):
-                    time.sleep(backoff_seconds(response, retry_count))
-                    continue
-                # Out of retries: report the partial set as truncated rather
-                # than as a complete crawl that found nothing more.
-                return {
-                    "citing_work_ids": list(dict.fromkeys(citing)),
-                    "truncated": True,
-                    "pages": pages,
-                    "throttled": True,
-                }
-            break
-        response.raise_for_status()
-        payload = response.json()
-        pages += 1
-        for item in payload.get("results") or []:
-            identifier = item.get("id")
-            if identifier and identifier != work_id:
-                citing.append(str(identifier))
-        cursor = (payload.get("meta") or {}).get("next_cursor")
-        if not cursor or not (payload.get("results") or []):
-            break
-    else:
-        truncated = True
-
-    # `while ... else` runs the else only when the loop was never broken out
-    # of, which is exactly the "ran out of page budget" case.
-    return {
-        "citing_work_ids": list(dict.fromkeys(citing)),
-        "truncated": truncated,
-        "pages": pages,
-        "throttled": False,
-    }
 
 
 def persist_incoming_edges(

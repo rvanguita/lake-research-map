@@ -1,6 +1,6 @@
 """WP-24: incoming citation edges and the coverage gate they feed.
 
-No network. `fetch_openalex_citing_works` takes its HTTP getter by injection
+No network. `fetch_openalex_citing_batch` takes its HTTP getter by injection
 precisely so the pagination and truncation logic can be tested without calling
 OpenAlex, and the corpus has no `OPENALEX_EMAIL` configured anyway.
 """
@@ -13,7 +13,7 @@ from lake_research_map.db.bronze_models import CitationEdge
 from lake_research_map.ingest.openalex import (
     CITING_PAGE_SIZE,
     citation_graph_coverage,
-    fetch_openalex_citing_works,
+    fetch_openalex_citing_batch,
     persist_incoming_edges,
 )
 
@@ -44,18 +44,21 @@ def _pager(pages):
 
 
 def test_citing_crawl_follows_cursors_and_stops_cleanly():
+    ref = {"referenced_works": ["https://openalex.org/W_target"]}
     get = _pager(
         [
-            {"results": [{"id": "W1"}, {"id": "W2"}], "meta": {"next_cursor": "c2"}},
-            {"results": [{"id": "W3"}], "meta": {"next_cursor": None}},
+            {
+                "results": [{"id": "W1", **ref}, {"id": "W2", **ref}],
+                "meta": {"next_cursor": "c2", "count": 3},
+            },
+            {"results": [{"id": "W3", **ref}], "meta": {"next_cursor": None, "count": 3}},
         ]
     )
 
-    result = fetch_openalex_citing_works("W_target", session_factory=get)
+    result = fetch_openalex_citing_batch(["W_target"], session_factory=get)["W_target"]
 
     assert result["citing_work_ids"] == ["W1", "W2", "W3"]
     assert result["truncated"] is False
-    assert result["pages"] == 2
     assert get.calls[0]["filter"] == "cites:W_target"
     assert get.calls[0]["per-page"] == CITING_PAGE_SIZE
     assert get.calls[1]["cursor"] == "c2"
@@ -68,13 +71,16 @@ def test_citing_crawl_reports_truncation_instead_of_implying_completeness():
     from a complete one, and the disruption index WP-24 exists to enable would
     be computed on a silently missing tail.
     """
+    ref = {"referenced_works": ["https://openalex.org/W_target"]}
     endless = [
-        {"results": [{"id": f"W{page}"}], "meta": {"next_cursor": f"c{page}"}} for page in range(10)
+        {"results": [{"id": f"W{page}", **ref}], "meta": {"next_cursor": f"c{page}", "count": 10}}
+        for page in range(10)
     ]
 
-    result = fetch_openalex_citing_works("W_target", session_factory=_pager(endless), max_pages=3)
+    result = fetch_openalex_citing_batch(
+        ["W_target"], session_factory=_pager(endless), max_pages=3
+    )["W_target"]
 
-    assert result["pages"] == 3
     assert result["truncated"] is True
     assert len(result["citing_work_ids"]) == 3
 

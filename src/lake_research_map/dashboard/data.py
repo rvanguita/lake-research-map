@@ -163,11 +163,51 @@ def assess_gold_articles(df: pd.DataFrame) -> tuple[str, ...]:
     return tuple(reasons)
 
 
+def active_version_blocking_failures(version_id: str | None) -> tuple[str, ...]:
+    """Blocking quality checks whose latest recorded outcome for this version failed.
+
+    `assess_gold_articles` only checks the frame's shape. The pipeline has
+    already evaluated a full contract for the version and persisted every
+    outcome in `lit_quality_results`; a version activated by hand, or one
+    re-checked after publication, can carry a recorded `error` failure that the
+    shape check would never see. Only the latest run of each check counts: a
+    failure that a later stage run fixed must not keep the version degraded.
+    """
+    if not version_id or not table_exists("gold", "lit_quality_results"):
+        return ()
+    engine = get_engine("gold")
+    try:
+        table = Table("lit_quality_results", MetaData(), autoload_with=engine)
+        results = pd.read_sql_query(
+            select(table.c.check_id, table.c.stage_run_id, table.c.passed).where(
+                table.c.dataset_version_id == version_id, table.c.severity == "error"
+            ),
+            engine,
+        )
+    except SQLAlchemyError as exc:
+        logger.warning("active_version_blocking_failures: %s", exc)
+        return ()
+    return blocking_failures(results)
+
+
+def blocking_failures(results: pd.DataFrame) -> tuple[str, ...]:
+    """Reasons for the checks whose most recent run did not pass."""
+    if results.empty:
+        return ()
+    latest = results.sort_values("stage_run_id").drop_duplicates("check_id", keep="last")
+    failed = latest.loc[~latest["passed"].astype(bool), "check_id"].astype(str)
+    return tuple(
+        f"Recorded blocking check failed for this version: {check}." for check in sorted(failed)
+    )
+
+
 def select_articles_layer() -> tuple[str, pd.DataFrame, dict[str, object]]:
-    """Select Gold when its minimum contract passes, otherwise degrade explicitly."""
+    """Select Gold when its contract passes, otherwise degrade explicitly."""
     version_id = active_dataset_version()
     gold_df = load_articles("gold")
     gold_issues = assess_gold_articles(gold_df)
+    if not gold_df.empty:
+        gold_issues = gold_issues + active_version_blocking_failures(version_id)
     if not gold_issues:
         return (
             "gold",
