@@ -34,6 +34,7 @@ RUN uv venv /opt/venv-airflow-server && \
 
 ENV PATH="/opt/venv-airflow-server/bin:${PATH}"
 ENV AIRFLOW_HOME=/opt/airflow
+ENV OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2 MKL_NUM_THREADS=2 NUMEXPR_NUM_THREADS=2
 
 EXPOSE 8080
 

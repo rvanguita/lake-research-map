@@ -8,13 +8,11 @@ from lake_research_map.dashboard.analytics import (
     author_impact_advanced_indices,
     author_m_quotient_analysis,
     benchmark_feeders_analysis,
-    citation_longevity_and_decay,
     computational_solvers_analysis,
     mathematical_complexity_spectrum,
     objective_functions_taxonomy,
     optimization_methods_taxonomy,
     planning_time_horizons_analysis,
-    text_readability_and_stylometrics,
     uncertainty_paradigms_analysis,
 )
 
@@ -81,9 +79,9 @@ def test_optimization_methods_taxonomy():
 
     # Verify that GA, MILP, PSO are recognized
     methods_found = set(summary["method"])
-    assert "Algoritmos Genéticos (GA)" in methods_found
-    assert "Prog. Linear Inteira Mista (MILP)" in methods_found
-    assert "Otimização por Enxame (PSO)" in methods_found
+    assert "Genetic Algorithms (GA)" in methods_found
+    assert "Mixed-Integer Linear Programming (MILP)" in methods_found
+    assert "Particle Swarm Optimization (PSO)" in methods_found
 
 
 def test_benchmark_feeders_analysis():
@@ -102,8 +100,8 @@ def test_benchmark_feeders_analysis():
     assert any("69-Bus" in f for f in feeders["feeder"])
 
     assert not cross.empty
-    assert "Geração Solar (PV)" in cross.columns
-    assert "Armazenamento / Baterias" in cross.columns
+    assert "Solar Generation (PV)" in cross.columns
+    assert "Storage / Batteries" in cross.columns
 
 
 def test_author_impact_advanced_indices():
@@ -125,39 +123,6 @@ def test_author_impact_advanced_indices():
         assert r["total_citations"] >= 0
 
 
-def test_text_readability_and_stylometrics():
-    df = _make_dummy_synthesis_data()
-    res = text_readability_and_stylometrics(df)
-
-    assert res["mean_fre"] >= 0.0
-    assert res["mean_fre"] <= 100.0
-    assert res["mean_fkgl"] >= 0.0
-    assert 0.0 < res["mean_ttr"] <= 1.0
-
-    assert not res["sample_df"].empty
-    assert "fre" in res["sample_df"].columns
-    assert "fkgl" in res["sample_df"].columns
-    assert "ttr" in res["sample_df"].columns
-
-
-def test_citation_longevity_and_decay():
-    df = _make_dummy_synthesis_data()
-    res = citation_longevity_and_decay(df)
-
-    assert "half_life_years" in res
-    assert "decay_curve" in res
-    assert "evergreen_df" in res
-
-    assert res["half_life_years"] >= 0.0
-    assert not res["decay_curve"].empty
-    assert "cum_pct" in res["decay_curve"].columns
-
-    # Evergreen papers should exist for older highly cited papers (e.g. 2011 paper with 250 cites)
-    evergreen = res["evergreen_df"]
-    assert not evergreen.empty
-    assert (evergreen["citation_count"] >= 40).all()
-
-
 def test_objective_functions_taxonomy():
     df = _make_dummy_synthesis_data()
     res = objective_functions_taxonomy(df)
@@ -171,12 +136,12 @@ def test_objective_functions_taxonomy():
     assert not summary.empty
     assert "objective" in summary.columns
     assert "articles" in summary.columns
-    assert "Custos Econômicos" in set(summary["objective"])
+    assert "Economic Costs" in set(summary["objective"])
 
     co_matrix = res["co_matrix"]
     assert not co_matrix.empty
-    assert "Custos Econômicos" in co_matrix.index
-    assert co_matrix.loc["Custos Econômicos", "Custos Econômicos"] > 0
+    assert "Economic Costs" in co_matrix.index
+    assert co_matrix.loc["Economic Costs", "Economic Costs"] > 0
     assert res["multi_obj_ratio"] >= 0.0
 
 
@@ -191,12 +156,12 @@ def test_uncertainty_paradigms_analysis():
     paradigms = res["paradigms_df"]
     assert not paradigms.empty
     assert "paradigm" in paradigms.columns
-    assert any("Estocástico" in p for p in paradigms["paradigm"])
-    assert any("Robusta" in p for p in paradigms["paradigm"])
+    assert any("Stochastic" in p for p in paradigms["paradigm"])
+    assert any("Robust" in p for p in paradigms["paradigm"])
 
     cross = res["cross_resources"]
     assert not cross.empty
-    assert "Geração Solar (PV)" in cross.columns
+    assert "Solar Generation (PV)" in cross.columns
 
 
 def test_planning_time_horizons_analysis():
@@ -207,8 +172,8 @@ def test_planning_time_horizons_analysis():
     horizons = res["horizons_df"]
     assert not horizons.empty
     assert "horizon" in horizons.columns
-    assert any("Multi-Estágio" in h for h in horizons["horizon"])
-    assert any("Operação" in h for h in horizons["horizon"])
+    assert any("Multistage" in h for h in horizons["horizon"])
+    assert any("Operation" in h for h in horizons["horizon"])
 
 
 def test_computational_solvers_analysis():
@@ -266,5 +231,15 @@ def test_synthesis_page_import():
     assert hasattr(synthesis, "_render_horizons_tab")
     assert hasattr(synthesis, "_render_feeders_tab")
     assert hasattr(synthesis, "_render_solvers_tab")
-    assert hasattr(synthesis, "_render_authors_tab")
-    assert hasattr(synthesis, "_render_longevity_and_text_tab")
+    assert not hasattr(synthesis, "_render_authors_tab")
+    assert not hasattr(synthesis, "_render_longevity_and_text_tab")
+
+
+def test_retired_page_controllers_are_removed():
+    from lake_research_map.dashboard.pages import highlights, production
+
+    assert not hasattr(production, "_venue_comparison")
+    assert not hasattr(production, "_collaboration")
+    assert not hasattr(highlights, "_collaboration_team_size")
+    assert not hasattr(highlights, "_top_authors")
+    assert not hasattr(highlights, "_venue_impact")

@@ -1,4 +1,4 @@
-"""🏆 Destaques e Impacto — citações, referências, colaboração e periódicos mais influentes."""
+"""🏆 Highlights and Impact — citations, references, collaboration and most influential journals."""
 
 from __future__ import annotations
 
@@ -9,12 +9,11 @@ import streamlit as st
 
 from lake_research_map.dashboard import loaders
 from lake_research_map.dashboard.analytics import (
-    author_count_series,
     source_counts_by,
     source_means,
     valid_years,
 )
-from lake_research_map.dashboard.charts import source_lines, topn_hbar
+from lake_research_map.dashboard.charts import source_lines
 from lake_research_map.dashboard.components import (
     article_table,
     metric_row,
@@ -30,67 +29,71 @@ MIN_CITED_ARTICLES = 3
 def render() -> None:
     page_header(
         "🏆",
-        "Destaques e Impacto",
-        "Análise bibliométrica: embasamento em referências, dinâmica de citações, distribuições de cauda pesada e determinantes GLM.",
+        "Impact and citations",
+        "Bibliometric analysis: reference basis, citation dynamics, heavy tail distributions and GLM determinants.",
     )
 
     articles_df = loaders.require_articles()
 
     tab_refs, tab_citations = st.tabs(
-        ["📚 Fundamentação Teórica (Referências)", "⭐ Dinâmica de Citações & Econometria"]
+        ["Theoretical background", "Citation dynamics and econometrics"],
+        on_change="rerun",
+        key="highlights_primary_tab",
     )
 
-    with tab_refs:
-        ref_df = _reference_distribution_intro(articles_df)
-        sub_dist, sub_vs_cit, sub_top = st.tabs(
-            [
-                "📊 Distribuição de Referências",
-                "🔗 Refs vs. Citações",
-                "📖 Mais Referenciados",
-            ]
-        )
-        with sub_dist:
-            if ref_df is not None:
+    if tab_refs.open:
+        with tab_refs:
+            ref_df = _reference_distribution_intro(articles_df)
+            reference_view = st.segmented_control(
+                "Reference analysis",
+                options=["Distribution", "References vs. citations", "Most referenced"],
+                default="Distribution",
+                key="reference_analysis_view",
+            )
+            if reference_view == "Distribution" and ref_df is not None:
                 view_mode = (
                     st.segmented_control(
-                        "Formato de visualização da distribuição",
-                        options=["Histograma", "Curva Cumulativa (ECDF)", "Box Plot"],
-                        default="Histograma",
+                        "Distribution visualization format",
+                        options=["Histogram", "Cumulative curve (ECDF)", "Box plot"],
+                        default="Histogram",
                         key="ref_dist_mode",
                     )
-                    or "Histograma"
+                    or "Histogram"
                 )
-                if view_mode == "Histograma":
+                if view_mode == "Histogram":
                     _reference_histogram(ref_df)
-                elif view_mode == "Curva Cumulativa (ECDF)":
+                elif view_mode == "Cumulative curve (ECDF)":
                     _reference_ecdf(ref_df)
                 else:
                     _reference_box(ref_df)
-        with sub_vs_cit:
-            _references_vs_citations(articles_df)
-        with sub_top:
-            _top_referenced(articles_df)
-
-    with tab_citations:
-        sub_cited, sub_by_year, sub_heavytail, sub_agenorm, sub_glm = st.tabs(
-            [
-                "🏆 Mais Citados",
-                "📅 Citados por Ano",
-                "📐 Cauda Pesada (Power-Law)",
-                "⏳ Normalizado por Idade",
-                "🔬 Determinantes GLM",
-            ]
-        )
-        with sub_cited:
-            _top_cited(articles_df)
-        with sub_by_year:
-            _cited_by_year(articles_df)
-        with sub_heavytail:
-            _heavy_tail_analysis(articles_df)
-        with sub_agenorm:
-            _age_normalized_rankings(articles_df)
-        with sub_glm:
-            _citation_determinants_glm_view(articles_df)
+            elif reference_view == "References vs. citations":
+                _references_vs_citations(articles_df)
+            elif reference_view == "Most referenced":
+                _top_referenced(articles_df)
+    elif tab_citations.open:
+        with tab_citations:
+            citation_view = st.segmented_control(
+                "Citation analysis",
+                options=[
+                    "Most cited",
+                    "Cited by year",
+                    "Heavy-tail diagnostics",
+                    "Age-normalized impact",
+                    "GLM determinants",
+                ],
+                default="Most cited",
+                key="citation_analysis_view",
+            )
+            if citation_view == "Most cited":
+                _top_cited(articles_df)
+            elif citation_view == "Cited by year":
+                _cited_by_year(articles_df)
+            elif citation_view == "Heavy-tail diagnostics":
+                _heavy_tail_analysis(articles_df)
+            elif citation_view == "Age-normalized impact":
+                _age_normalized_rankings(articles_df)
+            else:
+                _citation_determinants_glm_view(articles_df)
 
 
 def _reference_distribution_intro(articles_df: pd.DataFrame) -> pd.DataFrame | None:
@@ -98,11 +101,11 @@ def _reference_distribution_intro(articles_df: pd.DataFrame) -> pd.DataFrame | N
 
     Returns the cleaned `reference_count` frame, or None if there's nothing to show.
     """
-    st.subheader("📚 Quantidade de referências usadas por artigo (IEEE vs. Elsevier)")
+    st.subheader("📚 Number of references used per article (IEEE vs. Elsevier)")
     if not require_columns(articles_df, ["reference_count"]) or not (
         articles_df["reference_count"].notna().any()
     ):
-        st.info("Nenhum artigo com contagem de referências disponível nesta camada.")
+        st.info("No articles with reference counting available in this layer.")
         return None
 
     ref_df = articles_df.dropna(subset=["reference_count"]).copy()
@@ -124,26 +127,26 @@ def _reference_distribution_intro(articles_df: pd.DataFrame) -> pd.DataFrame | N
     metric_row(
         [
             (
-                "📘 Média de Refs (IEEE)",
+                "📘 Mean Refs (IEEE)",
                 f"{means['ieee']:.1f}" if means["ieee"] is not None else "N/D",
                 f"Mediana: {ieee_med:.0f}"
                 if ieee_med == ieee_med and ieee_med is not None
                 else None,
             ),
             (
-                "📙 Média de Refs (Elsevier)",
+                "📙 Average Refs (Elsevier)",
                 f"{means['elsevier']:.1f}" if means["elsevier"] is not None else "N/D",
                 f"Mediana: {els_med:.0f}" if els_med == els_med and els_med is not None else None,
             ),
-            ("📊 Média de Refs (Total)", f"{means['total']:.1f}", f"Mediana: {tot_med:.0f}"),
-            ("🔝 Maior Bibliografia", f"{max_refs:,} refs", f"{len(ref_df):,} artigos analisados"),
+            ("📊 Mean Refs (Total)", f"{means['total']:.1f}", f"Mediana: {tot_med:.0f}"),
+            ("🔝 Largest bibliography", f"{max_refs:,} refs", f"{len(ref_df):,} articles analyzed"),
         ]
     )
     st.caption(
-        "Distribuição do número de referências citadas por artigo — como histograma, curva cumulativa "
-        "(ECDF) e box plot, nas abas abaixo. Os dados do IEEE têm origem direta no export CSV do IEEE "
-        "Xplore (`Reference Count`). Os dados da Elsevier foram enriquecidos via cache offline "
-        "(`data/enrichment_cache.json`); ver os cartões acima para as médias por base."
+        "Distribution of the number of references cited per article — such as histogram, cumulative curve "
+        "(ECDF) and box plot, in the tabs below. "
+        "Xplore (`Reference Count`). "
+        "(`data/enrichment_cache.json`); see the cards above for averages by source."
     )
     return ref_df
 
@@ -166,14 +169,14 @@ def _reference_histogram(ref_df: pd.DataFrame) -> None:
         nbins=40,
         color_discrete_map=SOURCE_COLORS,
         category_orders={"source": source_order} if source_order else None,
-        labels={"reference_count": "Referências citadas por artigo", "source": "Base"},
+        labels={"reference_count": "References cited by article", "source": "Source"},
     )
     fig_hist.update_traces(
-        hovertemplate="Intervalo: %{x} refs<br>Quantidade: %{y:,} artigos (%{data.name})<extra></extra>"
+        hovertemplate="Interval: %{x} refs<br>Quantity: %{y:,} articles (%{data.name})<extra></extra>"
     )
     fig_hist.update_layout(
-        xaxis_title="Referências citadas por artigo (tamanho da bibliografia)",
-        yaxis_title="Quantidade de artigos",
+        xaxis_title="References cited by article (bibliography size)",
+        yaxis_title="Number of articles",
         hovermode="x unified",
     )
     render_chart(fig_hist)
@@ -186,19 +189,19 @@ def _reference_ecdf(ref_df: pd.DataFrame) -> None:
         color="source" if "source" in ref_df.columns else None,
         color_discrete_map=SOURCE_COLORS,
         ecdfnorm="percent",
-        labels={"reference_count": "Referências citadas por artigo", "source": "Base"},
+        labels={"reference_count": "References cited by article", "source": "Source"},
     )
     fig_cdf.update_traces(
-        hovertemplate="Até %{x} refs: %{y:.1f}% dos artigos (%{data.name})<extra></extra>"
+        hovertemplate="Up to %{x} refs: %{y:.1f}% of the articles (%{data.name})<extra></extra>"
     )
     fig_cdf.update_layout(
-        xaxis_title="Referências citadas por artigo (tamanho da bibliografia)",
-        yaxis_title="% acumulado de artigos",
+        xaxis_title="References cited by article (bibliography size)",
+        yaxis_title="Cumulative % of articles",
         hovermode="x unified",
     )
     render_chart(
         fig_cdf,
-        caption="Cada ponto (x, y) lê-se: 'y% dos artigos têm até x referências citadas'.",
+        caption="Each point (x, y) reads: 'y% of the articles have up to x references cited'.",
     )
 
 
@@ -210,18 +213,18 @@ def _reference_box(ref_df: pd.DataFrame) -> None:
         color="source" if "source" in ref_df.columns else None,
         color_discrete_map=SOURCE_COLORS,
         points="outliers",
-        labels={"reference_count": "Referências citadas por artigo", "source": "Base"},
+        labels={"reference_count": "References cited by article", "source": "Source"},
     )
     fig_box.update_layout(
-        yaxis_title="Referências citadas por artigo",
-        xaxis_title="Base",
+        yaxis_title="References cited by article",
+        xaxis_title="Source",
         showlegend=False,
     )
     render_chart(fig_box)
 
 
 def _references_vs_citations(articles_df: pd.DataFrame) -> None:
-    st.subheader("🔗 Referências citadas vs. Citações recebidas")
+    st.subheader("References cited vs. citations received")
     if (
         not require_columns(articles_df, ["reference_count", "citation_count"])
         or not articles_df["reference_count"].notna().any()
@@ -232,7 +235,7 @@ def _references_vs_citations(articles_df: pd.DataFrame) -> None:
     scatter_df = articles_df.dropna(subset=["reference_count", "citation_count"]).copy()
     scatter_df = scatter_df[scatter_df["reference_count"] > 0]
     if len(scatter_df) < 5:
-        st.info("Poucos artigos com dados de referências e citações disponíveis para correlação.")
+        st.info("Few articles with reference data and citations available for correlation.")
         return
 
     corr = scatter_df[["reference_count", "citation_count"]].corr().iloc[0, 1]
@@ -252,125 +255,75 @@ def _references_vs_citations(articles_df: pd.DataFrame) -> None:
             "reference_count": True,
             "citation_count": True,
         },
-        title=f"Relação entre tamanho da bibliografia e impacto em citações (Correlação de Pearson r = {corr:.2f})",
+        title=f"Relationship between bibliography size and citation impact (Pearson correlation r = {corr:.2f})",
         labels={
-            "reference_count": "Referências citadas (bibliografia)",
-            "citation_count": "Citações recebidas",
-            "source": "Base",
+            "reference_count": "References cited (bibliography)",
+            "citation_count": "Citations received",
+            "source": "Source",
         },
     )
     fig.update_layout(hovermode="closest")
     metric_row(
         [
-            ("📚 Média de referências", f"{ref_mean:.1f}", None),
-            ("⭐ Média de citações", f"{cit_mean:.1f}", None),
-            ("📈 Correlação de Pearson (r)", f"{corr:.2f}", None),
+            ("📚 Average of references", f"{ref_mean:.1f}", None),
+            ("📑 Average citations", f"{cit_mean:.1f}", None),
+            ("📈 Pearson's correlation (r)", f"{corr:.2f}", None),
         ]
     )
     render_chart(
         fig,
-        caption="Examina se artigos que constroem uma fundamentação teórica com maior quantidade de "
-        "referências tendem a receber mais citações no decorrer dos anos.",
+        caption="It examines articles that build a theoretical foundation with a greater number of "
+        "references tend to receive more citations over the years.",
     )
 
 
 def _top_referenced(articles_df: pd.DataFrame) -> None:
-    st.subheader("📖 Artigos com maior bibliografia (Revisões sistemáticas e surveys)")
+    st.subheader("📖 Articles with the highest bibliography (Systematic reviews and surveys)")
     if (
         not require_columns(articles_df, ["reference_count"])
         or not (articles_df["reference_count"] > 0).any()
     ):
-        st.info("Nenhum artigo com contagem de referências disponível nesta camada.")
+        st.info("No articles with reference counting available in this layer.")
         return
 
     top_ref = articles_df[articles_df["reference_count"] > 0].nlargest(20, "reference_count")
     article_table(
         top_ref,
         ["title", "year", "venue", "source", "reference_count", "citation_count", "doi"],
-        download_key="artigos_mais_referenciados",
+        download_key="most_referenced_articles",
     )
     st.caption(
-        "Artigos ordenados pelo tamanho da bibliografia — contagens altas são típicas de "
-        "surveys, revisões de literatura abrangentes e estudos do estado da arte. Clique no DOI para abrir o artigo."
-    )
-
-
-def _collaboration_team_size(articles_df: pd.DataFrame) -> None:
-    st.subheader("👥 Colaboração e tamanho das equipes de autores")
-    if not require_columns(articles_df, ["authors"]):
-        return
-
-    collab_df = articles_df.assign(author_count=author_count_series(articles_df))
-    collab_df = collab_df[collab_df["author_count"] > 0]
-    means = source_means(collab_df, "author_count")
-    solo_pct = float((collab_df["author_count"] == 1).mean())
-
-    metric_row(
-        [
-            (
-                "📘 Média de Autores (IEEE)",
-                f"{means['ieee']:.1f}" if means["ieee"] is not None else "N/D",
-                None,
-            ),
-            (
-                "📙 Média de Autores (Elsevier)",
-                f"{means['elsevier']:.1f}" if means["elsevier"] is not None else "N/D",
-                None,
-            ),
-            ("📊 Média de Autores (Total)", f"{means['total']:.1f}", None),
-            ("👤 Artigos com autor único", f"{solo_pct:.1%}", f"{len(collab_df):,} artigos"),
-        ]
-    )
-
-    fig = px.histogram(
-        collab_df,
-        x="author_count",
-        color="source" if "source" in collab_df.columns else None,
-        barmode="group",
-        color_discrete_map=SOURCE_COLORS,
-        labels={"author_count": "Quantidade de autores", "source": "Base"},
-    )
-    fig.update_traces(hovertemplate="%{x} autores: %{y:,} artigos (%{data.name})<extra></extra>")
-    fig.update_layout(
-        xaxis_title="Quantidade de autores por artigo",
-        yaxis_title="Quantidade de artigos",
-        hovermode="x unified",
-    )
-    render_chart(
-        fig,
-        caption="Comparativo do tamanho das equipes de autores entre IEEE e Elsevier — veja os cartões "
-        "acima para as médias por base e no total.",
+        "Articles ordered by the size of the bibliography — high counts are typical of "
+        "Researches, comprehensive literature reviews and state of the art studies."
     )
 
 
 def _top_cited(articles_df: pd.DataFrame) -> None:
-    st.subheader("🏆 Artigos mais citados")
+    st.subheader("🏆 Most cited articles")
     if (
         not require_columns(articles_df, ["citation_count"])
         or not (articles_df["citation_count"] > 0).any()
     ):
-        st.info("Nenhum artigo com contagem de citações disponível nesta camada.")
+        st.info("No articles with citation counting available in this layer.")
         return
 
     top_cited = articles_df[articles_df["citation_count"] > 0].nlargest(20, "citation_count")
     article_table(
         top_cited,
         ["title", "year", "venue", "source", "citation_count", "reference_count", "doi"],
-        download_key="artigos_mais_citados",
+        download_key="most_cited_articles",
     )
-    st.caption(
-        "Artigos ordenados pelo volume de citações acumuladas no corpus. Clique no link do DOI para abrir a publicação."
-    )
+    st.caption("Articles ordered by the volume of citations cumulative in the corpus.")
 
 
 def _cited_by_year(articles_df: pd.DataFrame) -> None:
-    st.subheader("📅 Artigos citados por ano de publicação")
+    st.subheader("Articles cited by year of publication")
     has_citations = (
         "citation_count" in articles_df.columns and articles_df["citation_count"].notna().any()
     )
     has_year = "year" in articles_df.columns and articles_df["year"].notna().any()
     if not (has_citations and has_year):
-        st.info("Colunas 'citation_count' e 'year' não disponíveis nesta camada.")
+        st.info("'citation_count' and 'year' columns not available in this layer.")
         return
 
     cited = articles_df.copy()
@@ -378,35 +331,44 @@ def _cited_by_year(articles_df: pd.DataFrame) -> None:
     cited = cited.dropna(subset=["citation_count", "year"])
     cited = cited[cited["citation_count"] > 0].astype({"year": int})
     if cited.empty:
-        st.info("Nenhum artigo com citações registradas nesta camada.")
+        st.info("No article with citations recorded in this layer.")
         return
 
     counts = source_counts_by(cited, "year").sort_values("year")
     fig = source_lines(
         counts,
         "year",
-        y_title="Artigos com citações registradas",
+        y_title="Articles with citations recorded",
         spline=True,
         fill=True,
     )
     fig.update_layout(
-        xaxis_title="Ano de publicação", hovermode="x unified", legend_title_text="Base"
+        xaxis_title="Year of publication", hovermode="x unified", legend_title_text="Source"
     )
     render_chart(
         fig,
-        caption="Quantidade de artigos publicados em cada ano que acumularam ao menos uma citação na "
-        "literatura, por base e no total.",
+        caption="Number of articles published in each year that cumulative at least one citation "
+        "literature, by source and overall.",
     )
+
+
+_HEAVY_TAIL_NAMES = {
+    "power_law": "Power law (Pareto)",
+    "log_normal": "Log-normal",
+    "exponential": "Exponential",
+}
 
 
 def _heavy_tail_analysis(articles_df: pd.DataFrame) -> None:
-    st.subheader("📐 Modelagem de Cauda Pesada em Citações (Power-Law vs. Log-Normal)")
+    st.subheader("📐 Heavy-tail modelling of citations (power law vs. log-normal)")
     st.caption(
-        "Citações acadêmicas exibem assimetria extrema. Este painel ajusta distribuições de cauda pesada "
-        "por Máxima Verossimilhança (MLE) e avalia a aderência pelo teste de Kolmogorov-Smirnov (KS)."
+        "Citation counts are extremely skewed. Each family is fitted by maximum likelihood "
+        "above a data-driven x_min, and the families are compared by AIC rather than by "
+        "goodness-of-fit alone — a lower KS distance does not by itself favour a model "
+        "with more free parameters."
     )
     if "citation_count" not in articles_df.columns:
-        st.info("Contagem de citações não disponível.")
+        st.info("Citation counts are not available for this population.")
         return
 
     from lake_research_map.dashboard.analytics import fit_heavy_tail_distributions
@@ -414,36 +376,64 @@ def _heavy_tail_analysis(articles_df: pd.DataFrame) -> None:
     cites = articles_df["citation_count"].dropna().to_numpy()
     fit_res = fit_heavy_tail_distributions(cites)
     if not fit_res.get("valid"):
-        st.info("Dados insuficientes para ajuste estatístico de cauda pesada.")
+        st.info("Not enough citation mass to fit a heavy tail.")
         return
 
     models = fit_res["models"]
     best = fit_res["best_fit"]
-    best_name = {
-        "power_law": "Lei de Potência (Pareto)",
-        "log_normal": "Log-Normal",
-        "exponential": "Exponencial",
-    }.get(best, best)
+    best_name = _HEAVY_TAIL_NAMES.get(best, best)
 
     metric_row(
         [
-            ("🏆 Melhor Ajuste (KS)", best_name, f"Distância KS: {models[best]['ks_stat']:.4f}"),
             (
-                "⚡ Expoente Power-Law (α)",
+                "🏆 Best fit (AIC)",
+                best_name,
+                f"AIC {models[best]['aic']:.1f} · KS {models[best]['ks_stat']:.4f}",
+            ),
+            (
+                "⚡ Power-law exponent (α)",
                 f"{models['power_law']['alpha']:.2f}",
                 f"x_min = {models['power_law']['x_min']:.0f}",
             ),
             (
-                "📊 Média Log-Normal (μ)",
+                "📊 Log-normal mean (μ)",
                 f"{models['log_normal']['mu']:.2f}",
                 f"σ = {models['log_normal']['sigma']:.2f}",
             ),
             (
-                "📉 P-valor KS (Melhor)",
-                f"{models[best]['p_value']:.4f}",
-                "H0: aderência aos dados",
+                "🧮 Population used",
+                f"{fit_res['tail_n']:,}",
+                f"of {fit_res['n']:,} articles · {fit_res['zero_count']:,} with zero citations",
             ),
         ]
+    )
+
+    # The bootstrap p-value resamples from the fitted Pareto and refits alpha per
+    # sample, so it is the only one here that does not reuse its own parameters.
+    # The log-normal and exponential p-values do, which makes them optimistic --
+    # labelling them together as one "KS p-value" hid exactly that difference.
+    comparison = pd.DataFrame(
+        [
+            {
+                "Family": _HEAVY_TAIL_NAMES.get(name, name),
+                "AIC": round(model["aic"], 1),
+                "ΔAIC": round(model["aic"] - models[best]["aic"], 1),
+                "Log-likelihood": round(model["log_likelihood"], 1),
+                "KS distance": round(model["ks_stat"], 4),
+            }
+            for name, model in models.items()
+        ]
+    ).sort_values("AIC")
+    st.dataframe(comparison, hide_index=True, width="stretch")
+
+    ratios = fit_res["log_likelihood_ratios"]
+    st.caption(
+        f"Bootstrap goodness-of-fit for the power law: p = "
+        f"{models['power_law']['p_value']:.4f} (H0: the data are Pareto above x_min; "
+        "refitted per simulated sample). Log-likelihood ratios — power law vs. log-normal "
+        f"{ratios['power_law_vs_log_normal']:+.1f}, vs. exponential "
+        f"{ratios['power_law_vs_exponential']:+.1f}; a positive value favours the power law. "
+        "The ratios are reported without a significance test, so treat them as descriptive."
     )
 
     arr = cites[cites > 0]
@@ -457,33 +447,34 @@ def _heavy_tail_analysis(articles_df: pd.DataFrame) -> None:
         y="ccdf",
         log_x=True,
         log_y=True,
-        title="Distribuição Acumulada Complementar Empírica (CCDF Log-Log)",
+        title="Empirical complementary cumulative distribution (CCDF, log-log)",
         labels={
-            "citation_count": "Citações (escala log)",
-            "ccdf": "P(Citações ≥ x) (escala log)",
+            "citation_count": "Citations (log scale)",
+            "ccdf": "P(Citations ≥ x) (log scale)",
         },
         color_discrete_sequence=[CATEGORICAL_PALETTE[0]],
     )
     render_chart(
         fig,
-        caption="Em escala log-log, uma Lei de Potência pura (Pareto) forma uma linha reta decrescente. "
-        "A curvatura suave nos valores intermediários confirma que a distribuição Log-Normal "
-        "frequentemente modela a literatura com maior fidelidade antes do regime assintótico.",
+        caption="On log-log axes a pure power law is a straight descending line, while a log-normal "
+        "curves through the middle of the range before the tail straightens out. Read the shape "
+        "against the AIC comparison above rather than instead of it: the eye is a poor judge of "
+        "which family fits a heavy tail, which is why the selection is made by likelihood.",
     )
 
 
 def _age_normalized_rankings(articles_df: pd.DataFrame) -> None:
-    st.subheader("⏳ Impacto Normalizado pela Idade do Artigo")
+    st.subheader("⏳ Impact Normalized by the Article Age")
     st.caption(
-        "Artigos antigos acumulam mais citações brutas por mera exposição temporal. "
-        "A taxa anualizada de citações e o z-score por coorte anual de publicação revelam trabalhos "
-        "recentes que estão alcançando velocidade de impacto excepcional."
+        "Old articles accumulate more gross citations due to mere temporal exposure. "
+        "Annualized citation rate and z-score by annual publication cohort reveal studies "
+        "recent that are reaching exceptional impact velocity."
     )
     from lake_research_map.dashboard.analytics import age_normalized_citations
 
     norm_df = age_normalized_citations(articles_df)
     if "citation_rate_annual" not in norm_df.columns:
-        st.info("Dados insuficientes para normalização por idade.")
+        st.info("Insufficient data for normalization by age.")
         return
 
     top_rate = norm_df.nlargest(20, "citation_rate_annual").copy()
@@ -512,17 +503,18 @@ def _age_normalized_rankings(articles_df: pd.DataFrame) -> None:
 
 
 def _citation_determinants_glm_view(articles_df: pd.DataFrame) -> None:
-    st.subheader("🔬 Determinantes Estatísticos do Impacto (GLM Poisson)")
+    st.subheader("Determinants associated with citation rate")
     st.caption(
-        "Regressão de contagem de Poisson modelando quais características do artigo aumentam "
-        "sua taxa esperada de citações. O IRR (Incidence Rate Ratio) indica o fator multiplicativo "
-        "no número de citações para cada unidade adicional da variável explicativa."
+        "Count GLM with an exposure offset for article age. The IRR of a numeric field is the "
+        "multiplier for a one-standard-deviation change. These are conditional associations "
+        "within this corpus, not causal effects — the source indicator in particular also "
+        "encodes source-specific missingness."
     )
     from lake_research_map.dashboard.analytics import citation_determinants_glm
 
     glm_res = citation_determinants_glm(articles_df)
     if not glm_res.get("valid"):
-        st.info("Amostra insuficiente de artigos com citações para regressão econométrica.")
+        st.info(glm_res.get("warning") or "Sample too small for the count model.")
         return
 
     features = glm_res["features"]
@@ -530,113 +522,127 @@ def _citation_determinants_glm_view(articles_df: pd.DataFrame) -> None:
     irrs = glm_res["irr"]
 
     feat_labels = {
-        "ano_publicacao": "Ano de Publicação (efeito do tempo)",
-        "qtd_referencias": "Quantidade de Referências (embasamento)",
-        "tamanho_equipe": "Tamanho da Equipe (autores)",
-        "origem_ieee": "Publicado na IEEE (vs. Elsevier)",
+        "ano_publicacao": "Publication year (time effect)",
+        "qtd_referencias": "Reference count",
+        "tamanho_equipe": "Team size (authors)",
+        "origem_ieee": "Published in IEEE (vs. Elsevier)",
     }
 
     glm_df = pd.DataFrame(
         {
-            "Variável Explicativa": [feat_labels.get(f, f) for f in features],
-            "Coeficiente (β)": [round(c, 4) for c in coefs],
-            "IRR (Multiplicador de Citações)": [round(i, 4) for i in irrs],
+            "Explanatory variable": [feat_labels.get(f, f) for f in features],
+            "Coefficient (β)": [round(c, 4) for c in coefs],
+            "IRR (citation multiplier)": [round(i, 4) for i in irrs],
+            "95% CI lower": [round(i, 4) for i in glm_res["irr_lower"]],
+            "95% CI upper": [round(i, 4) for i in glm_res["irr_upper"]],
+            "Robust p-value": [round(i, 4) for i in glm_res["p_values"]],
         }
     )
     st.dataframe(glm_df, hide_index=True, width="stretch")
     st.caption(
-        f"Pseudo R² do modelo: {glm_res.get('score', 0):.3f}. Um IRR > 1,0 indica efeito positivo na atração de citações."
+        f"Family: {glm_res['family'].replace('_', ' ')} · Poisson dispersion "
+        f"{glm_res['dispersion']:.2f} · coverage {glm_res['n_used']}/{glm_res['n_total']} "
+        f"({glm_res['coverage']:.1%}) · pseudo R² {glm_res.get('score', 0):.3f}."
     )
+    if glm_res.get("warning"):
+        st.warning(glm_res["warning"])
+
+    _glm_specification_diagnostics(glm_res)
 
 
-def _modal_source(rows: pd.DataFrame, key: str, keys_shown) -> pd.Series | None:
-    """Most frequent `source` per entity, for the entities actually plotted.
+def _family_aic_metric(glm_res: dict) -> tuple[str, str, str]:
+    """Compare the candidate families by AIC beside the heuristic that chose one.
 
-    Scoped to `keys_shown` first: the previous
-    `groupby(key)["source"].agg(lambda s: s.mode().iat[0])` ran a per-group
-    mode over every author/venue in the corpus (thousands of groups) just to
-    colour 15 bars. Ties resolve to the alphabetically first source, matching
-    `Series.mode()`, because the groupby output is sorted and the sort below
-    is stable.
+    `candidate_aic` maps each fitted family to its AIC. The family actually
+    selected still comes from the dispersion > 1.5 rule, so showing both makes
+    it visible when AIC would have preferred the other one.
     """
-    if "source" not in rows.columns:
-        return None
-    scoped = rows[rows[key].isin(keys_shown)]
-    if scoped.empty:
-        return None
-    counts = scoped.groupby([key, "source"], observed=True).size()
-    return (
-        counts.sort_values(ascending=False)
-        .reset_index()
-        .drop_duplicates(key)
-        .set_index(key)["source"]
+    candidates = glm_res.get("candidate_aic") or {}
+    selected = glm_res["family"]
+    readable = selected.replace("_", " ")
+    if not candidates:
+        return ("\U0001f9ee Family AIC", "n/a", f"selected: {readable}")
+
+    best = min(candidates, key=lambda name: candidates[name])
+    detail = " \u00b7 ".join(
+        f"{name.replace('_', ' ')} {value:.1f}" for name, value in sorted(candidates.items())
     )
+    if len(candidates) > 1 and best != selected:
+        detail += f" \u2014 AIC would prefer {best.replace('_', ' ')}"
+    value = f"{candidates[selected]:.1f}" if selected in candidates else f"{candidates[best]:.1f}"
+    return (f"\U0001f9ee AIC ({readable})", value, detail)
 
 
-def _top_authors(articles_df: pd.DataFrame) -> None:
-    st.subheader("✍️ Autores mais prolíficos")
-    if not require_columns(articles_df, ["authors"]):
-        return
-    authors_series = articles_df["authors"].apply(lambda a: a if isinstance(a, list) else [])
-    author_rows = (
-        articles_df.assign(author=authors_series).explode("author").dropna(subset=["author"])
-    )
-    author_rows = author_rows[author_rows["author"].astype(str).str.strip() != ""]
+def _glm_specification_diagnostics(glm_res: dict) -> None:
+    """Show the misspecification evidence the model already computes.
 
-    if author_rows.empty:
-        st.info("Coluna 'authors' vazia nesta camada.")
-        return
+    A coefficient table on its own invites a confirmatory reading. PRD section
+    8.1 requires multicollinearity, influence and zero-inflation to be visible
+    beside it, and every number below is already in the model result.
+    """
+    with st.expander("Specification diagnostics", expanded=False):
+        condition_number = glm_res.get("condition_number")
+        max_cooks = glm_res.get("max_cooks_distance")
+        observed_zero = glm_res.get("observed_zero_fraction")
+        predicted_zero = glm_res.get("predicted_zero_fraction")
+        zero_gap = glm_res.get("zero_inflation_gap")
 
-    top_authors = author_rows["author"].value_counts().head(15)
-    modal_source = _modal_source(author_rows, "author", top_authors.index)
+        metric_row(
+            [
+                (
+                    "📐 Condition number",
+                    "n/a" if condition_number is None else f"{condition_number:.1f}",
+                    "Above ~30 indicates collinear predictors",
+                ),
+                (
+                    "🎯 Influential observations",
+                    f"{glm_res.get('influential_count', 0):,}",
+                    "n/a" if max_cooks is None else f"max Cook's distance {max_cooks:.3f}",
+                ),
+                (
+                    "⚠️ Zero-inflation gap",
+                    "n/a" if zero_gap is None else f"{zero_gap:+.1%}",
+                    "n/a"
+                    if observed_zero is None or predicted_zero is None
+                    else f"observed {observed_zero:.1%} vs. predicted {predicted_zero:.1%}",
+                ),
+                _family_aic_metric(glm_res),
+            ]
+        )
 
-    fig = topn_hbar(
-        top_authors,
-        color_by=modal_source,
-        x_title="Quantidade de artigos publicados",
-        y_title="Autor",
-    )
-    fig.update_traces(hovertemplate="<b>%{y}</b><br>%{x:,} artigos publicados<extra></extra>")
-    render_chart(
-        fig,
-        caption="⚠️ Os nomes não estão padronizados entre as fontes: o IEEE exporta iniciais (`J. Liu`) "
-        "enquanto a Elsevier exporta nomes completos (`Junyong Liu`), de modo que o mesmo pesquisador pode "
-        "aparecer em registros separados aqui. Veja a página Pesquisadores para uma visão com nomes "
-        "canonicalizados (e suas limitações).",
-    )
+        vif = glm_res.get("vif") or {}
+        if vif:
+            st.dataframe(
+                pd.DataFrame(
+                    {"Predictor": list(vif), "VIF": [round(float(v), 2) for v in vif.values()]}
+                ),
+                hide_index=True,
+                width="stretch",
+            )
+            st.caption("Variance inflation factor; above 5 a coefficient is hard to read.")
 
+        missingness = glm_res.get("missingness") or {}
+        if missingness:
+            st.dataframe(
+                pd.DataFrame(
+                    {
+                        "Field": list(missingness),
+                        "Missing": [
+                            f"{float(value):.1%}" if isinstance(value, int | float) else value
+                            for value in missingness.values()
+                        ],
+                    }
+                ),
+                hide_index=True,
+                width="stretch",
+            )
+            st.caption(
+                "Rows with any missing predictor are dropped, so a field that is missing "
+                "unevenly across sources also shifts which articles the model sees."
+            )
 
-def _venue_impact(articles_df: pd.DataFrame) -> None:
-    st.subheader("📈 Impacto médio por periódico")
-    if not require_columns(articles_df, ["citation_count", "venue"]):
-        return
-
-    cited_venues = articles_df.dropna(subset=["citation_count", "venue"])
-    venue_impact = (
-        cited_venues.groupby("venue")["citation_count"]
-        .agg(articles="size", mean="mean")
-        .query("articles >= @MIN_CITED_ARTICLES")
-        .sort_values("mean", ascending=False)
-        .head(15)
-    )
-    if venue_impact.empty:
-        st.info("Nenhum periódico com artigos suficientes com contagem de citações nesta camada.")
-        return
-
-    modal_source = _modal_source(cited_venues, "venue", venue_impact.index)
-
-    article_counts = venue_impact["articles"]
-    fig = topn_hbar(
-        venue_impact["mean"],
-        color_by=modal_source,
-        x_title="Média de citações por artigo",
-        y_title="Periódico / Evento",
-    )
-    for trace in fig.data:
-        trace.customdata = article_counts.reindex(trace.y).to_numpy().reshape(-1, 1)
-        trace.hovertemplate = "<b>%{y}</b><br>%{x:.1f} citações/artigo (%{customdata[0]:,} artigos analisados)<extra></extra>"
-    render_chart(
-        fig,
-        caption=f"Média de citações por artigo, restrita a periódicos com pelo menos "
-        f"{MIN_CITED_ARTICLES} artigos com citações no corpus.",
-    )
+        st.caption(
+            "A positive zero-inflation gap means the model under-predicts articles with zero "
+            "citations. No zero-inflated model is fitted here, so a large gap marks these "
+            "estimates as exploratory rather than being corrected for."
+        )

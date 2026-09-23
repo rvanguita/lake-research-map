@@ -13,13 +13,14 @@ import plotly.graph_objects as go
 
 from lake_research_map.dashboard.charts import (
     lorenz_chart,
+    publication_category_bars,
     source_bars,
     source_lines,
     source_topn_hbar,
     stacked_area,
     topn_hbar,
 )
-from lake_research_map.dashboard.components import _warn_unnamed_axes, metric_row
+from lake_research_map.dashboard.components import _warn_unnamed_axes, metric_row, summary_card_row
 
 
 def _by_source() -> pd.DataFrame:
@@ -47,6 +48,33 @@ def test_source_lines_names_both_axes() -> None:
         _by_source(), "year", x_title="Ano de publicação", y_title="Artigos acumulados"
     )
     assert _axis_titles(fig) == ("Ano de publicação", "Artigos acumulados")
+
+
+def test_publication_category_bars_has_four_categories_and_total_line() -> None:
+    frame = pd.DataFrame(
+        [
+            {
+                "year": 2020,
+                "journal": 2,
+                "conference": 1,
+                "review": 0,
+                "other": 1,
+                "total": 4,
+            }
+        ]
+    )
+
+    fig = publication_category_bars(frame, x_title="Publication year", y_title="Articles")
+
+    assert [trace.name for trace in fig.data] == [
+        "Journal",
+        "Conference",
+        "Review",
+        "Other",
+        "Total",
+    ]
+    assert fig.data[-1].type == "scatter"
+    assert _axis_titles(fig) == ("Publication year", "Articles")
 
 
 def test_topn_hbar_names_value_and_category_axes() -> None:
@@ -107,10 +135,10 @@ def test_stacked_area_keeps_the_express_defaults_when_no_title_is_given() -> Non
 
 def test_lorenz_chart_names_both_axes_without_being_asked() -> None:
     curve = pd.DataFrame({"share_of_authors": [0.0, 0.5, 1.0], "share_of_output": [0.0, 0.2, 1.0]})
-    fig = lorenz_chart({"total": curve}, entity_label="periódicos")
+    fig = lorenz_chart({"total": curve}, entity_label="journals")
     assert _axis_titles(fig) == (
-        "Parcela acumulada de periódicos",
-        "Parcela acumulada de artigos",
+        "Cumulative share of journals",
+        "Cumulative share of articles",
     )
 
 
@@ -133,8 +161,8 @@ def test_warn_unnamed_axes_heatmaps_fallback(caplog) -> None:
     with caplog.at_level("WARNING"):
         _warn_unnamed_axes(fig)
     assert not any("chart axis without a title" in r.message for r in caplog.records)
-    assert fig.layout.xaxis.title.text == "Dimensão X"
-    assert fig.layout.yaxis.title.text == "Dimensão Y"
+    assert fig.layout.xaxis.title.text == "Dimension X"
+    assert fig.layout.yaxis.title.text == "Dimension Y"
 
 
 def test_metric_row_accepts_both_2_and_3_tuples() -> None:
@@ -153,3 +181,13 @@ def test_metric_row_accepts_both_2_and_3_tuples() -> None:
         )
         mock_col1.metric.assert_called_once_with("Taxa", "50%", None)
         mock_col2.metric.assert_called_once_with("Score", "9.5", "+1.2")
+
+    long_value = "GAMS / AMPL (Modeladores Algébricos)"
+    with (
+        patch("streamlit.container", return_value=mock_container),
+        patch("streamlit.columns", return_value=[mock_col1]),
+        patch("streamlit.caption"),
+        patch("streamlit.markdown") as markdown,
+    ):
+        summary_card_row([("Ferramenta mais citada", long_value, "42 artigos")])
+        markdown.assert_called_once_with(f"### {long_value}")

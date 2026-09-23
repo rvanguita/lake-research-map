@@ -2,16 +2,19 @@ services:
   dashboard:
     build: .
     ports:
-      - "8501:8501"
+      - "127.0.0.1:8501:8501"
     env_file:
       - .env
     environment:
       # inside the compose network the airflow service is reachable by name;
       # .env's own AIRFLOW_BASE_URL covers running streamlit on the host instead
       AIRFLOW_BASE_URL: http://airflow:8080
+      LAKE_RESEARCH_MAP_DB_ROLE: dashboard
     depends_on:
       - airflow
     restart: unless-stopped
+    cpus: 2.0
+    mem_limit: 2g
 
   airflow:
     build:
@@ -19,7 +22,7 @@ services:
       dockerfile: Dockerfile.airflow
     command: ["standalone"]
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     env_file:
       - .env
     environment:
@@ -37,6 +40,7 @@ services:
       # keep this container's uv-managed venv separate from the host's .venv
       # (its own activation scripts embed host-specific absolute paths)
       UV_PROJECT_ENVIRONMENT: /opt/venv-airflow
+      LAKE_RESEARCH_MAP_DB_ROLE: pipeline
     volumes:
       - airflow_home:/opt/airflow
       - airflow_venv:/opt/venv-airflow
@@ -48,6 +52,8 @@ services:
       - ./data:/opt/airflow/project/data
       - ./airflow/dags:/opt/airflow/project/airflow/dags
     restart: unless-stopped
+    cpus: 2.0
+    mem_limit: 3g
 
 volumes:
   airflow_home:

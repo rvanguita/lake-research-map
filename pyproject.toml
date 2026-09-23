@@ -20,7 +20,9 @@ dependencies = [
     "rapidfuzz>=3.14.6",
     "requests>=2.34.2",
     "scikit-learn>=1.9.1",
+    "scipy>=1.17.0",
     "sqlalchemy>=2.0.53",
+    "statsmodels>=0.14.5",
     "streamlit>=1.63.0",
 ]
 
@@ -50,3 +52,8 @@ ignore = ["E501"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-p no:anyio"
+markers = [
+    "mysql: destructive-only-to-lit_* integration checks against a disposable or explicitly selected MySQL server",
+    "live_api: credentialed external-provider contract checks",
+]

@@ -61,11 +61,71 @@ _ADDITIVE_COLUMNS: dict[str, dict[str, tuple[str, tuple[str, ...]]]] = {
         "license": ("VARCHAR(64) NULL", ("bronze", "silver", "gold")),
         # ROADMAP #4: flag non-article records (book front matter, etc.).
         "is_non_article": ("BOOLEAN NOT NULL DEFAULT FALSE", ("silver", "gold")),
+        "dataset_version_id": ("VARCHAR(64) NULL", ("bronze", "silver")),
+        "publication_category": ("VARCHAR(32) NULL", ("bronze", "silver", "gold")),
+        "publication_category_basis": ("VARCHAR(64) NULL", ("bronze", "silver", "gold")),
     },
     # Cosine to the logistics anchor, see transform/semantics.py.
     "lit_semantics": {"offtopic_score": ("FLOAT NULL", ("gold",))},
     # ROADMAP #1: binary embedding storage (migration from JSON to BLOB).
-    "lit_chunks": {"embedding_bin": ("LONGBLOB NULL", ("gold",))},
+    "lit_chunks": {
+        "embedding_bin": ("LONGBLOB NULL", ("gold",)),
+        "text_sha256": ("VARCHAR(64) NULL", ("gold",)),
+        "embed_revision": ("VARCHAR(128) NULL", ("gold",)),
+        "embedding_dim": ("INT NULL", ("gold",)),
+        "embedding_dtype": ("VARCHAR(32) NULL", ("gold",)),
+        "embedding_normalized": ("BOOLEAN NULL", ("gold",)),
+        "embedded_at": ("DATETIME NULL", ("gold",)),
+    },
+    "lit_rejected": {
+        "dataset_version_id": ("VARCHAR(64) NULL", ("silver",)),
+        "publication_category": ("VARCHAR(32) NULL", ("silver",)),
+        "publication_category_basis": ("VARCHAR(64) NULL", ("silver",)),
+    },
+    "lit_dataset_articles": {
+        "publication_category": ("VARCHAR(32) NULL", ("gold",)),
+        "publication_category_basis": ("VARCHAR(64) NULL", ("gold",)),
+    },
+    "lit_source_files": {
+        "dataset_version_id": ("VARCHAR(64) NULL", ("raw",)),
+        "source_revision_id": ("VARCHAR(64) NULL", ("raw",)),
+    },
+    "lit_config": {
+        "dataset_version_id": ("VARCHAR(64) NULL", ("raw",)),
+        "source_revision_id": ("VARCHAR(64) NULL", ("raw",)),
+    },
+    "lit_ieee_csv_rows": {
+        "dataset_version_id": ("VARCHAR(64) NULL", ("raw",)),
+        "source_revision_id": ("VARCHAR(64) NULL", ("raw",)),
+    },
+    "lit_bib_entries": {
+        "dataset_version_id": ("VARCHAR(64) NULL", ("raw",)),
+        "source_revision_id": ("VARCHAR(64) NULL", ("raw",)),
+    },
+    "lit_pdf_files": {
+        "archive_path": ("VARCHAR(512) NULL", ("raw",)),
+        "dataset_version_id": ("VARCHAR(64) NULL", ("raw",)),
+        "source_revision_id": ("VARCHAR(64) NULL", ("raw",)),
+    },
+    "lit_pipeline_runs": {
+        "execution_id": ("VARCHAR(255) NULL", ("gold",)),
+        "dataset_version_id": ("VARCHAR(64) NULL", ("gold",)),
+        "input_version_id": ("VARCHAR(64) NULL", ("gold",)),
+        "output_version_id": ("VARCHAR(64) NULL", ("gold",)),
+        "sequence": ("INT NULL", ("gold",)),
+        "attempt": ("INT NULL", ("gold",)),
+    },
+    "lit_pipeline_executions": {
+        "heartbeat_at": ("DATETIME NULL", ("gold",)),
+    },
+    "lit_dataset_chunks": {
+        "text_sha256": ("VARCHAR(64) NULL", ("gold",)),
+        "embed_revision": ("VARCHAR(128) NULL", ("gold",)),
+        "embedding_dim": ("INT NULL", ("gold",)),
+        "embedding_dtype": ("VARCHAR(32) NULL", ("gold",)),
+        "embedding_normalized": ("BOOLEAN NULL", ("gold",)),
+        "embedded_at": ("DATETIME NULL", ("gold",)),
+    },
 }
 
 

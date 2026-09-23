@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 from lake_research_map.ingest.openalex import (
     enrich_cache_from_openalex,
+    fetch_openalex_observation,
     fetch_openalex_work,
 )
 
@@ -33,6 +34,17 @@ def test_fetch_openalex_work_handles_404():
     with patch("requests.get", return_value=mock_resp):
         res = fetch_openalex_work("10.1109/NONEXISTENT")
         assert res is None
+
+
+def test_fetch_openalex_observation_distinguishes_rate_limit():
+    mock_resp = MagicMock()
+    mock_resp.status_code = 429
+
+    with patch("requests.get", return_value=mock_resp):
+        result = fetch_openalex_observation("10.1000/limited", max_retries=0)
+
+    assert result["status"] == "rate_limited"
+    assert result["http_status"] == 429
 
 
 def test_enrich_cache_from_openalex_updates_cache_incrementally(tmp_path):

@@ -20,6 +20,18 @@ logger = logging.getLogger(__name__)
 # colors always mean the same two publishers across the whole app.
 SOURCE_COLORS = {"ieee": "#00629B", "elsevier": "#FF6C00"}
 SOURCE_LABELS = {"ieee": "IEEE", "elsevier": "Elsevier"}
+PUBLICATION_CATEGORY_LABELS = {
+    "journal": "Journal",
+    "conference": "Conference",
+    "review": "Review",
+    "other": "Other",
+}
+PUBLICATION_CATEGORY_COLORS = {
+    "journal": "#2a78d6",
+    "conference": "#eb6834",
+    "review": "#1baf7a",
+    "other": "#9a9a94",
+}
 
 # Validated categorical palette (dataviz skill's default 8-slot theme) for charts
 # that distinguish many sub-categories within one source (e.g. venues) -- a
@@ -65,14 +77,8 @@ CHART_PAPER_BG = "rgba(0,0,0,0)"
 _CHART_FONT_FAMILY = "Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
 
 # ---------------------------------------------------------------------------
-# Light/dark tokens
-#
-# Streamlit's own light/dark toggle (hamburger menu -> Settings -> Theme, or
-# "Use system setting") is read at runtime via `st.context.theme.type`, which
-# reflects the *active* theme for the current browser session. Our custom CSS
-# and every Plotly figure key off the same value, so switching to "Light" in
-# Streamlit actually turns the page light instead of leaving the injected
-# dark-navy background in place.
+# Fixed dark-theme tokens. Streamlit and Plotly both use this single palette,
+# so browser or system preferences cannot produce mismatched chart chrome.
 # ---------------------------------------------------------------------------
 
 _DARK_TOKENS = {
@@ -117,92 +123,18 @@ _DARK_TOKENS = {
     "point_border": "#ffffff",
 }
 
-_LIGHT_TOKENS = {
-    "bg_top": "#eef3fb",
-    "bg_mid": "#f6f9fd",
-    "bg_bottom": "#ffffff",
-    "sidebar_bg": "rgba(255, 255, 255, 0.96)",
-    "border": "rgba(15, 23, 42, 0.12)",
-    "text": "#101728",
-    "muted": "#48536b",
-    "accent": "#1d6fd6",
-    "input_bg": "rgba(241, 245, 251, 0.95)",
-    "input_border": "rgba(15, 23, 42, 0.15)",
-    "metric_bg": "linear-gradient(135deg, rgba(219, 234, 254, 0.95), rgba(191, 219, 254, 0.65))",
-    "metric_border": "rgba(29, 111, 214, 0.28)",
-    "metric_label": "#1d4e89",
-    "metric_value": "#0b1725",
-    "table_bg": "linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(246, 249, 253, 0.96))",
-    "table_border": "rgba(29, 111, 214, 0.22)",
-    "expander_bg": "linear-gradient(180deg, rgba(255, 255, 255, 0.97), rgba(241, 245, 251, 0.95))",
-    "button_bg": "linear-gradient(135deg, rgba(29,111,214,0.10), rgba(255,255,255,0.9))",
-    "button_border": "rgba(29,111,214,0.30)",
-    "tab_bg": "rgba(15, 23, 42, 0.04)",
-    "tab_active_bg": "rgba(29, 111, 214, 0.10)",
-    "alert_bg": "rgba(15, 23, 42, 0.04)",
-    "chart_bg": "#ffffff",
-    "chart_text": "#101728",
-    "chart_tick": "#33415c",
-    "chart_annotation": "#0b1725",
-    "grid": "rgba(15,23,42,0.08)",
-    "axis_line": "rgba(15,23,42,0.22)",
-    "legend_bg": "rgba(255,255,255,0.88)",
-    "legend_border": "rgba(15,23,42,0.14)",
-    "heatmap_zero": "#f1f5f9",
-    "heatmap_mid": "#ffffff",
-    "reference_line": "rgba(15, 23, 42, 0.65)",
-    "reference_line_subtle": "rgba(15, 23, 42, 0.25)",
-    "point_border": "#0b1725",
-}
-
-
-_THEME_STATE_KEY = "dashboard_theme_mode"
-
 
 def _active_theme_type() -> str:
-    """'light' or 'dark', from our own sidebar toggle -- deliberately NOT
-    `st.context.theme.type`.
-
-    Streamlit's own docs say that API is unreliable exactly when it would
-    matter most here: "the theme type may be incorrect ... when the app is
-    first loaded within a session" and "when the user changes the theme in
-    the settings menu" (see Streamlit GitHub issue #11920). Relying on it
-    meant the dashboard could silently render the wrong theme on first load
-    or right after a user switched it. `render_theme_toggle()` gives us a
-    single source of truth in `st.session_state` instead: 100% deterministic,
-    defaults to "dark" (the dashboard's original look) so nothing changes for
-    anyone who doesn't touch the toggle, and takes effect the moment it's
-    changed since it's rendered before `apply_dashboard_theme()` runs.
-    """
-    return st.session_state.get(_THEME_STATE_KEY, "dark")
-
-
-def render_theme_toggle() -> str:
-    """Render the sidebar dark/light control and return the active mode.
-
-    Must run before `apply_dashboard_theme()` in `app.main()` so the CSS for
-    this very rerun already reflects a just-changed choice, instead of
-    lagging one rerun behind like a widget defined later in the script would.
-    """
-    st.session_state.setdefault(_THEME_STATE_KEY, "dark")
-    with st.sidebar:
-        st.radio(
-            "Tema",
-            options=["dark", "light"],
-            format_func=lambda v: "🌙 Escuro" if v == "dark" else "☀️ Claro",
-            key=_THEME_STATE_KEY,
-            horizontal=True,
-            label_visibility="collapsed",
-        )
-    return st.session_state[_THEME_STATE_KEY]
+    """Return the single supported dashboard theme."""
+    return "dark"
 
 
 def _tokens() -> dict[str, str]:
-    return _LIGHT_TOKENS if _active_theme_type() == "light" else _DARK_TOKENS
+    return _DARK_TOKENS
 
 
 def theme_tokens() -> dict[str, str]:
-    """Public accessor for the active light/dark token set.
+    """Public accessor for the active dark-theme token set.
 
     Use this from a page/component that needs to color its own inline HTML
     or a Plotly Indicator (which `polish_figure_layout` doesn't touch) to
@@ -213,7 +145,7 @@ def theme_tokens() -> dict[str, str]:
 
 
 def apply_dashboard_theme() -> None:
-    """Apply an executive-style visual treatment that follows Streamlit's light/dark toggle."""
+    """Apply the fixed executive dark visual treatment."""
     t = _tokens()
     st.markdown(
         f"""
@@ -457,7 +389,7 @@ def _figure_template(theme_type: str, has_title: bool):
     legend's own top edge (it extends downward from there), so a lower `y`
     than the title's `y` reliably reads as "legend below title".
     """
-    t = _LIGHT_TOKENS if theme_type == "light" else _DARK_TOKENS
+    t = _DARK_TOKENS
     axis = dict(
         showgrid=True,
         gridcolor=t["grid"],
@@ -527,7 +459,7 @@ def _figure_template(theme_type: str, has_title: bool):
 
 
 def polish_figure_layout(fig, height: int | None = None, margin: dict | None = None) -> None:
-    """Apply the unified light/dark chart styling to `fig`, in place."""
+    """Apply the unified dark chart styling to `fig`, in place."""
     t = _tokens()
     has_title = bool(fig.layout.title and fig.layout.title.text)
     if not has_title:

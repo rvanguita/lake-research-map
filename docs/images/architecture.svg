@@ -90,7 +90,7 @@
 
   <!-- dashboard -->
   <rect x="230" y="286" width="600" height="84" rx="8" fill="#fff7e6" stroke="#92400e" stroke-width="1.5"/>
-  <text x="530" y="310" text-anchor="middle" font-size="15" font-weight="700" fill="#78350f">Streamlit Analytical Research Dashboard (13 pages)</text>
+  <text x="530" y="310" text-anchor="middle" font-size="15" font-weight="700" fill="#78350f">Streamlit Analytical Research Dashboard (10 pages)</text>
   <text x="530" y="332" text-anchor="middle" font-size="13" fill="#78350f">scientometrics, econometrics, methodological synthesis, technological frontiers,</text>
   <text x="530" y="350" text-anchor="middle" font-size="13" fill="#78350f">Bass diffusion, semantic drift, bibliometric laws &amp; hybrid BM25 + vector RAG search</text>
 </svg>

@@ -4,19 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from lake_research_map.dashboard.forecasting import fit_bass_diffusion, fit_quantile_forecast
-
-
-def test_fit_quantile_forecast():
-    years = np.array([2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025])
-    values = np.array([10, 15, 22, 30, 45, 50, 65, 75, 90, 110, 130])
-    res = fit_quantile_forecast(years, values, forecast_years=(2026, 2027))
-    assert res["valid"] is True
-    assert "p10" in res and "p50" in res and "p90" in res
-    assert len(res["p10"]) == 2
-    # Quantiles must be monotonic: P10 <= P50 <= P90
-    assert (res["p10"] <= res["p50"] + 1e-3).all()
-    assert (res["p50"] <= res["p90"] + 1e-3).all()
+from lake_research_map.dashboard.forecasting import fit_bass_diffusion
 
 
 def test_fit_bass_diffusion():
@@ -27,7 +15,7 @@ def test_fit_bass_diffusion():
     assert res["valid"] is True
     assert res["m"] > 0
     assert res["p"] > 0
-    assert res["stage"] in ("crescimento", "maturidade")
+    assert res["stage"] in ("growth", "maturity")
 
 
 def test_detect_bibliometric_anomalies():
@@ -87,4 +75,4 @@ def test_dynamic_topic_ctfidf():
     assert res["valid"] is True
     assert len(res["epochs"]) >= 1
     assert not res["summary_df"].empty
-    assert "Termos Característicos (c-TF-IDF)" in res["summary_df"].columns
+    assert "Characteristic Terms (c-TF-IDF)" in res["summary_df"].columns

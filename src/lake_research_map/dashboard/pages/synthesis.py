@@ -1,12 +1,4 @@
-"""🔬 Evidências Metodológicas & Síntese Científica da Literatura.
-
-Mapeia a taxonomia dos métodos matemáticos de otimização e espectro de complexidade (MILP, SOCP, MINLP, IA),
-as funções-objetivo e formulações multi-critério (Pareto), os paradigmas de modelagem da incerteza (estocástica,
-robusta, fuzzy, DRO), os horizontes temporais (expansão dinâmica vs. dias representativos), a validação em sistemas
-elétricos de teste (IEEE 33, 69, 123-bus e redes reais), o ferramental de solvers computacionais (GAMS, CPLEX,
-MATLAB, OpenDSS), a dinâmica de liderança científica (h-index, g-index, e-index, m-quotient de Hirsch),
-a estilometria textual (Flesch-Kincaid / TTR) e a longevidade citacional (meia-vida e artigos evergreen).
-"""
+"""It maps the taxonomy of mathematical optimization methods and complexity spectrum (MILP, SOCP, MINLP, IA), objective functions and multi-criteria formulations (Pareto), uncertainty modeling paradigms (stochastic, robust, fuzzy, DRO), time horizons (dynamic expansion vs. representative days), validation in electrical test systems (IEEE 33, 69, 123-bus and real networks), computational solvers toolling (GAMS, CPLEX, MATLAB and OpenDSS)."""
 
 from __future__ import annotations
 
@@ -17,90 +9,69 @@ import streamlit as st
 
 from lake_research_map.dashboard import loaders
 from lake_research_map.dashboard.analytics import (
-    author_impact_advanced_indices,
-    author_m_quotient_analysis,
     benchmark_feeders_analysis,
-    citation_longevity_and_decay,
     computational_solvers_analysis,
     mathematical_complexity_spectrum,
     objective_functions_taxonomy,
     optimization_methods_taxonomy,
     planning_time_horizons_analysis,
-    text_readability_and_stylometrics,
     uncertainty_paradigms_analysis,
 )
 from lake_research_map.dashboard.components import (
-    article_table,
-    metric_row,
     page_header,
     render_chart,
+    summary_card_row,
 )
-from lake_research_map.dashboard.theme import CATEGORICAL_PALETTE, theme_tokens
+from lake_research_map.dashboard.theme import CATEGORICAL_PALETTE
 
 
 def render() -> None:
     page_header(
         "🔬",
-        "Evidências Metodológicas",
-        "Formulação matemática, funções-objetivo, incerteza, horizontes temporais, validação IEEE, solvers e longevidade citacional.",
+        "Engineering evidence",
+        "Mathematical formulation, objective functions, uncertainty, temporal horizons, IEEE validation and solvers.",
     )
 
     articles_df = loaders.require_articles()
     df = loaders.with_semantics(articles_df)
 
-    (
-        tab_methods,
-        tab_objectives,
-        tab_uncertainty,
-        tab_horizons,
-        tab_feeders,
-        tab_solvers,
-        tab_longevity,
-    ) = st.tabs(
+    section = st.selectbox(
+        "Evidence dimension",
         [
-            "⚙️ Métodos & Complexidade",
-            "🎯 Funções-Objetivo",
-            "🎲 Modelagem da Incerteza",
-            "⏱️ Horizontes Temporais",
-            "⚡ Benchmarks IEEE & Redes",
-            "💻 Ferramental & Solvers",
-            "⏳ Longevidade & Estilometria",
-        ]
+            "Methods and complexity",
+            "Objective functions",
+            "Modelagem da incerteza",
+            "Horizontes temporais",
+            "Benchmarks IEEE e redes",
+            "Ferramental e solvers",
+        ],
     )
 
-    with tab_methods:
+    if section == "Methods and complexity":
         _render_methods_tab(df)
-
-    with tab_objectives:
+    elif section == "Objective functions":
         _render_objectives_tab(df)
-
-    with tab_uncertainty:
+    elif section == "Modelagem da incerteza":
         _render_uncertainty_tab(df)
-
-    with tab_horizons:
+    elif section == "Horizontes temporais":
         _render_horizons_tab(df)
-
-    with tab_feeders:
+    elif section == "Benchmarks IEEE e redes":
         _render_feeders_tab(df)
-
-    with tab_solvers:
+    elif section == "Ferramental e solvers":
         _render_solvers_tab(df)
-
-    with tab_longevity:
-        _render_longevity_and_text_tab(df)
 
 
 # ---------------------------------------------------------------------------
-# Tab 1: Métodos & Complexidade Matemática
+# Tab 1: Methods & mathematical complexity
 # ---------------------------------------------------------------------------
 
 
 def _render_methods_tab(df: pd.DataFrame) -> None:
-    st.markdown("### ⚙️ Taxonomia dos Paradigmas de Otimização & Complexidade Matemática")
+    st.markdown("##⚙ Ta Taxonomy of Paradigms of Optimization & Mathematical Complexity")
     st.caption(
-        "Identifica e quantifica os métodos matemáticos empregados na literatura de planejamento de distribuição. "
-        "Evidencia a transição histórica de meta-heurísticas clássicas para programação exata (MILP, SOCP), "
-        "otimização sob incerteza (Robusta, Estocástica) e inteligência artificial."
+        "It identifies and quantifies the mathematical methods used in the distribution planning literature. "
+        "Evidences the historical transition from classical metaheuristics to exact programming (MILP, SOCP), "
+        "optimization under uncertainty (Robusta, Stochastic) and artificial intelligence."
     )
 
     res = optimization_methods_taxonomy(df)
@@ -108,7 +79,7 @@ def _render_methods_tab(df: pd.DataFrame) -> None:
     temporal_df = res["temporal_df"]
 
     if summary_df.empty:
-        st.info("Nenhum método de otimização detectado no corpus.")
+        st.info("No optimization method detected in the corpus.")
         return
 
     spec_res = mathematical_complexity_spectrum(df)
@@ -121,19 +92,19 @@ def _render_methods_tab(df: pd.DataFrame) -> None:
     ]
     top_recent_method = summary_df.sort_values(by="pct_recent", ascending=False).iloc[0]["method"]
 
-    metric_row(
+    summary_card_row(
         [
-            ("🏆 Método Mais Frequente", top_method, f"{summary_df.iloc[0]['articles']} artigos"),
-            ("🚀 Maior Momentum Recente", top_recent_method, "Maior proporção ≥ 2021"),
-            ("💡 Maior Impacto Citacional", top_cites_method, "Média de citações/artigo"),
-            ("📐 Paradigmas Mapeados", str(len(summary_df)), "Famílias de resolução"),
+            ("🏆 Most frequent method", top_method, f"{summary_df.iloc[0]['articles']} articles"),
+            ("🚀 Maior Momentum Recente", top_recent_method, "Higher proportion ≥ 2021"),
+            ("💡 Highest citation impact", top_cites_method, "Average citations/article"),
+            ("📐 Paradigms mapped", str(len(summary_df)), "Resolution families"),
         ]
     )
 
     col_bar, col_line = st.columns([1, 1])
 
     with col_bar:
-        st.markdown("#### 📊 Volume Total por Método")
+        st.markdown("### 📊 Total Volume by Method")
         bar_data = summary_df.sort_values(by="articles", ascending=True)
         fig_bar = px.bar(
             bar_data,
@@ -143,13 +114,13 @@ def _render_methods_tab(df: pd.DataFrame) -> None:
             color="pct_recent",
             color_continuous_scale="Viridis",
             labels={
-                "articles": "Artigos",
+                "articles": "Articles",
                 "method": "Paradigma",
                 "pct_recent": "% Recente (≥2021)",
             },
         )
         fig_bar.update_layout(
-            xaxis_title="Quantidade de Artigos",
+            xaxis_title="Number of Articles",
             yaxis_title="Paradigma",
             height=440,
             margin={"l": 20, "r": 20, "t": 30, "b": 30},
@@ -157,7 +128,7 @@ def _render_methods_tab(df: pd.DataFrame) -> None:
         render_chart(fig_bar)
 
     with col_line:
-        st.markdown("#### 📈 Evolução Temporal dos Principais Métodos")
+        st.markdown("### 📈 Temporal Evolution of Main Methods")
         if not temporal_df.empty:
             top_cols = summary_df.head(5)["method"].tolist()
             plot_temp = temporal_df[[c for c in top_cols if c in temporal_df.columns]].reset_index()
@@ -166,22 +137,22 @@ def _render_methods_tab(df: pd.DataFrame) -> None:
                 x="year",
                 y=[c for c in top_cols if c in temporal_df.columns],
                 labels={
-                    "value": "Nº Artigos / Ano",
-                    "year": "Ano de Publicação",
-                    "variable": "Método",
+                    "value": "In Articles / Year",
+                    "year": "Year of Publication",
+                    "variable": "Method",
                 },
                 color_discrete_sequence=CATEGORICAL_PALETTE,
             )
             fig_temp.update_layout(
-                xaxis_title="Ano de Publicação",
-                yaxis_title="Nº Artigos / Ano",
+                xaxis_title="Year of Publication",
+                yaxis_title="In Articles / Year",
                 height=440,
                 legend={"orientation": "h", "y": -0.25, "x": 0.0},
                 margin={"l": 20, "r": 20, "t": 30, "b": 30},
             )
             render_chart(fig_temp)
 
-    st.markdown("#### 📐 Espectro de Complexidade Matemática das Formulações")
+    st.markdown("### 📐 Mathematical Complexity Spectrum of Formulations")
     col_c1, col_c2 = st.columns([1, 1])
     with col_c1:
         if not spectrum_df.empty:
@@ -193,13 +164,13 @@ def _render_methods_tab(df: pd.DataFrame) -> None:
                 color="pct_recent",
                 color_continuous_scale="Plasma",
                 labels={
-                    "articles": "Artigos",
+                    "articles": "Articles",
                     "complexity_class": "Classe de Complexidade",
                     "pct_recent": "% Recente (≥2021)",
                 },
             )
             fig_spec.update_layout(
-                xaxis_title="Artigos no Corpus",
+                xaxis_title="Articles in Corpus",
                 yaxis_title="Classe de Complexidade",
                 height=380,
                 margin={"l": 20, "r": 20, "t": 30, "b": 30},
@@ -214,45 +185,45 @@ def _render_methods_tab(df: pd.DataFrame) -> None:
                 x="year",
                 y=classes_avail,
                 labels={
-                    "value": "Artigos / Ano",
-                    "year": "Ano de Publicação",
+                    "value": "Articles / Year",
+                    "year": "Year of Publication",
                     "variable": "Classe",
                 },
                 color_discrete_sequence=CATEGORICAL_PALETTE,
             )
             fig_tspec.update_layout(
-                xaxis_title="Ano de Publicação",
-                yaxis_title="Artigos / Ano",
+                xaxis_title="Year of Publication",
+                yaxis_title="Articles / Year",
                 height=380,
                 legend={"orientation": "h", "y": -0.25, "x": 0.0},
                 margin={"l": 20, "r": 20, "t": 30, "b": 30},
             )
             render_chart(fig_tspec)
 
-    st.markdown("#### 📋 Tabela Analítica dos Métodos de Otimização")
+    st.markdown("### 📋 Analytical Table of Optimization Methods")
     display_sum = summary_df.copy()
     display_sum["pct_recent"] = display_sum["pct_recent"].astype(str) + "%"
     display_sum.columns = [
-        "Paradigma de Resolução",
-        "Artigos no Corpus",
-        "Publicações ≥ 2021",
-        "Citações Médias",
+        "Resolution paradigm",
+        "Articles in Corpus",
+        "Publications ≥ 2021",
+        "Average citations",
     ]
     st.dataframe(display_sum, hide_index=True, width="stretch")
 
 
 # ---------------------------------------------------------------------------
-# Tab 2: Funções-Objetivo & Co-Otimização
+# Tab 2: Objective functions & co-optimization
 # ---------------------------------------------------------------------------
 
 
 def _render_objectives_tab(df: pd.DataFrame) -> None:
-    st.markdown("### 🎯 Funções-Objetivo & Formulações Multi-Critério")
+    st.markdown("## 🎯 Objective Functions & Multi-Criteria Formulations")
     st.caption(
-        "Mapeia quais critérios a literatura busca otimizar: custos econômicos de investimento e operação (CAPEX/OPEX), "
-        "confiabilidade e continuidade de suprimento (SAIDI, SAIFI, ENS), perdas técnicas ($I^2R$), perfil de tensão, "
-        "descarbonização e emissões, e resiliência a eventos climáticos extremos. "
-        "A matriz de co-ocorrência revela quais pares de objetivos são frequentemente resolvidos em conjunto."
+        "Maps which criteria the literature seeks to optimize: economic costs of investment and operation (CAPEX/OPEX), "
+        "Reliability and supply continuity (SAIDI, SAIFI, ENS), technical losses ($I^2R$), voltage profile, "
+        "decarbonization and emissions, and resilience to extreme climatic events. "
+        "The co-occurrence matrix reveals which pairs of objectives are often solved together."
     )
 
     obj_res = objective_functions_taxonomy(df)
@@ -262,25 +233,25 @@ def _render_objectives_tab(df: pd.DataFrame) -> None:
     temporal_multiobj = obj_res["temporal_multiobj"]
 
     if summary_df.empty:
-        st.info("Nenhuma função-objetivo identificada no corpus.")
+        st.info("No objective function identified in the corpus.")
         return
 
     top_obj = summary_df.iloc[0]["objective"]
     top_cites = summary_df.sort_values(by="mean_citations", ascending=False).iloc[0]["objective"]
 
-    metric_row(
+    summary_card_row(
         [
-            ("🏆 Objetivo Mais Frequente", top_obj, f"{summary_df.iloc[0]['articles']} artigos"),
+            ("🏆 Most frequent objective", top_obj, f"{summary_df.iloc[0]['articles']} articles"),
             ("🌐 Taxa Multi-Objetivo", f"{multi_ratio:.1f}%", "Estudos com ≥ 2 objetivos"),
-            ("💡 Maior Impacto Citacional", top_cites, "Média de citações/artigo"),
-            ("📐 Famílias de Objetivos", str(len(summary_df)), "Critérios fundamentais"),
+            ("💡 Highest citation impact", top_cites, "Average citations/article"),
+            ("📐 Objective Families", str(len(summary_df)), "Fundamental criteria"),
         ]
     )
 
     col_bar, col_heat = st.columns([1, 1.1])
 
     with col_bar:
-        st.markdown("#### 📊 Frequência e Atualidade das Funções-Objetivo")
+        st.markdown("#### 📊 Frequency and Currentity of Objective Functions")
         fig_obj = px.bar(
             summary_df.sort_values(by="articles", ascending=True),
             x="articles",
@@ -289,21 +260,21 @@ def _render_objectives_tab(df: pd.DataFrame) -> None:
             color="pct_recent",
             color_continuous_scale="Tealgrn",
             labels={
-                "articles": "Artigos",
-                "objective": "Critério / Função-Objetivo",
+                "articles": "Articles",
+                "objective": "Criteria/Objective Function",
                 "pct_recent": "% Recente (≥2021)",
             },
         )
         fig_obj.update_layout(
-            xaxis_title="Artigos no Corpus",
-            yaxis_title="Critério / Função-Objetivo",
+            xaxis_title="Articles in Corpus",
+            yaxis_title="Criteria/Objective Function",
             height=460,
             margin={"l": 20, "r": 20, "t": 30, "b": 30},
         )
         render_chart(fig_obj)
 
     with col_heat:
-        st.markdown("#### 🧬 Matriz de Co-Otimização de Objetivos")
+        st.markdown("### 🧬 Goal Co-Optimization Matrix")
         if not co_matrix.empty:
             fig_co = px.imshow(
                 co_matrix,
@@ -312,19 +283,19 @@ def _render_objectives_tab(df: pd.DataFrame) -> None:
                 color_continuous_scale="Purples",
                 labels={
                     "x": "Objetivo Concorrente",
-                    "y": "Objetivo Primário",
-                    "color": "Artigos Conjuntos",
+                    "y": "Primary Objective",
+                    "color": "Joint Articles",
                 },
             )
             fig_co.update_layout(
                 xaxis_title="Objetivo Concorrente",
-                yaxis_title="Objetivo Primário",
+                yaxis_title="Primary Objective",
                 height=460,
                 margin={"l": 20, "r": 20, "t": 30, "b": 30},
             )
             render_chart(fig_co)
 
-    st.markdown("#### 📈 Transição Histórica: Mono-Objetivo vs. Multi-Objetivo")
+    st.markdown("### 📈 Historical Transition: Mono-Objective vs. Multi-Objective")
     if not temporal_multiobj.empty:
         fig_mo = go.Figure()
         fig_mo.add_trace(
@@ -339,7 +310,7 @@ def _render_objectives_tab(df: pd.DataFrame) -> None:
             go.Bar(
                 x=temporal_multiobj["year"],
                 y=temporal_multiobj["multi_objective"],
-                name="Multi-Objetivo (≥2 critérios)",
+                name="Multi-Objective (≥2 criteria)",
                 marker={"color": "#00CC96"},
             )
         )
@@ -355,10 +326,10 @@ def _render_objectives_tab(df: pd.DataFrame) -> None:
         )
         fig_mo.update_layout(
             barmode="stack",
-            xaxis_title="Ano de Publicação",
-            yaxis_title="Volume de Artigos",
+            xaxis_title="Year of Publication",
+            yaxis_title="Volume of Articles",
             yaxis2={
-                "title": "Participação Multi-Objetivo (%)",
+                "title": "Multi-Objective Participation (%)",
                 "overlaying": "y",
                 "side": "right",
                 "showgrid": False,
@@ -369,14 +340,14 @@ def _render_objectives_tab(df: pd.DataFrame) -> None:
         )
         render_chart(fig_mo)
 
-    st.markdown("#### 📋 Detalhamento das Funções-Objetivo")
+    st.markdown("#### 📋 Detailing of Objective Functions")
     disp_obj = summary_df.copy()
     disp_obj["pct_recent"] = disp_obj["pct_recent"].astype(str) + "%"
     disp_obj.columns = [
-        "Função-Objetivo / Critério",
-        "Artigos no Corpus",
-        "Publicações ≥ 2021",
-        "Citações Médias",
+        "Objective-function / Criterion",
+        "Articles in Corpus",
+        "Publications ≥ 2021",
+        "Average citations",
     ]
     st.dataframe(disp_obj, hide_index=True, width="stretch")
 
@@ -387,12 +358,12 @@ def _render_objectives_tab(df: pd.DataFrame) -> None:
 
 
 def _render_uncertainty_tab(df: pd.DataFrame) -> None:
-    st.markdown("### 🎲 Paradigmas de Modelagem da Incerteza & Estocástica")
+    st.markdown("## 🎲 Uncertainty & Stochastic Modeling Paradigms")
     st.caption(
-        "Avalia como a literatura lida com a aleatoriedade da geração renovável (solar, eólica), "
-        "comportamento de carga e recarga de veículos elétricos. "
-        "Contrapõe abordagens determinísticas à programação estocástica com redução de cenários, "
-        "otimização robusta (conjuntos de incerteza do pior caso), lógica fuzzy e otimização distribucionalmente robusta (DRO)."
+        "Evaluates how the literature deals with the randomness of renewable generation (solar, wind), "
+        "load and recharge behavior of electric vehicles. "
+        "Counterposes deterministic approaches to stochastic programming with scenarios reduction, "
+        "Robust optimization (worst case uncertainty sets), fuzzy logic and distributionally robust optimization (DRO)."
     )
 
     unc_res = uncertainty_paradigms_analysis(df)
@@ -401,33 +372,33 @@ def _render_uncertainty_tab(df: pd.DataFrame) -> None:
     temp_paradigms = unc_res["temporal_paradigms"]
 
     if paradigms_df.empty:
-        st.info("Nenhum paradigma de incerteza detectado no corpus.")
+        st.info("No uncertainty paradigm detected in the corpus.")
         return
 
     top_paradigm = paradigms_df.iloc[0]["paradigm"]
     top_cites = paradigms_df.sort_values(by="mean_citations", ascending=False).iloc[0]["paradigm"]
 
-    metric_row(
+    summary_card_row(
         [
             (
                 "🎲 Paradigma Predominante",
                 top_paradigm,
-                f"{paradigms_df.iloc[0]['articles']} artigos",
+                f"{paradigms_df.iloc[0]['articles']} articles",
             ),
             (
                 "🚀 Paradigma Mais Recente",
                 paradigms_df.sort_values(by="pct_recent", ascending=False).iloc[0]["paradigm"],
-                "Maior % pós-2021",
+                "Higher % post-2021",
             ),
-            ("💡 Maior Impacto Citacional", top_cites, "Média de citações/artigo"),
-            ("📐 Paradigmas Mapeados", str(len(paradigms_df)), "Modelos de incerteza"),
+            ("💡 Highest citation impact", top_cites, "Average citations/article"),
+            ("📐 Paradigms mapped", str(len(paradigms_df)), "Uncertainty models"),
         ]
     )
 
     col_pbar, col_pcross = st.columns([1, 1.1])
 
     with col_pbar:
-        st.markdown("#### 📊 Distribuição dos Paradigmas de Incerteza")
+        st.markdown("#### Distribution of Uncertainty Paradigms")
         fig_p = px.bar(
             paradigms_df.sort_values(by="articles", ascending=True),
             x="articles",
@@ -436,13 +407,13 @@ def _render_uncertainty_tab(df: pd.DataFrame) -> None:
             color="pct_recent",
             color_continuous_scale="Plasma",
             labels={
-                "articles": "Artigos",
+                "articles": "Articles",
                 "paradigm": "Paradigma de Incerteza",
                 "pct_recent": "% Recente (≥2021)",
             },
         )
         fig_p.update_layout(
-            xaxis_title="Artigos no Corpus",
+            xaxis_title="Articles in Corpus",
             yaxis_title="Paradigma de Incerteza",
             height=440,
             margin={"l": 20, "r": 20, "t": 30, "b": 30},
@@ -450,7 +421,7 @@ def _render_uncertainty_tab(df: pd.DataFrame) -> None:
         render_chart(fig_p)
 
     with col_pcross:
-        st.markdown("#### 🧬 Incerteza × Recurso Físico Modelado")
+        st.markdown("### 🧬 Uncertainty × Modeled Physical Resource")
         if not cross_resources.empty:
             fig_cr = px.imshow(
                 cross_resources,
@@ -458,13 +429,13 @@ def _render_uncertainty_tab(df: pd.DataFrame) -> None:
                 aspect="auto",
                 color_continuous_scale="Viridis",
                 labels={
-                    "x": "Recurso / Vetor Físico",
+                    "x": "Resource / Physical Vector",
                     "y": "Paradigma de Incerteza",
-                    "color": "Artigos Conjuntos",
+                    "color": "Joint Articles",
                 },
             )
             fig_cr.update_layout(
-                xaxis_title="Recurso / Vetor Físico",
+                xaxis_title="Resource / Physical Vector",
                 yaxis_title="Paradigma de Incerteza",
                 height=440,
                 margin={"l": 20, "r": 20, "t": 30, "b": 30},
@@ -472,36 +443,36 @@ def _render_uncertainty_tab(df: pd.DataFrame) -> None:
             render_chart(fig_cr)
 
     if not temp_paradigms.empty:
-        st.markdown("#### 📈 Evolução Histórica dos Paradigmas de Incerteza")
+        st.markdown("### 📈 Historical Evolution of Uncertainty Paradigms")
         p_cols = [c for c in temp_paradigms.columns if c != "year"]
         fig_tp = px.line(
             temp_paradigms,
             x="year",
             y=p_cols,
             labels={
-                "value": "Artigos / Ano",
-                "year": "Ano de Publicação",
+                "value": "Articles / Year",
+                "year": "Year of Publication",
                 "variable": "Paradigma",
             },
             color_discrete_sequence=CATEGORICAL_PALETTE,
         )
         fig_tp.update_layout(
-            xaxis_title="Ano de Publicação",
-            yaxis_title="Artigos / Ano",
+            xaxis_title="Year of Publication",
+            yaxis_title="Articles / Year",
             height=420,
             legend={"orientation": "h", "y": -0.25, "x": 0.0},
             margin={"l": 20, "r": 20, "t": 30, "b": 30},
         )
         render_chart(fig_tp)
 
-    st.markdown("#### 📋 Síntese dos Paradigmas de Incerteza")
+    st.markdown("### 📋 Synthesis of Uncertainty Paradigms")
     disp_p = paradigms_df.copy()
     disp_p["pct_recent"] = disp_p["pct_recent"].astype(str) + "%"
     disp_p.columns = [
         "Paradigma de Incerteza",
-        "Artigos no Corpus",
-        "Publicações ≥ 2021",
-        "Citações Médias",
+        "Articles in Corpus",
+        "Publications ≥ 2021",
+        "Average citations",
     ]
     st.dataframe(disp_p, hide_index=True, width="stretch")
 
@@ -512,44 +483,44 @@ def _render_uncertainty_tab(df: pd.DataFrame) -> None:
 
 
 def _render_horizons_tab(df: pd.DataFrame) -> None:
-    st.markdown("### ⏱️ Horizontes de Planejamento & Dinâmica Temporal")
+    st.markdown("## ⏱")
     st.caption(
-        "Mapeia como a literatura estrutura o horizonte temporal de expansão: "
-        "desde o **Planejamento Estático** (ano-alvo único tipo *snapshot*) até a **Expansão Dinâmica Multi-Estágio** (*Multi-Year*), "
-        "e a moderna **Co-Otimização Planejamento + Operação** com representação horária e dias representativos de demanda/geração."
+        "Maps how literature structures the temporal horizon of expansion: "
+        "from the **Static Planning** (single target year *snapshot*) to the **Multi-Year Dynamic Expansion** (*Multi-Year*), "
+        "and the modern**Co-Optimization Planning + Operation** with hourly representation and representative days of demand / generation."
     )
 
     h_res = planning_time_horizons_analysis(df)
     horizons_df = h_res["horizons_df"]
 
     if horizons_df.empty:
-        st.info("Nenhum horizonte temporal detectado no corpus.")
+        st.info("No temporal horizon detected in the corpus.")
         return
 
     top_h = horizons_df.iloc[0]["horizon"]
     total_art = horizons_df["articles"].sum()
 
-    metric_row(
+    summary_card_row(
         [
-            ("⏱️ Estrutura Mais Adotada", top_h, f"{horizons_df.iloc[0]['articles']} artigos"),
+            ("⏱️ Most adopted structure", top_h, f"{horizons_df.iloc[0]['articles']} articles"),
             (
                 "🚀 Maior Momentum Recente",
                 horizons_df.sort_values(by="pct_recent", ascending=False).iloc[0]["horizon"],
-                "Maior % pós-2021",
+                "Higher % post-2021",
             ),
             (
-                "💡 Maior Impacto Citacional",
+                "💡 Highest citation impact",
                 horizons_df.sort_values(by="mean_citations", ascending=False).iloc[0]["horizon"],
-                "Média de citações/artigo",
+                "Average citations/article",
             ),
-            ("📄 Artigos Classificados", str(total_art), "Horizonte identificado"),
+            ("📄 Classified articles", str(total_art), "Horizonte identificado"),
         ]
     )
 
     col_hbar, col_hcite = st.columns([1, 1])
 
     with col_hbar:
-        st.markdown("#### 📊 Volume por Estrutura de Horizonte")
+        st.markdown("#### 📊 Volume by horizon structure")
         fig_h = px.bar(
             horizons_df.sort_values(by="articles", ascending=True),
             x="articles",
@@ -558,13 +529,13 @@ def _render_horizons_tab(df: pd.DataFrame) -> None:
             color="pct_recent",
             color_continuous_scale="Blues",
             labels={
-                "articles": "Artigos",
+                "articles": "Articles",
                 "horizon": "Estrutura Temporal",
                 "pct_recent": "% Recente (≥2021)",
             },
         )
         fig_h.update_layout(
-            xaxis_title="Artigos no Corpus",
+            xaxis_title="Articles in Corpus",
             yaxis_title="Estrutura Temporal",
             height=380,
             margin={"l": 20, "r": 20, "t": 30, "b": 30},
@@ -572,7 +543,7 @@ def _render_horizons_tab(df: pd.DataFrame) -> None:
         render_chart(fig_h)
 
     with col_hcite:
-        st.markdown("#### 💡 Citações Médias por Horizonte Adotado")
+        st.markdown("### 💡 Average citations by adopted horizon")
         fig_hc = px.bar(
             horizons_df.sort_values(by="mean_citations", ascending=True),
             x="mean_citations",
@@ -581,12 +552,12 @@ def _render_horizons_tab(df: pd.DataFrame) -> None:
             color="mean_citations",
             color_continuous_scale="Viridis",
             labels={
-                "mean_citations": "Citações Médias",
+                "mean_citations": "Average citations",
                 "horizon": "Estrutura Temporal",
             },
         )
         fig_hc.update_layout(
-            xaxis_title="Citações Médias por Artigo",
+            xaxis_title="Average citations per article",
             yaxis_title="Estrutura Temporal",
             height=380,
             margin={"l": 20, "r": 20, "t": 30, "b": 30},
@@ -595,19 +566,19 @@ def _render_horizons_tab(df: pd.DataFrame) -> None:
 
     st.markdown(
         "> [!TIP]\n"
-        "> **Evidência Metodológica**: A transição para redes descarbonizadas forçou a literatura a migrar de planejamentos estáticos "
-        "> para a **Co-Otimização Planejamento + Operação**. Ativos de curta duração (como baterias BESS e resposta da demanda) "
-        "> não podem ser dimensionados sem modelar a flexibilidade operativa sub-horária e dias típicos ao longo do ano."
+        ">**Methodological Evidence**: The transition to decarbonized networks forced literature to migrate from static planning "
+        "Assets of short duration (such as BESS batteries and demand response) "
+        "> can not be dimensioned without modeling the sub-clockwise operational flexibility and typical days throughout the year."
     )
 
-    st.markdown("#### 📋 Detalhamento dos Horizontes de Planejamento")
+    st.markdown("#### 📋 Planning-horizon details")
     disp_h = horizons_df.copy()
     disp_h["pct_recent"] = disp_h["pct_recent"].astype(str) + "%"
     disp_h.columns = [
         "Estrutura de Horizonte Temporal",
-        "Artigos no Corpus",
-        "Publicações ≥ 2021",
-        "Citações Médias",
+        "Articles in Corpus",
+        "Publications ≥ 2021",
+        "Average citations",
     ]
     st.dataframe(disp_h, hide_index=True, width="stretch")
 
@@ -618,10 +589,10 @@ def _render_horizons_tab(df: pd.DataFrame) -> None:
 
 
 def _render_feeders_tab(df: pd.DataFrame) -> None:
-    st.markdown("### ⚡ Sistemas de Teste & Validação Empírica (IEEE Benchmarks)")
+    st.markdown("## ")
     st.caption(
-        "Mapeia quais redes elétricas de teste são utilizadas para validação dos modelos teóricos. "
-        "Diferencia alimentadores radiais padronizados do IEEE (33, 69 e 123 nós) de redes reais de concessionárias."
+        "Maps which electrical test networks are used to validate the theoretical models. "
+        "Differentiation of standardized IEEE radial feeders (33, 69 and 123 nodes) of real concessionaire networks."
     )
 
     res = benchmark_feeders_analysis(df)
@@ -629,28 +600,28 @@ def _render_feeders_tab(df: pd.DataFrame) -> None:
     cross_matrix = res["cross_matrix"]
 
     if feeders_df.empty:
-        st.info("Nenhum sistema de teste identificado no corpus.")
+        st.info("No test system identified in the corpus.")
         return
 
     top_feeder = feeders_df.iloc[0]["feeder"]
     real_nets = feeders_df[feeders_df["feeder"].str.contains("Reais")]["articles"].sum()
 
-    metric_row(
+    summary_card_row(
         [
             (
                 "🔌 Benchmark Mais Utilizado",
                 top_feeder,
-                f"{feeders_df.iloc[0]['articles']} artigos",
+                f"{feeders_df.iloc[0]['articles']} articles",
             ),
-            ("🏢 Validação em Redes Reais", f"{real_nets} artigos", "Estudos com concessionárias"),
-            ("⚡ Sistemas Mapeados", str(len(feeders_df)), "Padrões IEEE e redes práticas"),
+            ("🏢 Validation in real networks", f"{real_nets} articles", "Studies with utilities"),
+            ("⚡ Systems mapped", str(len(feeders_df)), "IEEE standards and practical networks"),
         ]
     )
 
     col_feed, col_cross = st.columns([1, 1.1])
 
     with col_feed:
-        st.markdown("#### 🏆 Distribuição de Casos de Estudo")
+        st.markdown("### 🏆 Study Case Distribution")
         fig_f = px.bar(
             feeders_df.sort_values(by="articles", ascending=True),
             x="articles",
@@ -658,10 +629,10 @@ def _render_feeders_tab(df: pd.DataFrame) -> None:
             orientation="h",
             color="articles",
             color_continuous_scale="Tealgrn",
-            labels={"articles": "Artigos", "feeder": "Sistema de Teste"},
+            labels={"articles": "Articles", "feeder": "Sistema de Teste"},
         )
         fig_f.update_layout(
-            xaxis_title="Artigos no Corpus",
+            xaxis_title="Articles in Corpus",
             yaxis_title="Sistema de Teste",
             height=440,
             margin={"l": 20, "r": 20, "t": 30, "b": 30},
@@ -669,7 +640,7 @@ def _render_feeders_tab(df: pd.DataFrame) -> None:
         render_chart(fig_f)
 
     with col_cross:
-        st.markdown("#### 🧬 Matriz Cruzada: Benchmark × Recurso Modelado")
+        st.markdown("#### 🧬 Cross-matrix: benchmark × modeled resource")
         if not cross_matrix.empty:
             fig_c = px.imshow(
                 cross_matrix,
@@ -678,26 +649,26 @@ def _render_feeders_tab(df: pd.DataFrame) -> None:
                 color_continuous_scale="Purp",
                 labels={
                     "x": "Recurso / Tecnologia",
-                    "y": "Rede de Teste / Benchmark",
-                    "color": "Artigos Conjuntos",
+                    "y": "Test network / benchmark",
+                    "color": "Joint Articles",
                 },
             )
             fig_c.update_layout(
                 xaxis_title="Recurso / Tecnologia",
-                yaxis_title="Rede de Teste / Benchmark",
+                yaxis_title="Test network / benchmark",
                 height=440,
                 margin={"l": 20, "r": 20, "t": 30, "b": 30},
             )
             render_chart(fig_c)
 
-    st.markdown("#### 📋 Catálogo de Sistemas de Teste")
+    st.markdown("### 📋 Test Systems Catalog")
     disp_f = feeders_df.copy()
     disp_f["pct_recent"] = disp_f["pct_recent"].astype(str) + "%"
     disp_f.columns = [
         "Sistema de Teste / Rede",
-        "Artigos no Corpus",
-        "Publicações ≥ 2021",
-        "Citações Médias",
+        "Articles in Corpus",
+        "Publications ≥ 2021",
+        "Average citations",
     ]
     st.dataframe(disp_f, hide_index=True, width="stretch")
 
@@ -710,8 +681,8 @@ def _render_feeders_tab(df: pd.DataFrame) -> None:
 def _render_solvers_tab(df: pd.DataFrame) -> None:
     st.markdown("### 💻 Ferramental Computacional, Modeladores & Solvers")
     st.caption(
-        "Analisa os softwares matemáticos, plataformas de modelagem algébrica e simuladores especializados "
-        "que viabilizam a implementação computacional das formulações teóricas na literatura de distribuição."
+        "Analyzes mathematical software, algebraic modeling platforms and specialized simulators "
+        "that enable the computational implementation of theoretical formulations in the distribution literature."
     )
 
     s_res = computational_solvers_analysis(df)
@@ -719,19 +690,19 @@ def _render_solvers_tab(df: pd.DataFrame) -> None:
     ecosystem_df = s_res["ecosystem_df"]
 
     if solvers_df.empty:
-        st.info("Nenhuma menção explícita a solvers computacionais identificada no corpus.")
+        st.info("No explicit mention of computational solvers identified in the corpus.")
         return
 
     top_tool = solvers_df.iloc[0]["tool"]
     top_cat = ecosystem_df.iloc[0]["category"]
 
-    metric_row(
+    summary_card_row(
         [
-            ("💻 Ferramenta Mais Citada", top_tool, f"{solvers_df.iloc[0]['articles']} artigos"),
+            ("💻 Most cited tool", top_tool, f"{solvers_df.iloc[0]['articles']} articles"),
             (
-                "📐 Ecossistema Líder",
+                "📐 Leader Ecosystem",
                 top_cat,
-                f"{ecosystem_df.iloc[0]['articles']} referências",
+                f"{ecosystem_df.iloc[0]['articles']} references",
             ),
             ("🛠️ Ferramentas Mapeadas", str(len(solvers_df)), "Solvers e simuladores"),
         ]
@@ -740,7 +711,7 @@ def _render_solvers_tab(df: pd.DataFrame) -> None:
     col_s1, col_s2 = st.columns([1.1, 0.9])
 
     with col_s1:
-        st.markdown("#### 📊 Distribuição por Plataforma / Solver")
+        st.markdown("### 📊 Platform Distribution / Solver")
         fig_s = px.bar(
             solvers_df.sort_values(by="articles", ascending=True),
             x="articles",
@@ -749,13 +720,13 @@ def _render_solvers_tab(df: pd.DataFrame) -> None:
             color="category",
             color_discrete_sequence=CATEGORICAL_PALETTE,
             labels={
-                "articles": "Artigos",
+                "articles": "Articles",
                 "tool": "Software / Solver",
                 "category": "Ecossistema",
             },
         )
         fig_s.update_layout(
-            xaxis_title="Artigos no Corpus",
+            xaxis_title="Articles in Corpus",
             yaxis_title="Software / Solver",
             height=440,
             margin={"l": 20, "r": 20, "t": 30, "b": 30},
@@ -763,7 +734,7 @@ def _render_solvers_tab(df: pd.DataFrame) -> None:
         render_chart(fig_s)
 
     with col_s2:
-        st.markdown("#### 🧩 Participação por Categoria de Ferramental")
+        st.markdown("### 🧩 Tooling Category Participation")
         if not ecosystem_df.empty:
             fig_pie = px.pie(
                 ecosystem_df,
@@ -779,330 +750,14 @@ def _render_solvers_tab(df: pd.DataFrame) -> None:
             )
             render_chart(fig_pie)
 
-    st.markdown("#### 📋 Detalhamento do Ecossistema Computacional")
+    st.markdown("#### 📋 Computational ecosystem breakdown")
     disp_s = solvers_df.copy()
     disp_s["pct_recent"] = disp_s["pct_recent"].astype(str) + "%"
     disp_s.columns = [
         "Software / Ferramenta",
         "Categoria de Software",
-        "Artigos no Corpus",
-        "Publicações ≥ 2021",
-        "Citações Médias",
+        "Articles in Corpus",
+        "Publications ≥ 2021",
+        "Average citations",
     ]
     st.dataframe(disp_s, hide_index=True, width="stretch")
-
-
-# ---------------------------------------------------------------------------
-# Tab 7: Liderança Científica & Carreira
-# ---------------------------------------------------------------------------
-
-
-def _render_authors_tab(df: pd.DataFrame) -> None:
-    st.markdown("### 🎖️ Índices Avançados de Liderança Científica & Velocidade de Carreira")
-    st.caption(
-        "Avaliação formal do impacto individual com indicadores da cienciometria moderna: "
-        "**h-index**, **g-index de Egghe (2006)**, **e-index de Zhang (2009)** e o "
-        "**$m$-quotient de Hirsch** ($m = h / \\text{anos de carreira}$), que mede a velocidade de impacto por ano ativo."
-    )
-
-    auth_df = author_impact_advanced_indices(df, min_papers=2)
-    m_df = author_m_quotient_analysis(df, min_papers=2)
-
-    if auth_df.empty:
-        st.info("Autores com produção mínima de 2 artigos não encontrados.")
-        return
-
-    top_g = auth_df.iloc[0]
-    top_m = m_df.iloc[0] if not m_df.empty else None
-
-    metric_row(
-        [
-            (
-                "🥇 Maior g-index",
-                f"{top_g['author']} (g={top_g['g_index']})",
-                f"h-index: {top_g['h_index']}",
-            ),
-            (
-                "🔥 Maior Excesso Citacional (e)",
-                f"{auth_df.sort_values(by='e_index', ascending=False).iloc[0]['author']}",
-                f"e={auth_df.sort_values(by='e_index', ascending=False).iloc[0]['e_index']:.1f}",
-            ),
-            (
-                "⚡ Maior Velocidade (m-quotient)",
-                f"{top_m['author']} (m={top_m['m_quotient']})" if top_m is not None else "N/A",
-                "h-index por ano de carreira",
-            ),
-            ("👥 Pesquisadores Analisados", str(len(auth_df)), "≥ 2 artigos no corpus"),
-        ]
-    )
-
-    col_scatter, col_ebar = st.columns([1.1, 0.9])
-
-    with col_scatter:
-        st.markdown("#### 🎯 Dispersão h-index vs. g-index (Egghe)")
-        max_val = max(auth_df["g_index"].max(), auth_df["h_index"].max()) + 2
-
-        t = theme_tokens()
-        ref_line = t.get("reference_line_subtle", "rgba(180, 180, 180, 0.6)")
-        border_color = t.get("point_border", "#FFFFFF")
-
-        fig_hg = go.Figure()
-        # 45-degree line (g = h)
-        fig_hg.add_trace(
-            go.Scatter(
-                x=[0, max_val],
-                y=[0, max_val],
-                mode="lines",
-                name="g = h (Produção Uniforme)",
-                line={"dash": "dash", "color": ref_line, "width": 1.5},
-            )
-        )
-        # Scatter points
-        hover_hg = [
-            f"<b>{r['author']}</b><br>• g-index: {r['g_index']}<br>• h-index: {r['h_index']}<br>• Artigos: {r['papers']}<br>• Citações: {r['total_citations']:,}<br>• e-index: {r['e_index']}"
-            for _, r in auth_df.iterrows()
-        ]
-        fig_hg.add_trace(
-            go.Scatter(
-                x=auth_df["h_index"],
-                y=auth_df["g_index"],
-                mode="markers",
-                marker={
-                    "size": auth_df["papers"].clip(lower=6, upper=24),
-                    "color": auth_df["g_h_diff"],
-                    "colorscale": "Plasma",
-                    "colorbar": {"title": "g - h"},
-                    "opacity": 0.85,
-                    "line": {"color": border_color, "width": 1},
-                },
-                hoverinfo="text",
-                hovertext=hover_hg,
-                name="Pesquisadores",
-            )
-        )
-        fig_hg.update_layout(
-            xaxis_title="h-index (Consistência)",
-            yaxis_title="g-index de Egghe (Impacto com Blockbusters)",
-            height=480,
-            margin={"l": 20, "r": 20, "t": 30, "b": 30},
-        )
-        render_chart(fig_hg)
-
-    with col_ebar:
-        st.markdown("#### 🚀 Top 12 por Excesso Citacional (e-index de Zhang)")
-        top_e = auth_df.sort_values(by="e_index", ascending=True).tail(12)
-        fig_e = px.bar(
-            top_e,
-            x="e_index",
-            y="author",
-            orientation="h",
-            color="total_citations",
-            color_continuous_scale="Magma",
-            labels={
-                "e_index": "e-index de Zhang",
-                "author": "Pesquisador",
-                "total_citations": "Total Citações",
-            },
-        )
-        fig_e.update_layout(
-            xaxis_title="e-index de Zhang",
-            yaxis_title="Pesquisador",
-            height=480,
-            margin={"l": 20, "r": 20, "t": 30, "b": 30},
-        )
-        render_chart(fig_e)
-
-    if not m_df.empty:
-        st.markdown(
-            "#### ⚡ Top 12 em Velocidade Citacional por Ano de Carreira (m-quotient de Hirsch)"
-        )
-        top_m_plot = m_df.head(12).sort_values(by="m_quotient", ascending=True)
-        fig_m = px.bar(
-            top_m_plot,
-            x="m_quotient",
-            y="author",
-            orientation="h",
-            color="papers",
-            color_continuous_scale="Tealgrn",
-            labels={
-                "m_quotient": "m-quotient (h-index / Anos de Carreira)",
-                "author": "Pesquisador",
-                "papers": "Artigos no Corpus",
-            },
-        )
-        fig_m.update_layout(
-            xaxis_title="m-quotient (h / Anos de Carreira)",
-            yaxis_title="Pesquisador",
-            height=420,
-            margin={"l": 20, "r": 20, "t": 30, "b": 30},
-        )
-        render_chart(fig_m)
-
-    st.markdown("#### 📋 Ranking Completo de Liderança Científica")
-    disp_auth = auth_df.copy()
-    if not m_df.empty:
-        disp_auth = disp_auth.merge(
-            m_df[["author", "first_year", "career_span_years", "m_quotient"]],
-            on="author",
-            how="left",
-        )
-        disp_auth.columns = [
-            "Pesquisador",
-            "Artigos",
-            "Total Citações",
-            "Média Citações",
-            "h-index",
-            "g-index (Egghe)",
-            "e-index (Zhang)",
-            "i10-index",
-            "Diferença (g - h)",
-            "1º Ano",
-            "Anos de Carreira",
-            "m-quotient",
-        ]
-    else:
-        disp_auth.columns = [
-            "Pesquisador",
-            "Artigos",
-            "Total Citações",
-            "Média Citações",
-            "h-index",
-            "g-index (Egghe)",
-            "e-index (Zhang)",
-            "i10-index",
-            "Diferença (g - h)",
-        ]
-    st.dataframe(disp_auth.head(30), hide_index=True, width="stretch")
-
-
-# ---------------------------------------------------------------------------
-# Tab 8: Longevidade & Estilometria Textual
-# ---------------------------------------------------------------------------
-
-
-def _render_longevity_and_text_tab(df: pd.DataFrame) -> None:
-    st.markdown("### ⏳ Longevidade do Conhecimento, Artigos Evergreen & Estilometria")
-    st.caption(
-        "Mapeia a taxa de sobrevivência do impacto científico no tempo, quantifica a **Meia-Vida Citacional**, "
-        "destaca os **Artigos Evergreen** e investiga as propriedades linguísticas e estilométricas dos resumos "
-        "(Flesch-Kincaid e Riqueza Vocabular TTR)."
-    )
-
-    res_long = citation_longevity_and_decay(df)
-    decay_curve = res_long["decay_curve"]
-    evergreen_df = res_long["evergreen_df"]
-
-    res_text = text_readability_and_stylometrics(df)
-    temp_text = res_text["temporal_df"]
-    sample_text = res_text["sample_df"]
-
-    metric_row(
-        [
-            (
-                "⌛ Meia-Vida Citacional",
-                f"{res_long['half_life_years']:.1f} anos",
-                "Tempo p/ 50% das citações",
-            ),
-            (
-                "🌲 Artigos Evergreen",
-                str(len(evergreen_df)),
-                "Idade ≥ 10 anos & Citações ≥ 40",
-            ),
-            (
-                "📚 Nível Flesch-Kincaid",
-                f"{res_text['mean_fkgl']:.1f} anos",
-                "Complexidade acadêmica",
-            ),
-            (
-                "🧬 Riqueza Vocabular (TTR)",
-                f"{res_text['mean_ttr']:.3f}",
-                "Diversidade lexical média",
-            ),
-        ]
-    )
-
-    col_curv, col_fkgl = st.columns([1, 1])
-
-    with col_curv:
-        st.markdown("#### 📉 Curva Acumulada de Meia-Vida Citacional")
-        if not decay_curve.empty:
-            fig_decay = go.Figure()
-            fig_decay.add_trace(
-                go.Scatter(
-                    x=decay_curve["age"],
-                    y=decay_curve["cum_pct"],
-                    mode="lines+markers",
-                    name="Citações Acumuladas (%)",
-                    line={"color": "#636EFA", "width": 2.5},
-                )
-            )
-            fig_decay.add_hline(
-                y=50,
-                line_dash="dash",
-                line_color="#EF553B",
-                annotation_text=f"Meia-Vida = {res_long['half_life_years']:.0f} anos",
-                annotation_position="bottom right",
-            )
-            fig_decay.update_layout(
-                xaxis_title="Idade do Artigo (Anos decorridos desde publicação)",
-                yaxis_title="Percentual Acumulado de Citações (%)",
-                height=420,
-                margin={"l": 20, "r": 20, "t": 30, "b": 30},
-            )
-            render_chart(fig_decay)
-
-    with col_fkgl:
-        st.markdown("#### 📈 Complexidade Textual Flesch-Kincaid por Ano")
-        if not temp_text.empty:
-            fig_f = px.line(
-                temp_text,
-                x="year",
-                y="mean_fkgl",
-                markers=True,
-                labels={
-                    "year": "Ano de Publicação",
-                    "mean_fkgl": "Nível Flesch-Kincaid (Anos de Estudo)",
-                },
-                color_discrete_sequence=["#EF553B"],
-            )
-            fig_f.update_layout(
-                xaxis_title="Ano de Publicação",
-                yaxis_title="Nível Flesch-Kincaid (Anos de Estudo)",
-                height=420,
-                margin={"l": 20, "r": 20, "t": 30, "b": 30},
-            )
-            render_chart(fig_f)
-
-    if not sample_text.empty:
-        st.markdown("#### 🎯 Riqueza Vocabular (TTR) vs. Citações Recebidas")
-        fig_s = px.scatter(
-            sample_text.sample(min(400, len(sample_text)), random_state=42),
-            x="ttr",
-            y="citation_count",
-            color="fre",
-            color_continuous_scale="Blues",
-            labels={
-                "ttr": "Type-Token Ratio (Diversidade Lexical)",
-                "citation_count": "Citações",
-                "fre": "Flesch Ease",
-            },
-            opacity=0.75,
-        )
-        fig_s.update_layout(
-            xaxis_title="Type-Token Ratio (Diversidade Lexical)",
-            yaxis_title="Citações Recebidas",
-            height=380,
-            margin={"l": 20, "r": 20, "t": 30, "b": 30},
-        )
-        render_chart(fig_s)
-
-    st.markdown("#### 🌲 Top Artigos Evergreen no Planejamento de Distribuição")
-    if not evergreen_df.empty:
-        display_cols = ["title", "year", "venue", "citation_count", "age", "annual_velocity"]
-        article_table(
-            evergreen_df.head(10),
-            [c for c in display_cols if c in evergreen_df.columns],
-            download_key="evergreen_articles_download",
-        )
-    else:
-        st.info("Sem artigos evergreen suficientes para exibição.")

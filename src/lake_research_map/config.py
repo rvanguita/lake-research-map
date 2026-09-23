@@ -49,12 +49,30 @@ DATA_DIR = REPO_ROOT / "data"
 IEEE_DIR = DATA_DIR / "ieee"
 ELSEVIER_DIR = DATA_DIR / "elsevier"
 ARTICLES_DIR = DATA_DIR / "articles"
+REFERENCES_DIR = DATA_DIR / "references"
+
+# Both layouts remain supported. The original exports lived directly under
+# data/{ieee,elsevier}; newer downloads are grouped under data/references with
+# their publisher-facing directory names. Keeping both paths lets an append
+# run retain historical evidence while ingesting the new batches in place.
+IEEE_BIB_DIRS = (IEEE_DIR, REFERENCES_DIR / "IEEE Xplore")
+ELSEVIER_BIB_DIRS = (ELSEVIER_DIR, REFERENCES_DIR / "Science Direct")
+SEARCH_CONFIG_PATHS = (
+    ("ieee", IEEE_DIR / "config.csv"),
+    ("elsevier", ELSEVIER_DIR / "config.csv"),
+    ("elsevier", DATA_DIR / "config.csv"),
+)
 
 # Official CAPES/Qualis journal-classification export (2017-2020 quadriênio, all
 # evaluation areas) -- see dashboard/qualis.py. Not checked into git (see
 # .gitignore): large, externally-sourced reference data, not project-authored.
-CAPES_QUALIS_XLSX = (
-    DATA_DIR / "classificações_publicadas_todas_as_areas_avaliacao1783453567318.xlsx"
+_CAPES_QUALIS_CANDIDATES = (
+    DATA_DIR / "capes-qualis.xlsx",
+    DATA_DIR / "classificações_publicadas_todas_as_areas_avaliacao1783453567318.xlsx",
+)
+CAPES_QUALIS_XLSX = next(
+    (path for path in _CAPES_QUALIS_CANDIDATES if path.exists()),
+    _CAPES_QUALIS_CANDIDATES[0],
 )
 
 
@@ -67,11 +85,12 @@ class MySQLSettings:
 
     @classmethod
     def from_env(cls) -> MySQLSettings:
+        role = os.environ.get("LAKE_RESEARCH_MAP_DB_ROLE", "pipeline").strip().upper()
         return cls(
             host=os.environ.get("MYSQL_HOST", "127.0.0.1"),
             port=int(os.environ.get("MYSQL_PORT", "3306")),
-            user=os.environ.get("MYSQL_USER", "root"),
-            password=os.environ.get("MYSQL_PASSWORD", ""),
+            user=os.environ.get(f"MYSQL_{role}_USER", os.environ.get("MYSQL_USER", "root")),
+            password=os.environ.get(f"MYSQL_{role}_PASSWORD", os.environ.get("MYSQL_PASSWORD", "")),
         )
 
     def database_name(self, layer: str) -> str:

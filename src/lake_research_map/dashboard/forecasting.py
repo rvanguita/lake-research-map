@@ -16,32 +16,35 @@ error is the appropriate amount of machine learning for the amount of data.
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LinearRegression
-from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import PolynomialFeatures
 
 logger = logging.getLogger(__name__)
 
 MIN_TRAIN_YEAR = 2010  # matches topics.TREND_MIN_YEAR -- earlier years are too sparse to trend
-TRAIN_END_YEAR = 2025  # last *complete* year in the corpus
-HOLDOUT_YEAR = 2026  # current year at collection time -- a partial year, not a complete one
-FORECAST_YEARS = (2027, 2028)
-CV_YEARS = (2023, 2024, 2025)  # rolling-origin validation over the last complete years
+TRAIN_END_YEAR = int(os.environ.get("LAKE_RESEARCH_MAP_COMPLETE_YEAR", datetime.now(UTC).year - 1))
+HOLDOUT_YEAR = TRAIN_END_YEAR + 1
+FORECAST_YEARS = (HOLDOUT_YEAR + 1, HOLDOUT_YEAR + 2)
+CV_YEARS = tuple(range(TRAIN_END_YEAR - 2, TRAIN_END_YEAR + 1))
+# Folds kept out of the conformal radius so interval coverage is measurable
+# rather than tautological. Small on purpose: annual series are short.
+COVERAGE_HOLDOUT_FOLDS = 3
 
-_CANDIDATES = ("linear", "polynomial", "log_linear")
+_CANDIDATES = ("baseline", "linear", "log_linear")
 
 
 def _fit_model(kind: str, years: np.ndarray, values: np.ndarray):
     x = years.reshape(-1, 1)
+    if kind == "baseline":
+        level = float(values[-1])
+        return lambda yrs: np.full(len(np.asarray(yrs)), level)
     if kind == "linear":
         model = LinearRegression().fit(x, values)
-        return lambda yrs: model.predict(np.asarray(yrs).reshape(-1, 1))
-    if kind == "polynomial":
-        model = make_pipeline(PolynomialFeatures(degree=2), LinearRegression()).fit(x, values)
         return lambda yrs: model.predict(np.asarray(yrs).reshape(-1, 1))
     if kind == "log_linear":
         model = LinearRegression().fit(x, np.log1p(values))
@@ -69,6 +72,8 @@ class ForecastResult:
     forecast_lower: np.ndarray
     forecast_upper: np.ndarray
     r2_train: float
+    baseline_skill: float | None = None
+    empirical_interval_coverage: float | None = None
     insufficient_data: bool = False
     notes: list[str] = field(default_factory=list)
 
@@ -123,6 +128,35 @@ def _rolling_origin_cv(
     return {kind: float(np.mean(v)) if v else float("nan") for kind, v in errors.items()}
 
 
+def _holdout_interval_coverage(
+    kind: str,
+    years: np.ndarray,
+    values: np.ndarray,
+    *,
+    n_holdout: int,
+    quantile: float = 0.9,
+) -> float | None:
+    """Fraction of held-out one-step errors covered by a radius fitted without them.
+
+    Returns `None` when there is not enough history to both calibrate a radius on
+    at least three folds and keep `n_holdout` folds back for scoring: an unknown
+    coverage is more honest than one computed in sample.
+    """
+    errors = []
+    for index in range(3, len(years)):
+        try:
+            predictor = _fit_model(kind, years[:index], values[:index])
+        except Exception:
+            logger.debug("_holdout_interval_coverage: %r failed at %r", kind, years[index])
+            continue
+        errors.append(abs(float(values[index]) - float(predictor([years[index]])[0])))
+    if len(errors) < 3 + n_holdout:
+        return None
+    calibration, holdout = errors[:-n_holdout], errors[-n_holdout:]
+    radius = float(np.quantile(calibration, quantile, method="higher"))
+    return float(np.mean(np.asarray(holdout) <= radius))
+
+
 def fit_and_forecast(
     series: pd.Series,
     *,
@@ -132,12 +166,11 @@ def fit_and_forecast(
     forecast_years: tuple[int, ...] = FORECAST_YEARS,
     cv_years: tuple[int, ...] = CV_YEARS,
 ) -> ForecastResult:
-    """Fit 3 candidate regressions, validate, select, and forecast ahead.
+    """Select a parsimonious model by rolling-origin CV and forecast ahead.
 
-    Selection uses the mean of the 2026 holdout MAE and the rolling-origin CV
-    MAE (2023-2025) -- relying on the holdout alone would overweight a single,
-    partial year. The chosen model is then refit on every real year available
-    (through `holdout_year`, inclusive) before projecting `forecast_years`.
+    The incomplete holdout year is reported for monitoring but never enters
+    model selection or final training. Prediction bands use the empirical
+    90th percentile of rolling one-step errors (conformal calibration).
     """
     notes: list[str] = []
     history = series[series.index >= min_train_year]
@@ -160,8 +193,10 @@ def fit_and_forecast(
             forecast_lower=empty,
             forecast_upper=empty,
             r2_train=float("nan"),
+            baseline_skill=None,
+            empirical_interval_coverage=None,
             insufficient_data=True,
-            notes=["Anos de treino insuficientes (mínimo 4) para ajustar um modelo."],
+            notes=["Years of insufficient training (minimum 4) to adjust a model."],
         )
 
     train_years = train.index.to_numpy()
@@ -189,25 +224,18 @@ def fit_and_forecast(
         )
     comparison = pd.DataFrame(rows)
 
-    # Combined score: mean of whichever validation signals are available.
-    def _combined(row) -> float:
-        vals = [v for v in (row["holdout_mae"], row["cv_mae"]) if v == v]  # drop NaN
-        return float(np.mean(vals)) if vals else float("inf")
-
-    comparison["combined_mae"] = comparison.apply(_combined, axis=1)
+    comparison["combined_mae"] = comparison["cv_mae"].fillna(float("inf"))
     chosen_model = comparison.loc[comparison["combined_mae"].idxmin(), "model"]
 
-    # Refit the chosen model on every real year through the holdout year.
-    final_train = history[history.index <= holdout_year]
+    # Refit on complete years only. The current partial year must not pull the
+    # forecast curve down merely because ingestion is still under way.
+    final_train = train
     final_years = final_train.index.to_numpy()
     final_values = final_train.to_numpy()
     final_predict = _fit_model(chosen_model, final_years, final_values)
 
     fitted_curve = pd.Series(final_predict(final_years), index=final_years)
     residuals = final_values - fitted_curve.to_numpy()
-    residual_std = (
-        float(np.std(residuals, ddof=1)) if len(residuals) > 2 else float(np.std(residuals))
-    )
     ss_res = float(np.sum(residuals**2))
     ss_tot = float(np.sum((final_values - final_values.mean()) ** 2))
     r2_train = 1 - ss_res / ss_tot if ss_tot > 0 else float("nan")
@@ -215,11 +243,36 @@ def fit_and_forecast(
     forecast_values = final_predict(np.array(forecast_years))
     forecast_values = np.clip(forecast_values, 0, None)  # counts can't be negative
 
-    # Dynamic horizon-expanding prediction intervals: forecast variance scales
-    # with lead time h (Var propto h, so std propto sqrt(h)), replacing static
-    # homoscedastic bands with statistically sound widening intervals.
+    # Conformal calibration from one-step rolling-origin errors. This avoids a
+    # normality assumption that is hard to justify for a short count series.
+    calibration_errors = []
+    for index in range(3, len(final_years)):
+        predictor = _fit_model(chosen_model, final_years[:index], final_values[:index])
+        calibration_errors.append(
+            abs(float(final_values[index]) - float(predictor([final_years[index]])[0]))
+        )
+    conformal_radius = (
+        float(np.quantile(calibration_errors, 0.9, method="higher"))
+        if calibration_errors
+        else float(np.max(np.abs(residuals), initial=0.0))
+    )
+    # Coverage has to be measured on errors the radius was NOT fitted on. Taking
+    # the 0.9 quantile of a set and then asking what fraction of that same set it
+    # covers returns ~0.9 by construction and can never fail, which is exactly the
+    # reassurance a conformal band must not manufacture. Hold out the most recent
+    # folds instead, and report nothing when the series is too short to spare any.
+    empirical_coverage = _holdout_interval_coverage(
+        chosen_model, final_years, final_values, n_holdout=COVERAGE_HOLDOUT_FOLDS
+    )
+    baseline_mae = cv_mae_by_model.get("baseline", float("nan"))
+    chosen_mae = cv_mae_by_model.get(chosen_model, float("nan"))
+    baseline_skill = (
+        float(1.0 - chosen_mae / baseline_mae)
+        if np.isfinite(chosen_mae) and np.isfinite(baseline_mae) and baseline_mae > 0
+        else None
+    )
     step_factors = np.sqrt(np.arange(1, len(forecast_years) + 1, dtype=float))
-    margin = 1.96 * residual_std * step_factors
+    margin = conformal_radius * step_factors
     forecast_lower = np.clip(forecast_values - margin, 0, None)
     forecast_upper = forecast_values + margin
 
@@ -230,11 +283,11 @@ def fit_and_forecast(
         train_only_predict = _fit_model(chosen_model, train_years, train_values)
         holdout_predicted = float(train_only_predict([holdout_year])[0])
         notes.append(
-            f"O erro contra {holdout_year} compara com um ano ainda em andamento na coleta do corpus "
-            "(dado parcial), não um ano completo."
+            f"{holdout_year} is partial: it is shown only for monitoring and is not used "
+            "of selection or final adjustment."
         )
     if (train_values.max() if len(train_values) else 0) < 20:
-        notes.append("Série de baixo volume — a banda de confiança é proporcionalmente mais larga.")
+        notes.append("Low volume series — the confidence band is proportionally wider.")
 
     return ForecastResult(
         history=history,
@@ -251,54 +304,13 @@ def fit_and_forecast(
         forecast_lower=forecast_lower,
         forecast_upper=forecast_upper,
         r2_train=r2_train,
+        baseline_skill=baseline_skill,
+        empirical_interval_coverage=empirical_coverage,
         notes=notes,
     )
 
 
 # --- Quantile Regression & Bass Diffusion -----------------------------------
-
-
-def fit_quantile_forecast(
-    years: np.ndarray,
-    values: np.ndarray,
-    forecast_years: tuple[int, ...] = FORECAST_YEARS,
-    quantiles: tuple[float, float, float] = (0.1, 0.5, 0.9),
-) -> dict:
-    """Fit asymmetric quantile regression curves for empirical uncertainty quantification."""
-    from sklearn.linear_model import LinearRegression, QuantileRegressor
-
-    if len(values) < 5 or np.all(values == 0):
-        return {
-            "valid": False,
-            "forecast_years": forecast_years,
-            "p10": np.zeros(len(forecast_years)),
-            "p50": np.zeros(len(forecast_years)),
-            "p90": np.zeros(len(forecast_years)),
-        }
-
-    x = years.reshape(-1, 1)
-    x_future = np.array(forecast_years).reshape(-1, 1)
-    results = {}
-
-    for q in quantiles:
-        try:
-            model = QuantileRegressor(quantile=q, alpha=0.1, solver="highs").fit(x, values)
-            pred = np.clip(model.predict(x_future), 0, None)
-        except Exception:
-            base_model = LinearRegression().fit(x, values)
-            base_pred = base_model.predict(x_future)
-            res = values - base_model.predict(x)
-            q_res = float(np.quantile(res, q))
-            pred = np.clip(base_pred + q_res, 0, None)
-        results[f"p{int(q * 100)}"] = pred
-
-    return {
-        "valid": True,
-        "forecast_years": forecast_years,
-        "p10": results.get("p10", np.zeros(len(forecast_years))),
-        "p50": results.get("p50", np.zeros(len(forecast_years))),
-        "p90": results.get("p90", np.zeros(len(forecast_years))),
-    }
 
 
 def _bass_cumulative(t: np.ndarray, p: float, q: float, m: float) -> np.ndarray:
@@ -345,7 +357,7 @@ def fit_bass_diffusion_nls(
             "p": round(p_est, 4),
             "q": round(q_est, 4),
             "t_peak": round(t_peak, 1),
-            "stage": ("crescimento" if t_peak > float(years[-1]) else "maturidade"),
+            "stage": ("growth" if t_peak > float(years[-1]) else "maturity"),
             "method": "nls",
         }
     except Exception:
@@ -388,7 +400,7 @@ def fit_bass_diffusion(
                     "p": float(p),
                     "q": float(q),
                     "t_peak": t_peak,
-                    "stage": ("crescimento" if t_peak > float(years[-1]) else "maturidade"),
+                    "stage": ("growth" if t_peak > float(years[-1]) else "maturity"),
                     "method": "ols",
                 }
     except Exception:

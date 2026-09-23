@@ -1,4 +1,8 @@
-"""🔮 Tendências & Previsão — projeção de volume de publicações (2027-2028) via regressão."""
+"""🔮 Trends and fronts — publication-volume projection via regression.
+
+The horizon follows the last complete bibliographic year, so it moves with the
+corpus rather than being pinned to a calendar year in this docstring.
+"""
 
 from __future__ import annotations
 
@@ -7,7 +11,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from lake_research_map.dashboard import loaders
-from lake_research_map.dashboard.analytics import explode_keywords
+from lake_research_map.dashboard.analytics import technological_burst_detection
 from lake_research_map.dashboard.components import (
     hero_banner,
     metric_row,
@@ -15,10 +19,11 @@ from lake_research_map.dashboard.components import (
     render_chart,
 )
 from lake_research_map.dashboard.forecasting import (
+    COVERAGE_HOLDOUT_FOLDS,
+    CV_YEARS,
     HOLDOUT_YEAR,
+    TRAIN_END_YEAR,
     ForecastResult,
-    fit_and_forecast,
-    yearly_counts,
 )
 from lake_research_map.dashboard.theme import (
     CATEGORICAL_PALETTE,
@@ -34,9 +39,9 @@ TOP_KEYWORD_TRENDS = 5
 MIN_KEYWORD_OCCURRENCES = 20
 
 _MODEL_LABELS = {
+    "baseline": "Persistence (last value)",
     "linear": "Linear",
-    "polynomial": "Polinomial (grau 2)",
-    "log_linear": "Log-linear (crescimento exponencial)",
+    "log_linear": "Log-linear (exponential growth)",
     "none": "—",
 }
 
@@ -44,53 +49,99 @@ _MODEL_LABELS = {
 def render() -> None:
     page_header(
         "🔮",
-        "Tendências & Previsão",
-        "Projeção de volume de publicações para 2027-2028 a partir de modelos de regressão treinados "
-        "em 2010-2025 e validados contra 2026.",
+        "Trends and fronts",
+        "Volume projection with temporal validation, training only in complete years and intervals "
+        "conformations calibrated in historical errors.",
     )
 
     hero_banner(
-        "⚠️ Esta página ignora o filtro global de ano da barra lateral",
-        "Uma previsão de série temporal precisa do histórico completo, não de um recorte. Três modelos "
-        "(linear, polinomial e log-linear) são treinados em 2010–2025, validados de duas formas — contra "
-        "2026 e por validação cruzada nos anos 2023–2025 — e o melhor é escolhido antes de projetar 2027 e "
-        f"2028. <b>{HOLDOUT_YEAR} é um ano parcial</b> (o corpus foi coletado no meio do ano), então o erro "
-        "contra ele mede acerto sobre um ano ainda incompleto, não um ano fechado — por isso a validação "
-        "cruzada nos anos completos anteriores pesa igualmente na escolha do modelo. O corpus também é "
-        "deliberadamente incompleto (ver CLAUDE.md), então a curva reflete o que foi coletado, não "
-        "necessariamente o volume real de publicações na área.",
+        "Complete historical series",
+        "Persistence, linear trend and log-linear trend "
+        "The partial year is only monitored; it does not enter the training. "
+        "The bands use conformal historical errors and represent uncertainty of the collected corpus.",
     )
 
     _, articles_df = loaders.articles()
     if articles_df.empty:
-        st.warning("Nenhum dado disponível ainda. Execute o pipeline e recarregue esta página.")
+        st.warning("Run the pipeline and reload this page.")
         return
 
-    tab_total, tab_ieee, tab_elsevier, tab_keywords, tab_bass = st.tabs(
+    tab_volume, tab_keywords, tab_bass, tab_bursts = st.tabs(
         [
-            "🌐 Total",
-            "🔷 IEEE",
-            "🟠 Elsevier",
-            "🏷️ Tópicos em Alta",
-            "📊 Difusão Tecnológica (Bass)",
+            "Volume",
+            "Topic trajectories",
+            "Technological diffusion",
+            "Concept bursts",
+        ],
+        on_change="rerun",
+        key="forecasting_primary_tab",
+    )
+    if tab_volume.open:
+        with tab_volume:
+            source_label = st.segmented_control(
+                "Series",
+                ["Total", SOURCE_LABELS["ieee"], SOURCE_LABELS["elsevier"]],
+                default="Total",
+                key="forecast_source",
+            )
+            sources = {
+                "Total": (None, TOTAL_COLOR),
+                SOURCE_LABELS["ieee"]: ("ieee", SOURCE_COLORS["ieee"]),
+                SOURCE_LABELS["elsevier"]: ("elsevier", SOURCE_COLORS["elsevier"]),
+            }
+            source, color = sources[source_label or "Total"]
+            _render_series_forecast(source_label or "Total", color, _series_forecast(source))
+    elif tab_keywords.open:
+        with tab_keywords:
+            _keyword_growth_ranking()
+    elif tab_bass.open:
+        with tab_bass:
+            _bass_diffusion_analysis()
+    elif tab_bursts.open:
+        with tab_bursts:
+            _render_bursts(articles_df)
+
+
+def _render_bursts(df: pd.DataFrame) -> None:
+    st.subheader("Concept frequency bursts")
+    st.caption(
+        "Kleinberg's two-state model applied to the annual share of documents mentioning each concept. "
+        "The intensity is the log-likelihood gain of the burst state."
+    )
+    result = technological_burst_detection(df)
+    bursts = result["burst_timeline"]
+    if bursts.empty:
+        st.info("No sustained burst was detected in this cut.")
+        return
+    metric_row(
+        [
+            ("Detected intervals", f"{result['total_bursts']:,}"),
+            ("Active in the latest year", f"{len(result['active_frontiers']):,}"),
+            ("Highest intensity", f"{bursts.iloc[0]['Intensity']:.2f}"),
         ]
     )
-    for tab, label, source, color in (
-        (tab_total, "Total", None, TOTAL_COLOR),
-        (tab_ieee, SOURCE_LABELS["ieee"], "ieee", SOURCE_COLORS["ieee"]),
-        (tab_elsevier, SOURCE_LABELS["elsevier"], "elsevier", SOURCE_COLORS["elsevier"]),
-    ):
-        with tab:
-            _render_series_forecast(label, color, _series_forecast(source))
+    plot = bursts.sort_values(["Burst's Beginning", "Intensity"])
+    figure = go.Figure()
+    for _, row in plot.iterrows():
+        figure.add_bar(
+            y=[row["Technology / Concept"]],
+            x=[row["Duration (Years)"]],
+            base=[row["Burst's Beginning"]],
+            orientation="h",
+            marker_color=CATEGORICAL_PALETTE[0]
+            if row["Status"] == "Active"
+            else CATEGORICAL_PALETTE[6],
+            hovertemplate=(
+                f"Start: {row["Burst's Beginning"]}<br>Peak: {row['Peak year']}<br>"
+                f"End: {row['Burst end']}<br>Intensity: {row['Intensity']:.2f}<extra></extra>"
+            ),
+            showlegend=False,
+        )
+    figure.update_layout(xaxis_title="Year", yaxis_title="Concept")
+    render_chart(figure)
+    st.dataframe(bursts, hide_index=True, width="stretch")
 
-    with tab_keywords:
-        _keyword_growth_ranking()
 
-    with tab_bass:
-        _bass_diffusion_analysis()
-
-
-@st.cache_data(ttl=60)
 def _series_forecast(source: str | None) -> ForecastResult:
     """Volume forecast for one source (or the whole corpus when `source` is None).
 
@@ -98,43 +149,72 @@ def _series_forecast(source: str | None) -> ForecastResult:
     rolling-origin CV over 3 candidate models, and it reads the unfiltered
     layer, so it never changes between reruns.
     """
-    _, articles_df = loaders.articles()
-    return fit_and_forecast(yearly_counts(articles_df, source=source))
+    return loaders.volume_forecast(source)
+
+
+def _baseline_skill_label(skill: float | None) -> str:
+    """A forecast that does not beat last-year-repeated has to say so.
+
+    Skill is 1 - MAE(model) / MAE(persistence) over the rolling-origin folds, so
+    zero or less means the naive baseline was at least as good.
+    """
+    if skill is None:
+        return "n/a"
+    return f"{skill:+.0%}" if skill > 0 else "No better than naive"
+
+
+def _baseline_skill_help(skill: float | None) -> str:
+    if skill is None:
+        return "Not enough complete years to compare against persistence"
+    if skill > 0:
+        return "Lower validation error than repeating the last complete year"
+    return "Persistence matched or beat the fitted model; read the projection with care"
 
 
 def _render_series_forecast(label: str, color: str, result: ForecastResult) -> None:
     if result.insufficient_data:
-        st.info(" ".join(result.notes) or "Dados insuficientes para uma previsão.")
+        st.info(" ".join(result.notes) or "Insufficient data for a forecast.")
         return
 
     partial_note = ""
     if result.holdout_actual is not None:
         err = abs(result.holdout_predicted - result.holdout_actual)
-        partial_note = f"{err:,.1f} (vs. {HOLDOUT_YEAR}, parcial)"
+        partial_note = f"{err:,.1f} (vs. partial {HOLDOUT_YEAR})"
     metric_row(
         [
             (
-                "🧮 Modelo escolhido",
+                "🧮 Selected model",
                 _MODEL_LABELS.get(result.chosen_model, result.chosen_model),
                 None,
             ),
             (
-                "📉 MAE de validação",
-                partial_note or "N/D",
-                f"CV 2023–2025: {result.cv_mae:.1f}" if result.cv_mae == result.cv_mae else None,
+                "📉 MAE validation",
+                partial_note or "n/a",
+                f"CV {CV_YEARS[0]}–{CV_YEARS[-1]}: {result.cv_mae:.1f}"
+                if result.cv_mae == result.cv_mae
+                else None,
             ),
             (
-                "📈 R² (ajuste no treino)",
-                f"{result.r2_train:.2f}" if result.r2_train == result.r2_train else "N/D",
-                None,
+                "🏁 Skill vs. persistence",
+                _baseline_skill_label(result.baseline_skill),
+                _baseline_skill_help(result.baseline_skill),
             ),
             (
-                f"🔮 Previsão {result.forecast_years[0]}",
+                "📏 Interval coverage",
+                "n/a"
+                if result.empirical_interval_coverage is None
+                else f"{result.empirical_interval_coverage:.0%}",
+                f"{COVERAGE_HOLDOUT_FOLDS} held-out one-step folds in a 90% band"
+                if result.empirical_interval_coverage is not None
+                else "Series too short to hold folds back",
+            ),
+            (
+                f"🔮 Forecast {result.forecast_years[0]}",
                 f"{result.forecast_values[0]:,.0f}",
                 f"±{(result.forecast_upper[0] - result.forecast_values[0]):,.0f}",
             ),
             (
-                f"🔮 Previsão {result.forecast_years[1]}",
+                f"🔮 Forecast {result.forecast_years[1]}",
                 f"{result.forecast_values[1]:,.0f}",
                 f"±{(result.forecast_upper[1] - result.forecast_values[1]):,.0f}",
             ),
@@ -152,12 +232,12 @@ def _render_series_forecast(label: str, color: str, result: ForecastResult) -> N
         opacity=0.85,
     )
 
-    # Fitted curve over the training + holdout range.
+    # Fitted curve over complete training years only.
     fig.add_trace(
         go.Scatter(
             x=result.fitted_curve.index,
             y=result.fitted_curve.values,
-            name="Modelo ajustado",
+            name="Fitted model",
             mode="lines",
             line=dict(color=color, width=2, dash="dot"),
         )
@@ -173,7 +253,7 @@ def _render_series_forecast(label: str, color: str, result: ForecastResult) -> N
             fillcolor=hex_to_rgba(TOTAL_COLOR, 0.18),
             line=dict(color="rgba(0,0,0,0)"),
             hoverinfo="skip",
-            name="Intervalo de confiança (~95%)",
+            name="Confidence interval (~95%)",
             showlegend=True,
         )
     )
@@ -181,11 +261,11 @@ def _render_series_forecast(label: str, color: str, result: ForecastResult) -> N
         go.Scatter(
             x=band_years,
             y=result.forecast_values,
-            name="Previsão",
+            name="Prediction",
             mode="lines+markers",
             line=dict(color=TOTAL_COLOR, width=2.5, dash="dash"),
             marker=dict(size=9, symbol="diamond"),
-            hovertemplate="Previsão %{x}: %{y:,.0f} artigos<extra></extra>",
+            hovertemplate="%{x} prediction: %{y:,.0f} articles<extra></extra>",
         )
     )
 
@@ -201,7 +281,7 @@ def _render_series_forecast(label: str, color: str, result: ForecastResult) -> N
             go.Scatter(
                 x=[next_year],
                 y=[result.history.loc[next_year]],
-                name=f"{next_year} (parcial/antecipado)",
+                name=f"{next_year} (partial/early)",
                 mode="markers",
                 marker=dict(
                     size=13,
@@ -209,37 +289,37 @@ def _render_series_forecast(label: str, color: str, result: ForecastResult) -> N
                     color=TOTAL_COLOR,
                     line=dict(width=2, color=t["chart_bg"]),
                 ),
-                hovertemplate=f"{next_year} já tem %{{y:,.0f}} registros indexados (parcial)<extra></extra>",
+                hovertemplate=f"{next_year} already has %{{y:,.0f}} indexed records (partial)<extra></extra>",
             )
         )
 
     fig.update_layout(
-        xaxis_title="Ano de publicação",
-        yaxis_title="Quantidade de artigos",
+        xaxis_title="Year of publication",
+        yaxis_title="Number of articles",
         hovermode="x unified",
     )
     render_chart(
         fig,
-        caption=f"Barras = observado (inclui {HOLDOUT_YEAR}, parcial). Linha pontilhada = ajuste do modelo "
-        "no histórico. Losango tracejado + faixa sombreada = previsão e intervalo de confiança. Estrela = "
-        "registros já indexados para o próximo ano, mostrados à parte por não serem o total final dele.",
+        caption=f"Bars = observed (including partial {HOLDOUT_YEAR}). Dotted line = model fit "
+        "in history. "
+        "records already indexed for the next year, shown apart because they are not the final total of it.",
     )
 
-    with st.expander("📋 Comparação dos modelos candidatos"):
+    with st.expander("📋 Comparison of candidate models"):
         table = result.model_comparison.copy()
         table["model"] = table["model"].map(_MODEL_LABELS)
         table = table.rename(
             columns={
-                "model": "Modelo",
-                "holdout_mae": f"MAE vs. {HOLDOUT_YEAR} (parcial)",
-                "cv_mae": "MAE validação cruzada (2023–2025)",
-                "combined_mae": "Score combinado (usado na escolha)",
+                "model": "Model",
+                "holdout_mae": f"MAE vs. partial {HOLDOUT_YEAR}",
+                "cv_mae": f"MAE cross-validation ({CV_YEARS[0]}–{CV_YEARS[-1]})",
+                "combined_mae": "MAE temporal (usado na escolha)",
             }
         )
         st.dataframe(table, hide_index=True, width="stretch")
         st.caption(
-            "O modelo com menor score combinado é escolhido, depois re-treinado com todos os anos reais "
-            f"disponíveis (até {HOLDOUT_YEAR}) antes de gerar a previsão acima."
+            "The model with the lowest MAE in temporal validation is chosen and readjusted only with years"
+            f"complete years. {HOLDOUT_YEAR} remains outside training because it is partial."
         )
 
 
@@ -268,7 +348,7 @@ def _keyword_trend_lines(
                 legendgroup=kw,
                 mode="lines",
                 line=dict(color=color, width=2),
-                hovertemplate=f"<b>{kw}</b><br>Ano %{{x}}: %{{y:.0f}} menções<extra></extra>",
+                hovertemplate=f"<b>{kw}</b><br>Year %{{x}}: %{{y:.0f}} mentions<extra></extra>",
             )
         )
         # Dashed continuation from the last real point into the forecast, so
@@ -285,23 +365,22 @@ def _keyword_trend_lines(
                 showlegend=False,
                 mode="lines",
                 line=dict(color=color, width=2, dash="dash"),
-                hovertemplate=f"<b>{kw}</b> (previsto)<br>Ano %{{x}}: %{{y:.0f}} menções<extra></extra>",
+                hovertemplate=f"<b>{kw}</b> (forecast)<br>Year %{{x}}: %{{y:.0f}} mentions<extra></extra>",
             )
         )
 
     fig.update_layout(
-        xaxis_title="Ano de publicação",
-        yaxis_title="Menções por ano",
+        xaxis_title="Year of publication",
+        yaxis_title="Mentions per year",
         hovermode="x unified",
     )
     render_chart(
         fig,
-        caption="Sólido = histórico observado; tracejado = continuação prevista pelo mesmo modelo escolhido "
-        "para cada termo. Mostra a trajetória real por trás do ranking ao lado, não só o ponto de chegada.",
+        caption="Solid = observed history; traced : continuation predicted by the same chosen model "
+        "Shows the real trajectory behind the next ranking, not only the point of arrival.",
     )
 
 
-@st.cache_data(ttl=60)
 def _keyword_forecasts() -> tuple[str, list[dict], dict[str, ForecastResult], int | None]:
     """Fit a forecast per eligible keyword; returns `(status, rows, results, final_year)`.
 
@@ -310,60 +389,28 @@ def _keyword_forecasts() -> tuple[str, list[dict], dict[str, ForecastResult], in
     the result never changes between reruns. Without this it re-ran in full
     on every widget interaction.
     """
-    _, articles_df = loaders.articles()
-    kw_exploded = explode_keywords(articles_df)
-    if kw_exploded.empty or "year" not in kw_exploded.columns:
-        return "no_keywords", [], {}, None
-
-    counts = kw_exploded["keyword"].value_counts()
-    eligible = counts[counts >= MIN_KEYWORD_OCCURRENCES].index.tolist()
-    if not eligible:
-        return "none_eligible", [], {}, None
-
-    rows = []
-    results_by_keyword: dict[str, ForecastResult] = {}
-    final_forecast_year = None
-    for kw in eligible:
-        kw_df = kw_exploded[kw_exploded["keyword"] == kw]
-        series = kw_df.groupby(kw_df["year"].astype("Int64")).size()
-        series.index = series.index.astype(int)
-        result = fit_and_forecast(series)
-        if result.insufficient_data:
-            continue
-        results_by_keyword[kw] = result
-        final_forecast_year = result.forecast_years[-1]
-        year_2025 = float(series.get(2025, series.tail(1).iloc[0] if len(series) else 0))
-        year_forecast = float(result.forecast_values[-1])
-        rows.append(
-            {
-                "keyword": kw,
-                "2025 (real)": year_2025,
-                f"{final_forecast_year} (previsto)": year_forecast,
-                "variação": year_forecast - year_2025,
-                "modelo": _MODEL_LABELS.get(result.chosen_model, result.chosen_model),
-            }
-        )
-    return "ok", rows, results_by_keyword, final_forecast_year
+    return loaders.keyword_forecasts(MIN_KEYWORD_OCCURRENCES)
 
 
 def _keyword_growth_ranking() -> None:
-    st.subheader("🏷️ Tópicos com maior crescimento projetado")
+    st.subheader("Topics with higher projected growth")
     status, rows, results_by_keyword, final_forecast_year = _keyword_forecasts()
 
     if status == "no_keywords":
-        st.info("Coluna 'keywords' não disponível nesta camada.")
+        st.info("Keywords column not available in this layer.")
         return
     if status == "none_eligible":
-        st.info(f"Nenhuma palavra-chave com pelo menos {MIN_KEYWORD_OCCURRENCES} ocorrências.")
+        st.info(f"No keyword has at least {MIN_KEYWORD_OCCURRENCES} occurrences.")
         return
     if not rows:
-        st.info("Não foi possível ajustar um modelo para nenhuma palavra-chave elegível.")
+        st.info("It was not possible to adjust a model to any eligible keyword.")
         return
 
-    ranking = pd.DataFrame(rows).sort_values("variação", ascending=False)
-    top = ranking.head(min(TOP_KEYWORDS_FORECAST, len(ranking))).sort_values("variação")
+    ranking = pd.DataFrame(rows).sort_values("variation", ascending=False)
+    ranking["model"] = ranking["model"].map(lambda value: _MODEL_LABELS.get(value, value))
+    top = ranking.head(min(TOP_KEYWORDS_FORECAST, len(ranking))).sort_values("variation")
 
-    sub_trend, sub_rank = st.tabs(["📈 Trajetórias", "🏆 Ranking de Crescimento"])
+    sub_trend, sub_rank = st.tabs(["📈 Trajectories", "🏆 Growth ranking"])
     with sub_trend:
         _keyword_trend_lines(
             ranking.head(TOP_KEYWORD_TRENDS)["keyword"].tolist(), results_by_keyword
@@ -371,41 +418,41 @@ def _keyword_growth_ranking() -> None:
     with sub_rank:
         fig = go.Figure()
         fig.add_bar(
-            x=top["variação"],
+            x=top["variation"],
             y=top["keyword"],
             orientation="h",
             marker_color=[
-                TOTAL_COLOR if v >= 0 else SOURCE_COLORS["ieee"] for v in top["variação"]
+                TOTAL_COLOR if v >= 0 else SOURCE_COLORS["ieee"] for v in top["variation"]
             ],
-            hovertemplate=f"<b>%{{y}}</b><br>Variação projetada até {final_forecast_year}: %{{x:+.1f}} artigos/ano<extra></extra>",
+            hovertemplate=f"<b>%{{y}}</b><br>Projected change through {final_forecast_year}: %{{x:+.1f}} articles/year<extra></extra>",
         )
         fig.update_layout(
-            xaxis_title=f"Variação projetada (2025 → {final_forecast_year}, artigos/ano)",
-            yaxis_title="Palavra-chave",
+            xaxis_title=f"Projected change ({TRAIN_END_YEAR} → {final_forecast_year}, articles/year)",
+            yaxis_title="Keyword",
         )
         render_chart(
             fig,
-            caption=f"Mesmo motor de previsão da série de volume, aplicado a cada palavra-chave com pelo "
-            f"menos {MIN_KEYWORD_OCCURRENCES} ocorrências no corpus. Mesmas ressalvas: {HOLDOUT_YEAR} é um "
-            "ano parcial e o corpus é incompleto — leia como sinal direcional, não como número exato.",
+            caption=f"The same forecasting engine used for publication volume, applied to each keyword with at "
+            f"least {MIN_KEYWORD_OCCURRENCES} occurrences in the corpus. The same caveat applies: {HOLDOUT_YEAR} is a "
+            "Partial year and corpus is incomplete — read as a directional sign, not as an exact number.",
         )
 
-    with st.expander("📋 Tabela completa de tópicos avaliados"):
+    with st.expander("📋 Complete table of topics evaluated"):
         st.dataframe(ranking.reset_index(drop=True), hide_index=True, width="stretch")
 
 
 def _bass_diffusion_analysis() -> None:
-    st.subheader("📊 Modelo de Difusão de Bass para Tecnologias Emergentes")
+    st.subheader("📊 Bass Diffusion Model for Emerging Technologies")
     st.caption(
-        "O Modelo de Difusão de Bass (1969) modela o ciclo de adoção de inovações tecnológicas, "
-        "separando a influência externa de inovadores (p) da influência de contágio/imitação interna (q). "
-        "Permite estimar a capacidade de saturação teórica (m) e o ano de pico de publicações (t*)."
+        "The Bass Diffusion Model (1969) models the cycle of adoption of technological innovations. "
+        "separating the external influence of innovators (p) from the influence of internal contagion/imitation (q). "
+        "It allows estimating the theoretical saturation capacity (m) and the year of peak of publications (t*)."
     )
     from lake_research_map.dashboard.forecasting import fit_bass_diffusion_nls
 
     status, rows, results_by_keyword, _ = _keyword_forecasts()
     if status != "ok" or not results_by_keyword:
-        st.info("Palavras-chave insuficientes para o modelo de difusão.")
+        st.info("Insufficient keywords for the diffusion model.")
         return
 
     bass_records = []
@@ -417,24 +464,22 @@ def _bass_diffusion_analysis() -> None:
         if bass.get("valid"):
             bass_records.append(
                 {
-                    "Tecnologia / Tópico": kw,
-                    "Estágio Atual": bass["stage"].title(),
-                    "Método": bass.get("method", "nls").upper(),
-                    "Coef. Inovação (p)": round(bass["p"], 4),
-                    "Coef. Imitação (q)": round(bass["q"], 4),
-                    "Potencial de Saturação (m)": int(round(bass["m"])),
-                    "Ano de Pico Estimado": (int(round(bass["t_peak"])) if bass["t_peak"] else "—"),
+                    "Technology / Topic": kw,
+                    "Current Stage": bass["stage"].title(),
+                    "Method": bass.get("method", "nls").upper(),
+                    "Coef. Innovation (p)": round(bass["p"], 4),
+                    "Coef. Imitation (q)": round(bass["q"], 4),
+                    "Saturation Potential (m)": int(round(bass["m"])),
+                    "Estimated peak year": (int(round(bass["t_peak"])) if bass["t_peak"] else "—"),
                 }
             )
 
     if bass_records:
         st.dataframe(pd.DataFrame(bass_records), hide_index=True, width="stretch")
         st.caption(
-            "Ajuste contínuo não-linear (NLS via `scipy.optimize.curve_fit`) com limites físicos de capacidade. "
-            "Tópicos em estágio de 'Crescimento' ainda não atingiram o ápice de produção científica; "
-            "tópicos em 'Maturidade' já ultrapassaram o ano de pico estimado e tendem à estabilização."
+            "Nonlinear continuous adjustment (NLS via `scipy.optimize.curve_fit`) with physical capacity limits. "
+            "Topics in 'Growth' stage have not yet reached the apex of scientific production; "
+            "Topics in 'Maturity' have already exceeded the estimated peak year and tend to stabilize."
         )
     else:
-        st.info(
-            "Nenhum tópico com histórico suficiente para convergência estável do modelo de Bass."
-        )
+        st.info("No topic with sufficient history for stable convergence of the Bass model.")

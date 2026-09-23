@@ -21,6 +21,8 @@ import plotly.graph_objects as go
 from lake_research_map.dashboard.theme import (
     CATEGORICAL_PALETTE,
     OTHER_COLOR,
+    PUBLICATION_CATEGORY_COLORS,
+    PUBLICATION_CATEGORY_LABELS,
     SOURCE_COLORS,
     SOURCE_LABELS,
     TOTAL_COLOR,
@@ -143,6 +145,44 @@ def source_lines(
     return fig
 
 
+def publication_category_bars(
+    df: pd.DataFrame,
+    x: str = "year",
+    *,
+    title: str | None = None,
+    x_title: str | None = None,
+    y_title: str | None = None,
+    category_labels: dict[str, str] | None = None,
+) -> go.Figure:
+    """Stacked publication-type bars with a reconciled Total trend line."""
+    labels = category_labels or PUBLICATION_CATEGORY_LABELS
+    fig = go.Figure()
+    for category in PUBLICATION_CATEGORY_LABELS:
+        label = labels.get(category, category)
+        fig.add_bar(
+            x=df[x],
+            y=df[category],
+            name=label,
+            marker_color=PUBLICATION_CATEGORY_COLORS[category],
+            hovertemplate=f"Year %{{x}}<br>{label}: %{{y:,}} articles<extra></extra>",
+        )
+    fig.add_trace(
+        go.Scatter(
+            x=df[x],
+            y=df["total"],
+            name=TOTAL_LABEL,
+            mode="lines+markers",
+            line=dict(color=TOTAL_COLOR, width=2.5),
+            marker=dict(size=6),
+            hovertemplate="Year %{x}<br>Total: %{y:,} articles<extra></extra>",
+        )
+    )
+    fig.update_layout(barmode="stack", title=title, hovermode="x unified")
+    _axis_titles(fig, x_title, y_title)
+    polish_figure_layout(fig)
+    return fig
+
+
 def topn_hbar(
     series: pd.Series,
     *,
@@ -170,7 +210,7 @@ def topn_hbar(
             color="color",
             orientation="h",
             color_discrete_map=color_map,
-            labels={"value": x_title or "", "label": y_title or "", "color": "Base"},
+            labels={"value": x_title or "", "label": y_title or "", "color": "Source"},
         )
     else:
         fig = px.bar(
@@ -233,7 +273,7 @@ def source_topn_hbar(
     return fig
 
 
-def lorenz_chart(series: dict[str, pd.DataFrame], *, entity_label: str = "autores") -> go.Figure:
+def lorenz_chart(series: dict[str, pd.DataFrame], *, entity_label: str = "authors") -> go.Figure:
     """Lorenz curve: cumulative share of output vs. cumulative share of `entity_label`.
 
     `series` maps a source key ("ieee"/"elsevier"/"total") to a DataFrame with
@@ -245,7 +285,7 @@ def lorenz_chart(series: dict[str, pd.DataFrame], *, entity_label: str = "autore
     of real trace, not a reference line -- consistent with the "Total is a
     real series" rule, generalized to this chart's own benchmark.
 
-    `entity_label` only changes the x-axis wording (default "autores", the
+    `entity_label` only changes the x-axis wording (default "authors", the
     original use case in `researchers.py`) -- `lorenz_curve`'s own column
     names stay `share_of_authors`/`share_of_output` regardless of what's
     actually being ranked (e.g. venues instead of authors).
@@ -274,8 +314,8 @@ def lorenz_chart(series: dict[str, pd.DataFrame], *, entity_label: str = "autore
         )
     )
     fig.update_layout(
-        xaxis_title=f"Parcela acumulada de {entity_label}",
-        yaxis_title="Parcela acumulada de artigos",
+        xaxis_title=f"Cumulative share of {entity_label}",
+        yaxis_title="Cumulative share of articles",
         xaxis=dict(tickformat=".0%", range=[0, 1]),
         yaxis=dict(tickformat=".0%", range=[0, 1]),
     )

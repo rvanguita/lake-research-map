@@ -9,10 +9,10 @@ This document defines the architecture, design principles, testing protocols, an
 `lake-research-map` is a production-grade **Medallion Data Lake** and analytical research platform built for a Systematic Literature Review (SLR) on the engineering topic:
 > **"Distribution System Planning" (Electric Power Distribution Networks)**
 
-The corpus comprises hand-curated bibliographic exports from **IEEE Xplore** and **Elsevier ScienceDirect** (~1,831 deduplicated articles). The project provides:
+The corpus comprises hand-curated bibliographic exports from **IEEE Xplore** and **Elsevier ScienceDirect** (3,115 articles in the active Gold version as of 2026-09-21; re-measure before quoting). The project provides:
 1. **Medallion Ingestion & Transform Pipeline** (`src/lake_research_map/`): Multi-tier extraction, normalization, deduplication, chunking, binary vector embedding, and contrastive relevance screening.
 2. **Orchestration** (`airflow/`): 1:1 Airflow DAGs mirroring CLI pipeline stages (`raw`, `bronze`, `silver`, `gold`, `embed`, `semantic`, `all`).
-3. **Interactive Analytical Dashboard** (`src/lake_research_map/dashboard/`): Multipage Streamlit application featuring 13 deduplicated pages for bibliometric, scientometric, econometric, network, and semantic intelligence.
+3. **Interactive Analytical Dashboard** (`src/lake_research_map/dashboard/`): Multipage Streamlit application featuring 10 deduplicated pages for bibliometric, scientometric, econometric, network, and semantic intelligence.
 
 ---
 
@@ -45,7 +45,8 @@ The pipeline connects to a MySQL server with 4 discrete databases named plainly 
        │                       lit_chunks (RAG units: abstracts & fulltext; reconciled against text hash)
        │                       lit_pipeline_runs (execution duration, stats JSON, status)
        ▼
-   5. EMBED (`embed`)      --> fills lit_chunks.embedding_bin (LargeBinary float32) & embedding (JSON fallback)
+   5. EMBED (`embed`)      --> fills lit_chunks.embedding_bin (LargeBinary float32); the JSON `embedding`
+       │                       mirror is no longer written, only kept nullable for older versions
        │                       via local ONNX fastembed (BAAI/bge-small-en-v1.5)
        ▼
    6. SEMANTIC (`semantic`)--> lit_semantics (contrastive topic vs logistics margin, KMeans themes, 2D projections)
@@ -80,7 +81,7 @@ When working on `ingest/`, `transform/`, or `loaders.py`, adhere strictly to kno
 
 ## 4. Dashboard Architecture & Streamlit Guidelines
 
-The dashboard is structured into 13 dedicated pages in `src/lake_research_map/dashboard/`:
+The dashboard is structured into 10 workflow-oriented pages in `src/lake_research_map/dashboard/`:
 
 ### 4.1 Strict Separation of Concerns
 1. **`data.py`**: Raw SQL queries returning pandas DataFrames. Must fail gracefully if tables do not exist.
@@ -92,29 +93,34 @@ The dashboard is structured into 13 dedicated pages in `src/lake_research_map/da
 
 ### 4.2 Deduplication and Tab Hygiene
 - **Zero Chart Duplication**: Charts must never be duplicated across tabs within a page or between specialized pages.
-- **Role of Visão Geral**: `overview.py` displays high-level macro summaries only. Deep-dive analytical charts belong exclusively to their respective analytical pages.
+- **Role of Overview**: `overview.py` displays high-level macro summaries only. Deep-dive analytical charts belong exclusively to their respective analytical pages.
 - **Logical Tab Grouping**:
-  - `production.py`: Strictly chronological views (Volume Anual, Crescimento Acumulado, Estratos CAPES/Qualis).
-  - `topics.py`: Unified venue ranking (Volume vs Impact toggle), Bradford Zones, Semantic Centroids, Zipf's Law, c-TF-IDF, Conceptual Atypicality (Uzzi), Structural Breaks (Chow).
-  - `highlights.py`: 2 tabs — *Fundamentação Teórica* (Distribution viewer, Reference vs Citations, Top Referenced) & *Dinâmica de Citações & Econometria* (Top Cited, Citations by Year, Heavy-Tail MLE, Age-Normalized, GLM Poisson).
-  - `researchers.py`: Author Hub with 6 tabs (Produtividade, Liderança Científica h/g/e/m, Trajetória Temporal, Colaboração & Redes, Linhas de Pesquisa, Leis Bibliométricas).
-  - `synthesis.py`: 7 engineering optimization tabs (MILP/SOCP, Pareto Objectives, Uncertainty vs DERs, Planning Horizons, IEEE Test Feeders, Solvers/Simulators, Longevity & Stylometrics).
-  - `frontiers.py`: 5 innovation tabs (Price Index, Sleeping Beauties, CD Disruption Index, OACA, Kleinberg Bursts).
-  - `forecasting.py`: Volume forecasting with dynamic expanding error bands ($\sigma \sqrt{h}$), Topic trajectories, and continuous Bass NLS diffusion.
-  - `semantics.py`: Screening margin distribution, Multi-projection 2D map, Discovered themes, Semantic novelty, and Duplicate pairs.
+  - `production.py`: Strictly chronological views (annual volume, cumulative growth, CAPES/Qualis strata).
+  - `topics.py`: Venue ranking, Bradford Zones, semantic structure, Zipf's Law, c-TF-IDF, descriptive conceptual atypicality, and structural breaks.
+  - `highlights.py`: 2 tabs — *Theoretical grounding* and *Citation dynamics & econometrics*, including heavy-tail diagnostics (AIC family comparison, bootstrap p-value), age normalization, and an exposure-adjusted count GLM with its specification diagnostics.
+  - `researchers.py`: Author productivity, scientific leadership, temporal trajectories, collaboration networks, research lines, and bibliometric laws.
+  - `synthesis.py`: 6 selectable engineering-evidence dimensions covering methods, objectives, uncertainty, planning horizons, test systems, and solvers.
+  - `forecasting.py`: Complete-year volume forecasts with rolling validation and conformal bands, topic trajectories, Bass diagnostics, and Kleinberg bursts.
+  - `semantics.py`: Screening calibration, multi-projection semantic space, themes, semantic isolation, and persistent duplicate-review history.
+  - `quality.py`: Metadata/PDF diagnostics, content readiness, anomaly audit, and hybrid retrieval.
+  - `pipeline_layers.py`: Medallion flow, quality gates, audit history, source provenance, and Airflow operations.
 
 ### 4.3 Visual & Theme Standards
 - **Responsive Width**: Always use `width="stretch"` for charts, tables, and containers. **NEVER use deprecated `use_container_width=True`**.
-- **Transparent Polar Charts**: For radar and polar charts (e.g., `thematic_radar_chart`), always set `paper_bgcolor="rgba(0,0,0,0)"` and `polar_bgcolor="rgba(0,0,0,0)"` so that the chart adapts seamlessly to Streamlit dark and light themes without an opaque white box.
-- **Bilingual Rule**:
-  - Code, comments, docstrings, variable names, and documentation files (`docs/`, `*.md`) are in **English**.
-  - Dashboard UI text (page titles, tabs, headers, metric labels, tooltips, warnings, captions) is in **Portuguese**.
+- **Transparent Polar Charts**: If a radar or polar chart is ever reintroduced, set `paper_bgcolor="rgba(0,0,0,0)"` and `polar_bgcolor="rgba(0,0,0,0)"` so it adapts to the theme instead of rendering an opaque white box. None currently exists; the previous `thematic_radar_chart` was removed with its unreachable analytics.
+- **Language Rule**: Code, comments, docstrings, variable names, documentation files
+  (`docs/`, `*.md`), and all dashboard UI text are in **English**.
+- **Fixed Dark Theme**: The dashboard uses the dark Streamlit theme and matching
+  Plotly tokens. Do not add a light-mode toggle or browser-dependent palette.
+- **Publication Categories**: Store only the canonical English values `journal`,
+  `conference`, `review`, and `other`. Classification precedence is review,
+  conference, journal, then other.
 
 ---
 
 ## 5. Testing & Verification Standards
 
-- **Suíte Size**: The test suite consists of **186 automated tests across 22 test files** in `tests/`.
+- **Suíte Size**: The test suite consists of **212 automated tests across 26 test files** in `tests/`.
 - **Zero Live MySQL Dependency**: All tests run against in-memory SQLite fixtures (`tests/conftest.py`), creating one isolated session per layer (`raw_session`, `bronze_session`, `silver_session`, `gold_session`).
 - **Fast Execution**: The complete suite must pass in under 5 seconds:
   ```bash
@@ -145,7 +151,7 @@ uv run streamlit run main.py               # Launch Streamlit app on http://loca
 docker compose up -d                       # Airflow (:8080) + Streamlit (:8501)
 
 # Testing & Verification
-uv run pytest                              # Run full test suite (186 tests)
+uv run pytest                              # Run full test suite (212 tests)
 uv run ruff check --fix && uv run ruff format  # Format and lint codebase
 ```
 

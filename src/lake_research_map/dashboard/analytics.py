@@ -15,12 +15,36 @@ import unicodedata
 import numpy as np
 import pandas as pd
 
-OTHERS_LABEL = "Outros"
+from lake_research_map.transform.publication_categories import PUBLICATION_CATEGORIES
 
-# Shared "recent activity" window used by both the Visão Geral and
-# Pesquisadores pages, so "recent" means the same thing (last 5 publication
+OTHERS_LABEL = "Others"
+
+# Shared "recent activity" window used by both the Overview and
+# Researchers pages, so "recent" means the same thing (last 5 publication
 # years, inclusive of the latest) everywhere it's shown.
 RECENT_WINDOW_YEARS = 5
+
+METADATA_COVERAGE_FIELDS = (
+    "doi",
+    "title",
+    "year",
+    "venue",
+    "authors",
+    "abstract",
+    "keywords",
+    "citation_count",
+    "reference_count",
+    "has_pdf",
+)
+
+PDF_BIAS_METRICS = {
+    "year": "identity",
+    "citation_count": "log1p",
+    "reference_count": "log1p",
+    "team_size": "identity",
+    "abstract_chars": "log1p",
+    "keyword_count": "log1p",
+}
 
 
 def valid_years(df: pd.DataFrame, lo: int = 1950, hi: int = 2026) -> pd.Series:
@@ -34,6 +58,154 @@ def valid_years(df: pd.DataFrame, lo: int = 1950, hi: int = 2026) -> pd.Series:
     """
     years = pd.to_numeric(df.get("year"), errors="coerce")
     return years.where(years.between(lo, hi))
+
+
+def _field_present(series: pd.Series, field: str) -> pd.Series:
+    """Return a boolean presence mask without treating unknown counts as zero."""
+    if field in {"authors", "keywords", "sources"}:
+        return series.apply(lambda value: isinstance(value, list) and len(value) > 0)
+    if field == "has_pdf":
+        return series.fillna(False).astype(bool)
+    if pd.api.types.is_string_dtype(series.dtype) or series.dtype == object:
+        return series.notna() & series.astype(str).str.strip().ne("")
+    return series.notna()
+
+
+def metadata_coverage_matrix(
+    df: pd.DataFrame,
+    fields: tuple[str, ...] = METADATA_COVERAGE_FIELDS,
+) -> pd.DataFrame:
+    """Measure field completeness by source using explicit denominators."""
+    columns = ["field", "source", "n_total", "n_present", "coverage"]
+    if df.empty:
+        return pd.DataFrame(columns=columns)
+
+    working = df.copy()
+    if "source" not in working.columns:
+        if "sources" in working.columns:
+            working["source"] = working["sources"].apply(
+                lambda values: values[0] if isinstance(values, list) and values else "unknown"
+            )
+        else:
+            working["source"] = "total"
+
+    rows: list[dict[str, object]] = []
+    for source, group in working.groupby("source", dropna=False):
+        for field in fields:
+            if field not in group.columns:
+                continue
+            present = _field_present(group[field], field)
+            n_total = len(group)
+            n_present = int(present.sum())
+            rows.append(
+                {
+                    "field": field,
+                    "source": str(source),
+                    "n_total": n_total,
+                    "n_present": n_present,
+                    "coverage": n_present / n_total if n_total else np.nan,
+                }
+            )
+    return pd.DataFrame(rows, columns=columns)
+
+
+def _standardized_mean_difference(left: np.ndarray, right: np.ndarray) -> float:
+    if len(left) < 2 or len(right) < 2:
+        return float("nan")
+    pooled_variance = (
+        (len(left) - 1) * np.var(left, ddof=1) + (len(right) - 1) * np.var(right, ddof=1)
+    ) / (len(left) + len(right) - 2)
+    if pooled_variance <= 0 or np.isclose(pooled_variance, 0.0):
+        return 0.0 if np.isclose(np.mean(left), np.mean(right)) else float("nan")
+    return float((np.mean(left) - np.mean(right)) / np.sqrt(pooled_variance))
+
+
+def pdf_selection_bias(
+    df: pd.DataFrame,
+    *,
+    n_bootstrap: int = 1000,
+    seed: int = 42,
+) -> pd.DataFrame:
+    """Compare PDF and non-PDF subsets using standardized mean differences.
+
+    Positive effects mean the PDF subset has a larger transformed mean. The
+    bootstrap is stratified by PDF availability so group sizes remain fixed.
+    """
+    columns = [
+        "metric",
+        "transform",
+        "n_pdf",
+        "n_no_pdf",
+        "mean_pdf",
+        "mean_no_pdf",
+        "smd",
+        "ci_low",
+        "ci_high",
+        "status",
+    ]
+    if df.empty or "has_pdf" not in df.columns:
+        return pd.DataFrame(columns=columns)
+
+    working = df.copy()
+    working["has_pdf"] = working["has_pdf"].fillna(False).astype(bool)
+    working["team_size"] = working.get(
+        "authors", pd.Series(index=working.index, dtype=object)
+    ).apply(lambda value: len(value) if isinstance(value, list) else np.nan)
+    working["abstract_chars"] = working.get(
+        "abstract", pd.Series(index=working.index, dtype=object)
+    ).apply(lambda value: len(value.strip()) if isinstance(value, str) else np.nan)
+    working["keyword_count"] = working.get(
+        "keywords", pd.Series(index=working.index, dtype=object)
+    ).apply(lambda value: len(value) if isinstance(value, list) else np.nan)
+
+    rng = np.random.default_rng(seed)
+    rows: list[dict[str, object]] = []
+    for metric, transform in PDF_BIAS_METRICS.items():
+        if metric not in working.columns:
+            continue
+        values = pd.to_numeric(working[metric], errors="coerce")
+        valid = values.notna() & values.ge(0)
+        pdf_values = values[valid & working["has_pdf"]].to_numpy(dtype=float)
+        no_pdf_values = values[valid & ~working["has_pdf"]].to_numpy(dtype=float)
+        if transform == "log1p":
+            pdf_values = np.log1p(pdf_values)
+            no_pdf_values = np.log1p(no_pdf_values)
+
+        smd = _standardized_mean_difference(pdf_values, no_pdf_values)
+        if len(pdf_values) < 2 or len(no_pdf_values) < 2:
+            status = "insufficient_group"
+        elif not np.isfinite(smd):
+            status = "zero_variance"
+        else:
+            status = "ok"
+        boot = np.array([], dtype=float)
+        if n_bootstrap > 0 and len(pdf_values) >= 2 and len(no_pdf_values) >= 2:
+            estimates = [
+                _standardized_mean_difference(
+                    rng.choice(pdf_values, size=len(pdf_values), replace=True),
+                    rng.choice(no_pdf_values, size=len(no_pdf_values), replace=True),
+                )
+                for _ in range(n_bootstrap)
+            ]
+            boot = np.asarray([value for value in estimates if np.isfinite(value)], dtype=float)
+        ci_low, ci_high = (
+            np.quantile(boot, [0.025, 0.975]) if len(boot) else (float("nan"), float("nan"))
+        )
+        rows.append(
+            {
+                "metric": metric,
+                "transform": transform,
+                "n_pdf": len(pdf_values),
+                "n_no_pdf": len(no_pdf_values),
+                "mean_pdf": float(np.mean(pdf_values)) if len(pdf_values) else np.nan,
+                "mean_no_pdf": float(np.mean(no_pdf_values)) if len(no_pdf_values) else np.nan,
+                "smd": smd,
+                "ci_low": float(ci_low),
+                "ci_high": float(ci_high),
+                "status": status,
+            }
+        )
+    return pd.DataFrame(rows, columns=columns)
 
 
 def source_counts_by(df: pd.DataFrame, index_col: str) -> pd.DataFrame:
@@ -60,6 +232,47 @@ def source_counts_by(df: pd.DataFrame, index_col: str) -> pd.DataFrame:
 
     pivot["total"] = df.groupby(index_col).size().reindex(pivot.index, fill_value=0)
     return pivot.reset_index().rename(columns={"index": index_col})
+
+
+def publication_category_totals(df: pd.DataFrame) -> pd.Series:
+    """Return mutually exclusive publication-category totals in stable order.
+
+    Unknown or missing values are treated as ``other`` so the displayed
+    category cards always reconcile to the corpus total.
+    """
+    counts = pd.Series(0, index=PUBLICATION_CATEGORIES, dtype="int64")
+    if df.empty:
+        return counts
+    values = df.get("publication_category", pd.Series(index=df.index, dtype="object"))
+    normalized = values.where(values.isin(PUBLICATION_CATEGORIES), "other").fillna("other")
+    return counts.add(normalized.value_counts().reindex(PUBLICATION_CATEGORIES, fill_value=0))
+
+
+def publication_category_counts_by_year(df: pd.DataFrame) -> pd.DataFrame:
+    """Count publication categories by valid year, including a reconciled total."""
+    columns = ["year", *PUBLICATION_CATEGORIES, "total"]
+    if df.empty or "year" not in df.columns:
+        return pd.DataFrame(columns=columns)
+
+    working = df.copy()
+    working["year"] = valid_years(working)
+    working = working.dropna(subset=["year"]).copy()
+    if working.empty:
+        return pd.DataFrame(columns=columns)
+    working["year"] = working["year"].astype(int)
+    values = working.get("publication_category", pd.Series(index=working.index, dtype="object"))
+    working["publication_category"] = values.where(
+        values.isin(PUBLICATION_CATEGORIES), "other"
+    ).fillna("other")
+    grouped = (
+        working.groupby(["year", "publication_category"], observed=True)
+        .size()
+        .unstack(fill_value=0)
+        .reindex(columns=PUBLICATION_CATEGORIES, fill_value=0)
+        .sort_index()
+    )
+    grouped["total"] = grouped[list(PUBLICATION_CATEGORIES)].sum(axis=1)
+    return grouped.reset_index()[columns]
 
 
 def cumulative_by_source(df: pd.DataFrame) -> pd.DataFrame:
@@ -151,15 +364,6 @@ def author_count_series(df: pd.DataFrame) -> pd.Series:
         return pd.Series(0, index=df.index, dtype="int64")
     return df["authors"].apply(
         lambda a: len(a) if isinstance(a, list) else (1 if pd.notna(a) else 0)
-    )
-
-
-def keyword_count_series(df: pd.DataFrame) -> pd.Series:
-    """Keywords per row, from the `keywords` list column -- mirrors `author_count_series`."""
-    if "keywords" not in df.columns:
-        return pd.Series(0, index=df.index, dtype="int64")
-    return df["keywords"].apply(
-        lambda k: len(k) if isinstance(k, list) else (1 if pd.notna(k) else 0)
     )
 
 
@@ -467,7 +671,7 @@ def author_productivity_trend(matrix: pd.DataFrame, top_n: int) -> pd.DataFrame:
     Fits `count ~ year` with `numpy.polyfit` (degree 1) per author, over that
     author's own active years only (a career that ended in 2015 shouldn't be
     scored against years it has no data for). Classifies the slope as
-    "crescendo" / "estável" / "caindo" against a small fixed threshold (0.15
+    "growing" / "stable" / "falling" against a small fixed threshold (0.15
     articles/year) rather than a significance test -- most authors here have
     under 15 active years, too short a series for a p-value to be meaningful
     (the same reasoning `forecasting.py` uses to prefer plain regression over
@@ -501,7 +705,7 @@ def author_productivity_trend(matrix: pd.DataFrame, top_n: int) -> pd.DataFrame:
                     "last_year": first_year,
                     "active_years": len(active),
                     "slope": 0.0,
-                    "trend": "dados insuficientes",
+                    "trend": "insufficient data",
                 }
             )
             continue
@@ -514,11 +718,11 @@ def author_productivity_trend(matrix: pd.DataFrame, top_n: int) -> pd.DataFrame:
         full_counts = [active_map.get(y, 0) for y in full_years]
         slope = float(_linear_slope(full_years, full_counts))
         if slope > 0.15:
-            trend = "crescendo"
+            trend = "growing"
         elif slope < -0.15:
-            trend = "caindo"
+            trend = "falling"
         else:
-            trend = "estável"
+            trend = "stable"
         rows.append(
             {
                 "author": row["author"],
@@ -575,74 +779,101 @@ LAYER_ORDER = ("raw", "bronze", "silver", "gold")
 LAYER_LABELS = {"raw": "Raw", "bronze": "Bronze", "silver": "Silver", "gold": "Gold"}
 
 
-def layer_source_counts(
-    bronze_df: pd.DataFrame, silver_df: pd.DataFrame, gold_df: pd.DataFrame
-) -> pd.DataFrame:
-    """IEEE / Elsevier / total article counts for bronze, silver, and gold.
-
-    Bronze has a scalar `source`; silver/gold only carry a `sources` list --
-    normalize both to the same ieee/elsevier/total shape so the funnel chart
-    can compare layers directly.
-    """
-    rows = []
-    for layer, frame, col in (
-        ("bronze", bronze_df, "source"),
-        ("silver", silver_df, "sources"),
-        ("gold", gold_df, "sources"),
-    ):
-        if frame.empty:
-            rows.append({"layer": layer, "ieee": 0, "elsevier": 0, "total": 0})
-            continue
-        if col == "source":
-            ieee = int((frame["source"] == "ieee").sum())
-            elsevier = int((frame["source"] == "elsevier").sum())
-        else:
-            src_lists = frame[col] if col in frame.columns else pd.Series([[]] * len(frame))
-            ieee = int(src_lists.apply(lambda s: isinstance(s, list) and "ieee" in s).sum())
-            elsevier = int(src_lists.apply(lambda s: isinstance(s, list) and "elsevier" in s).sum())
-        rows.append({"layer": layer, "ieee": ieee, "elsevier": elsevier, "total": len(frame)})
-    return pd.DataFrame(rows)
-
-
 # --- Advanced Statistics, Bibliometrics & Complex Networks -----------------
 
 
-def fit_heavy_tail_distributions(citation_counts: np.ndarray | pd.Series) -> dict:
-    """Fit and compare Power-law, Log-normal, and Exponential distributions to citation counts.
+def fit_heavy_tail_distributions(
+    citation_counts: np.ndarray | pd.Series,
+    *,
+    n_bootstrap: int = 100,
+    random_state: int = 42,
+) -> dict:
+    """Compare citation tails with fitted-parameter bootstrap diagnostics.
 
-    Returns estimated parameters, Kolmogorov-Smirnov statistics (D), and p-values.
+    Zeros are reported separately and never coerced into the positive tail.
+    ``x_min`` is selected by minimizing the Pareto KS distance while retaining
+    at least ten observations. Model comparison uses tail log-likelihood/AIC;
+    bootstrap p-values refit the Pareto parameter in every simulated sample.
     """
     from scipy import stats
 
-    arr = np.asarray(citation_counts, dtype=float)
-    arr = arr[np.isfinite(arr) & (arr > 0)]
+    raw = np.asarray(citation_counts, dtype=float)
+    raw = raw[np.isfinite(raw) & (raw >= 0)]
+    zero_count = int((raw == 0).sum())
+    arr = raw[raw > 0]
     n = len(arr)
     if n < 10:
-        return {"n": n, "valid": False, "best_fit": "insufficient_data"}
+        return {
+            "n": n,
+            "zero_count": zero_count,
+            "valid": False,
+            "best_fit": "insufficient_data",
+        }
 
-    x_min = float(np.min(arr))
-    sum_log = float(np.sum(np.log(arr / x_min)))
-    alpha = 1.0 + n / sum_log if sum_log > 0 else 1.0
-    ks_pareto = (
-        stats.kstest(arr, stats.pareto(b=alpha - 1.0, scale=x_min).cdf) if alpha > 1 else (1.0, 0.0)
-    )
+    candidates = np.unique(np.quantile(arr, np.linspace(0, 0.8, 21)))
+    selected: tuple[float, float, float, np.ndarray] | None = None
+    for candidate in candidates:
+        tail = arr[arr >= candidate]
+        if len(tail) < 10:
+            continue
+        denominator = float(np.log(tail / candidate).sum())
+        if denominator <= 0:
+            continue
+        alpha_candidate = 1.0 + len(tail) / denominator
+        ks = float(
+            stats.kstest(tail, stats.pareto(b=alpha_candidate - 1.0, scale=candidate).cdf)[0]
+        )
+        if selected is None or ks < selected[0]:
+            selected = (ks, float(candidate), float(alpha_candidate), tail)
+    if selected is None:
+        return {
+            "n": n,
+            "zero_count": zero_count,
+            "valid": False,
+            "best_fit": "degenerate_tail",
+        }
+    ks_stat, x_min, alpha, tail = selected
+    tail_n = len(tail)
 
-    log_arr = np.log(arr)
+    log_arr = np.log(tail)
     mu = float(np.mean(log_arr))
-    sigma = float(np.std(log_arr, ddof=1)) if n > 1 else float(np.std(log_arr))
+    sigma = float(np.std(log_arr, ddof=1))
     ks_lognorm = (
-        stats.kstest(arr, stats.lognorm(s=sigma, scale=np.exp(mu)).cdf) if sigma > 0 else (1.0, 0.0)
+        stats.kstest(tail, stats.lognorm(s=sigma, scale=np.exp(mu)).cdf)
+        if sigma > 0
+        else (1.0, 0.0)
     )
+    shifted = tail - x_min
+    mean_val = float(np.mean(shifted))
+    ks_expon = stats.kstest(shifted, stats.expon(scale=mean_val).cdf)
+    pareto_dist = stats.pareto(b=alpha - 1.0, scale=x_min)
+    lognorm_dist = stats.lognorm(s=sigma, scale=np.exp(mu))
+    expon_dist = stats.expon(loc=x_min, scale=mean_val)
+    log_likelihoods = {
+        "power_law": float(np.log(pareto_dist.pdf(tail)).sum()),
+        "log_normal": float(np.log(lognorm_dist.pdf(tail)).sum()),
+        "exponential": float(np.log(expon_dist.pdf(tail)).sum()),
+    }
+    parameter_counts = {"power_law": 1, "log_normal": 2, "exponential": 1}
 
-    mean_val = float(np.mean(arr))
-    ks_expon = stats.kstest(arr, stats.expon(scale=mean_val).cdf)
+    rng = np.random.default_rng(random_state)
+    bootstrap_ks = []
+    for _ in range(max(0, n_bootstrap)):
+        simulated = pareto_dist.rvs(size=tail_n, random_state=rng)
+        denominator = float(np.log(simulated / x_min).sum())
+        simulated_alpha = 1.0 + tail_n / denominator
+        simulated_dist = stats.pareto(b=simulated_alpha - 1.0, scale=x_min)
+        bootstrap_ks.append(float(stats.kstest(simulated, simulated_dist.cdf)[0]))
+    bootstrap_p = (
+        float(np.mean(np.asarray(bootstrap_ks) >= ks_stat)) if bootstrap_ks else float("nan")
+    )
 
     fits = {
         "power_law": {
             "alpha": float(alpha),
             "x_min": float(x_min),
-            "ks_stat": float(ks_pareto[0]),
-            "p_value": float(ks_pareto[1]),
+            "ks_stat": ks_stat,
+            "p_value": bootstrap_p,
         },
         "log_normal": {
             "mu": mu,
@@ -656,8 +887,23 @@ def fit_heavy_tail_distributions(citation_counts: np.ndarray | pd.Series) -> dic
             "p_value": float(ks_expon[1]),
         },
     }
-    best = min(fits.keys(), key=lambda k: fits[k]["ks_stat"])
-    return {"n": n, "valid": True, "best_fit": best, "models": fits}
+    for name, model in fits.items():
+        model["log_likelihood"] = log_likelihoods[name]
+        model["aic"] = 2 * parameter_counts[name] - 2 * log_likelihoods[name]
+    best = min(fits, key=lambda name: fits[name]["aic"])
+    return {
+        "n": n,
+        "tail_n": tail_n,
+        "zero_count": zero_count,
+        "valid": True,
+        "best_fit": best,
+        "models": fits,
+        "log_likelihood_ratios": {
+            "power_law_vs_log_normal": log_likelihoods["power_law"] - log_likelihoods["log_normal"],
+            "power_law_vs_exponential": log_likelihoods["power_law"]
+            - log_likelihoods["exponential"],
+        },
+    }
 
 
 def age_normalized_citations(df: pd.DataFrame, current_year: int = 2026) -> pd.DataFrame:
@@ -683,10 +929,7 @@ def age_normalized_citations(df: pd.DataFrame, current_year: int = 2026) -> pd.D
 
 
 def mann_kendall_trend(series: np.ndarray | pd.Series) -> dict[str, float | str]:
-    """Compute Mann-Kendall non-parametric monotonic trend test and Sen's slope.
-
-    Returns trend direction ('crescendo', 'estável', 'caindo'), p-value, S statistic, and slope.
-    """
+    """Returns trend direction ('growing', 'stable', 'falling'), p-value, S statistic, and slope."""
     from scipy import stats
 
     y = np.asarray(series, dtype=float)
@@ -694,7 +937,7 @@ def mann_kendall_trend(series: np.ndarray | pd.Series) -> dict[str, float | str]
     n = len(y)
     if n < 4:
         return {
-            "trend": "estável",
+            "trend": "stable",
             "p_value": 1.0,
             "s": 0.0,
             "slope": 0.0,
@@ -725,11 +968,11 @@ def mann_kendall_trend(series: np.ndarray | pd.Series) -> dict[str, float | str]
         p_value = 1.0
 
     if p_value < 0.05 and sen_slope > 0:
-        trend = "crescendo"
+        trend = "growing"
     elif p_value < 0.05 and sen_slope < 0:
-        trend = "caindo"
+        trend = "falling"
     else:
-        trend = "estável"
+        trend = "stable"
 
     return {
         "trend": trend,
@@ -738,6 +981,20 @@ def mann_kendall_trend(series: np.ndarray | pd.Series) -> dict[str, float | str]
         "z": float(z),
         "slope": sen_slope,
     }
+
+
+def benjamini_hochberg(p_values: np.ndarray | pd.Series) -> np.ndarray:
+    """Return monotone Benjamini-Hochberg adjusted p-values."""
+    values = np.asarray(p_values, dtype=float)
+    adjusted = np.full(values.shape, np.nan, dtype=float)
+    finite_indices = np.flatnonzero(np.isfinite(values))
+    if len(finite_indices) == 0:
+        return adjusted
+    order = finite_indices[np.argsort(values[finite_indices])]
+    ranked = values[order] * len(order) / np.arange(1, len(order) + 1)
+    ranked = np.minimum.accumulate(ranked[::-1])[::-1]
+    adjusted[order] = np.clip(ranked, 0.0, 1.0)
+    return adjusted
 
 
 def lotka_law_analysis(author_counts: pd.Series) -> dict:
@@ -921,6 +1178,87 @@ def graph_advanced_metrics(graph) -> dict:
     }
 
 
+def network_null_model_diagnostics(graph, *, n_simulations: int = 100, seed: int = 42) -> dict:
+    """Compare clustering with degree-preserving rewired null networks."""
+    import networkx as nx
+
+    if graph.number_of_nodes() < 4 or graph.number_of_edges() < 3:
+        return {"valid": False, "reason": "insufficient_network"}
+    observed = float(nx.average_clustering(graph))
+    null_values: list[float] = []
+    rng = np.random.default_rng(seed)
+    swaps = max(graph.number_of_edges() * 5, 1)
+    for _ in range(max(1, n_simulations)):
+        candidate = nx.Graph(graph)
+        try:
+            nx.double_edge_swap(
+                candidate,
+                nswap=swaps,
+                max_tries=max(swaps * 20, 100),
+                seed=int(rng.integers(0, 2**31 - 1)),
+            )
+        except (nx.NetworkXAlgorithmError, nx.NetworkXError):
+            continue
+        null_values.append(float(nx.average_clustering(candidate)))
+    if not null_values:
+        return {"valid": False, "reason": "rewiring_failed"}
+    null_array = np.asarray(null_values)
+    null_std = float(null_array.std(ddof=1)) if len(null_array) > 1 else 0.0
+    return {
+        "valid": True,
+        "observed_clustering": observed,
+        "null_mean": float(null_array.mean()),
+        "null_std": null_std,
+        "z_score": (observed - float(null_array.mean())) / null_std if null_std > 0 else None,
+        "empirical_p_value": float((1 + np.sum(null_array >= observed)) / (len(null_array) + 1)),
+        "simulations": len(null_array),
+    }
+
+
+def semantic_stability_diagnostics(
+    embeddings: np.ndarray,
+    labels: np.ndarray,
+    projection: np.ndarray,
+    *,
+    n_bootstrap: int = 30,
+    seed: int = 42,
+) -> dict:
+    """Measure cluster seed/subsample stability and 2D neighborhood preservation."""
+    from sklearn.cluster import KMeans
+    from sklearn.manifold import trustworthiness
+    from sklearn.metrics import adjusted_rand_score
+
+    matrix = np.asarray(embeddings, dtype=float)
+    labels = np.asarray(labels)
+    projection = np.asarray(projection, dtype=float)
+    if matrix.ndim != 2 or len(matrix) < 10 or len(np.unique(labels)) < 2:
+        return {"valid": False, "reason": "insufficient_semantic_population"}
+    if projection.shape != (len(matrix), 2):
+        return {"valid": False, "reason": "invalid_projection"}
+    clusters = len(np.unique(labels))
+    sample_size = max(clusters * 2, int(np.ceil(len(matrix) * 0.8)))
+    sample_size = min(sample_size, len(matrix))
+    rng = np.random.default_rng(seed)
+    ari_values: list[float] = []
+    for run in range(max(1, n_bootstrap)):
+        indices = np.sort(rng.choice(len(matrix), size=sample_size, replace=False))
+        predicted = KMeans(n_clusters=clusters, random_state=seed + run, n_init=10).fit_predict(
+            matrix[indices]
+        )
+        ari_values.append(float(adjusted_rand_score(labels[indices], predicted)))
+    neighbors = min(10, max(1, (len(matrix) - 1) // 2))
+    return {
+        "valid": True,
+        "bootstrap_ari_mean": float(np.mean(ari_values)),
+        "bootstrap_ari_min": float(np.min(ari_values)),
+        "projection_trustworthiness": float(
+            trustworthiness(matrix, projection, n_neighbors=neighbors)
+        ),
+        "n_bootstrap": len(ari_values),
+        "clusters": clusters,
+    }
+
+
 def analyze_coauthorship_partners(
     graph,
     author_rows: pd.DataFrame,
@@ -1060,52 +1398,182 @@ def analyze_coauthorship_partners(
     return res_df
 
 
-def citation_determinants_glm(df: pd.DataFrame) -> dict:
-    """Estimate econometric determinants of citation counts via Poisson GLM."""
-    from sklearn.linear_model import PoissonRegressor
+def citation_determinants_glm(df: pd.DataFrame, *, observation_year: int = 2026) -> dict:
+    """Fit an exposure-adjusted count GLM with robust uncertainty estimates.
 
-    valid = df.dropna(subset=["citation_count", "year"]).copy()
-    if len(valid) < 20:
-        return {"valid": False, "features": [], "coefficients": [], "irr": []}
+    Citation counts accumulate over time, so ``log(article_age + 1)`` is used
+    as an exposure offset. Numeric predictors are standardized and rows with
+    missing predictors are excluded instead of silently filled. A negative
+    binomial variance is used when the preliminary Poisson fit is materially
+    overdispersed.
+    """
+    from statsmodels.genmod.families import NegativeBinomial, Poisson
+    from statsmodels.genmod.generalized_linear_model import GLM
+    from statsmodels.tools.tools import add_constant
 
-    y = valid["citation_count"].clip(lower=0).to_numpy()
-    years = valid["year"].to_numpy()
-    ref_count = (
-        valid["reference_count"].fillna(0).to_numpy()
-        if "reference_count" in valid.columns
-        else np.zeros(len(valid))
-    )
-    author_count = (
-        valid["authors"].apply(lambda a: len(a) if isinstance(a, list) else 1).to_numpy()
-        if "authors" in valid.columns
-        else np.ones(len(valid))
-    )
-    is_ieee = (
-        valid["source"].apply(lambda s: 1 if s == "ieee" else 0).to_numpy()
-        if "source" in valid.columns
-        else np.zeros(len(valid))
-    )
+    feature_names = ["qtd_referencias", "tamanho_equipe", "origem_ieee"]
+    required = {"citation_count", "year", "reference_count", "authors", "source"}
+    if df.empty or not required.issubset(df.columns):
+        return {
+            "valid": False,
+            "features": feature_names,
+            "coefficients": [],
+            "irr": [],
+            "n_total": len(df),
+            "n_used": 0,
+            "coverage": 0.0,
+            "warning": "Absence of required fields.",
+        }
 
-    X = np.column_stack([years, ref_count, author_count, is_ieee])
-    feature_names = [
-        "ano_publicacao",
-        "qtd_referencias",
-        "tamanho_equipe",
-        "origem_ieee",
+    missingness = {
+        column: float(df[column].isna().mean()) if column in df.columns else 1.0
+        for column in required
+    }
+    valid = df.copy()
+    valid["citations"] = pd.to_numeric(valid["citation_count"], errors="coerce")
+    valid["publication_year"] = pd.to_numeric(valid["year"], errors="coerce")
+    valid["references"] = pd.to_numeric(valid["reference_count"], errors="coerce")
+    valid["team_size"] = valid["authors"].apply(
+        lambda authors: len(authors) if isinstance(authors, list) and authors else np.nan
+    )
+    valid["is_ieee"] = valid["source"].map({"ieee": 1.0, "elsevier": 0.0})
+    valid = valid.dropna(
+        subset=["citations", "publication_year", "references", "team_size", "is_ieee"]
+    )
+    valid = valid[
+        (valid["citations"] >= 0)
+        & valid["publication_year"].between(1900, observation_year)
+        & (valid["references"] >= 0)
+        & (valid["team_size"] > 0)
     ]
+    n_total = len(df)
+    n_used = len(valid)
+    coverage = n_used / n_total if n_total else 0.0
+    if n_used < 20:
+        return {
+            "valid": False,
+            "features": feature_names,
+            "coefficients": [],
+            "irr": [],
+            "n_total": n_total,
+            "n_used": n_used,
+            "coverage": coverage,
+            "warning": "Less than 20 complete observations.",
+        }
+
+    numeric = valid[["references", "team_size"]].astype(float)
+    std = numeric.std(ddof=0).replace(0, 1.0)
+    standardized = (numeric - numeric.mean()) / std
+    design = pd.DataFrame(
+        {
+            "qtd_referencias": standardized["references"],
+            "tamanho_equipe": standardized["team_size"],
+            "origem_ieee": valid["is_ieee"].astype(float),
+        },
+        index=valid.index,
+    )
+    omitted = [column for column in feature_names if design[column].nunique() < 2]
+    active_features = [column for column in feature_names if column not in omitted]
+    design = design[active_features]
+    if not active_features:
+        return {
+            "valid": False,
+            "features": [],
+            "coefficients": [],
+            "irr": [],
+            "n_total": n_total,
+            "n_used": n_used,
+            "coverage": coverage,
+            "warning": "The predictors do not vary in this cut.",
+        }
+    design = add_constant(design, has_constant="add")
+    matrix = design.astype(float).to_numpy()
+    condition_number = float(np.linalg.cond(matrix))
+    vif: dict[str, float] = {}
+    if len(active_features) > 1:
+        from statsmodels.stats.outliers_influence import variance_inflation_factor
+
+        for index, feature in enumerate(design.columns):
+            if feature != "const":
+                vif[feature] = float(variance_inflation_factor(matrix, index))
+    response = valid["citations"].astype(float)
+    exposure = np.log((observation_year - valid["publication_year"] + 1).clip(lower=1))
 
     try:
-        model = PoissonRegressor(alpha=0.0, max_iter=300).fit(X, y)
-        irr = np.exp(model.coef_)
+        poisson = GLM(
+            response,
+            design,
+            family=Poisson(),
+            offset=exposure,
+        ).fit(cov_type="HC3")
+        dispersion = float(poisson.pearson_chi2 / max(poisson.df_resid, 1))
+        if dispersion > 1.5:
+            fitted = GLM(
+                response,
+                design,
+                family=NegativeBinomial(alpha=max(dispersion - 1.0, 0.01)),
+                offset=exposure,
+            ).fit(cov_type="HC3")
+            family = "negative_binomial"
+        else:
+            fitted = poisson
+            family = "poisson"
+        coefficients = fitted.params.reindex(active_features)
+        intervals = fitted.conf_int().reindex(active_features)
+        try:
+            cooks_distance = np.asarray(fitted.get_influence().cooks_distance[0], dtype=float)
+            influential_count = int(np.sum(cooks_distance > (4.0 / max(len(cooks_distance), 1))))
+            max_cooks_distance = float(np.nanmax(cooks_distance, initial=0.0))
+        except (AttributeError, ValueError, np.linalg.LinAlgError):
+            influential_count = 0
+            max_cooks_distance = float("nan")
+        observed_zero_fraction = float((response == 0).mean())
+        predicted_zero_fraction = float(np.exp(-np.asarray(fitted.fittedvalues)).mean())
         return {
             "valid": True,
-            "features": feature_names,
-            "coefficients": [float(c) for c in model.coef_],
-            "irr": [float(val) for val in irr],
-            "score": float(model.score(X, y)),
+            "features": active_features,
+            "coefficients": coefficients.astype(float).tolist(),
+            "irr": np.exp(coefficients).astype(float).tolist(),
+            "irr_lower": np.exp(intervals[0]).astype(float).tolist(),
+            "irr_upper": np.exp(intervals[1]).astype(float).tolist(),
+            "p_values": fitted.pvalues.reindex(active_features).astype(float).tolist(),
+            "family": family,
+            "dispersion": dispersion,
+            "missingness": missingness,
+            "condition_number": condition_number,
+            "vif": vif,
+            "candidate_aic": {
+                "poisson": float(poisson.aic),
+                family: float(fitted.aic),
+            },
+            "observed_zero_fraction": observed_zero_fraction,
+            "predicted_zero_fraction": predicted_zero_fraction,
+            "zero_inflation_gap": observed_zero_fraction - predicted_zero_fraction,
+            "influential_count": influential_count,
+            "max_cooks_distance": max_cooks_distance,
+            "score": float(1 - fitted.deviance / fitted.null_deviance)
+            if fitted.null_deviance > 0
+            else float("nan"),
+            "n_total": n_total,
+            "n_used": n_used,
+            "coverage": coverage,
+            "warning": (
+                "Predictors without variation were omitted:" + ", ".join(omitted)
+                if omitted
+                else None
+            ),
         }
-    except Exception:
-        return {"valid": False, "features": feature_names, "coefficients": [], "irr": []}
+    except (ValueError, np.linalg.LinAlgError):
+        return {
+            "valid": False,
+            "features": feature_names,
+            "coefficients": [],
+            "irr": [],
+            "n_total": n_total,
+            "n_used": n_used,
+            "coverage": coverage,
+            "warning": "The model did not converge to this cut.",
+        }
 
 
 def zipf_law_analysis(df: pd.DataFrame) -> dict:
@@ -1233,11 +1701,11 @@ def zipf_law_analysis(df: pd.DataFrame) -> dict:
 
     top_df = pd.DataFrame(
         {
-            "Posto (r)": ranks[:30].astype(int),
-            "Termo": words[:30],
-            "Frequência Real (f)": freqs[:30].astype(int),
-            "Previsto Zipf Ideal": expected_ideal[:30].round(1),
-            "Ajuste Empírico": (10 ** pred[:30]).round(1),
+            "Rank (r)": ranks[:30].astype(int),
+            "Term": words[:30],
+            "Real Frequency (f)": freqs[:30].astype(int),
+            "Ideal Zipf forecast": expected_ideal[:30].round(1),
+            "Empirical Adjustment": (10 ** pred[:30]).round(1),
         }
     )
 
@@ -1334,10 +1802,10 @@ def dynamic_topic_ctfidf(
                 theme_res[th] = top_kws
                 summary_rows.append(
                     {
-                        "Época": epoch_name,
-                        "Tema": th,
-                        "Termos Característicos (c-TF-IDF)": ", ".join(top_kws),
-                        "Artigos": int((sub["theme_label"] == th).sum()),
+                        "Time": epoch_name,
+                        "Theme": th,
+                        "Characteristic Terms (c-TF-IDF)": ", ".join(top_kws),
+                        "Articles": int((sub["theme_label"] == th).sum()),
                     }
                 )
 
@@ -1421,21 +1889,21 @@ def detect_bibliometric_anomalies(df: pd.DataFrame, contamination: float = 0.03)
 
         for i in range(len(res)):
             if preds[i] != -1:
-                reasons.append("Padrão Típico / Consistente")
+                reasons.append("Typical / Consistent Pattern")
                 continue
             r_list = []
             if cites[i] >= cite_p95 and years[i] >= 2018:
-                r_list.append(f"Hiper-citado recente ({int(cites[i])} citações)")
+                r_list.append(f"Recently hyper-cited ({int(cites[i])} citations)")
             elif cites[i] >= cite_p95:
-                r_list.append(f"Citação extrema ({int(cites[i])} citações)")
+                r_list.append(f"Extreme citation count ({int(cites[i])} citations)")
             if author_counts[i] >= author_p98 and author_counts[i] >= 10:
-                r_list.append(f"Mega-equipe ({int(author_counts[i])} autores)")
+                r_list.append(f"Mega-team ({int(author_counts[i])} authors)")
             if years[i] < 1990:
-                r_list.append(f"Artigo histórico ({int(years[i])})")
+                r_list.append(f"Historical article ({int(years[i])})")
             if rel[i] < 0.25:
-                r_list.append(f"Margem semântica divergente ({rel[i]:.2f})")
+                r_list.append(f"Divergent semantic margin ({rel[i]:.2f})")
             if not r_list:
-                r_list.append("Atipicidade multidimensional conjunta")
+                r_list.append("Joint multidimensional atypicality")
             reasons.append("; ".join(r_list))
 
         res["anomaly_reason"] = reasons
@@ -1445,454 +1913,6 @@ def detect_bibliometric_anomalies(df: pd.DataFrame, contamination: float = 0.03)
         res["anomaly_reason"] = "Erro no ajuste"
 
     return res
-
-
-def callon_strategic_diagram(
-    df: pd.DataFrame, embeddings: np.ndarray | None = None, dois: list[str] | None = None
-) -> dict:
-    """Compute Callon's Strategic Diagram (1991) metrics: Density vs. Centrality.
-
-    - Callon's Density (Y-axis): Average internal cohesion of a theme (mean pairwise cosine similarity of articles within theme).
-    - Callon's Centrality (X-axis): Average external interaction / structural importance (mean cosine similarity of theme centroid to other theme centroids).
-    Divides themes into four strategic quadrants:
-      Q1 (Motor Themes): High Centrality, High Density
-      Q2 (Specialized/Niche Themes): Low Centrality, High Density
-      Q3 (Emerging or Marginal Themes): Low Centrality, Low Density
-      Q4 (Basic/Transversal Themes): High Centrality, Low Density
-    """
-    if df.empty or "theme_label" not in df.columns or embeddings is None or dois is None:
-        return {"themes_df": pd.DataFrame(), "median_density": 0.0, "median_centrality": 0.0}
-
-    doi_to_idx = {d: i for i, d in enumerate(dois)}
-    valid = df.copy()
-    valid["emb_idx"] = valid["doi"].map(doi_to_idx)
-    valid = valid.dropna(subset=["emb_idx", "theme_label"])
-    if valid.empty:
-        return {"themes_df": pd.DataFrame(), "median_density": 0.0, "median_centrality": 0.0}
-
-    valid["emb_idx"] = valid["emb_idx"].astype(int)
-
-    # Normalize embeddings
-    norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
-    norms[norms == 0] = 1.0
-    normed = embeddings / norms
-
-    theme_stats = []
-    centroids = {}
-    theme_groups = {}
-
-    for theme, grp in valid.groupby("theme_label"):
-        idxs = grp["emb_idx"].to_numpy()
-        theme_groups[theme] = idxs
-        sub = normed[idxs]
-        cent = sub.mean(axis=0)
-        c_norm = np.linalg.norm(cent)
-        centroids[theme] = cent / (c_norm if c_norm > 0 else 1.0)
-
-    for theme, idxs in theme_groups.items():
-        sub = normed[idxs]
-        n_docs = len(sub)
-        # Internal density
-        if n_docs > 1:
-            sim_mat = sub @ sub.T
-            np.fill_diagonal(sim_mat, 0)
-            density = float(sim_mat.sum() / (n_docs * (n_docs - 1)))
-        else:
-            density = 1.0
-
-        # External centrality: cosine with other theme centroids
-        t_cent = centroids[theme]
-        other_sims = [float(np.dot(t_cent, centroids[o])) for o in centroids if o != theme]
-        centrality = float(np.mean(other_sims)) if other_sims else 0.0
-
-        # Citations & margin
-        grp = valid[valid["theme_label"] == theme]
-        mean_cites = float(
-            pd.to_numeric(grp.get("citation_count"), errors="coerce").fillna(0).mean()
-        )
-        mean_margin = float(
-            pd.to_numeric(grp.get("relevance_margin"), errors="coerce").fillna(0).mean()
-        )
-
-        theme_stats.append(
-            {
-                "theme": theme,
-                "density": density,
-                "centrality": centrality,
-                "n_articles": n_docs,
-                "mean_citations": round(mean_cites, 1),
-                "mean_margin": round(mean_margin, 3),
-            }
-        )
-
-    res_df = pd.DataFrame(theme_stats)
-    if res_df.empty:
-        return {"themes_df": pd.DataFrame(), "median_density": 0.0, "median_centrality": 0.0}
-
-    med_density = float(res_df["density"].median())
-    med_centrality = float(res_df["centrality"].median())
-
-    res_df["centrality_centered"] = res_df["centrality"] - med_centrality
-    res_df["density_centered"] = res_df["density"] - med_density
-
-    # Assign Callon Quadrant
-    def _quadrant(r):
-        c, d = r["centrality_centered"], r["density_centered"]
-        if c >= 0 and d >= 0:
-            return "Q1: Temas Motores (Motor)"
-        elif c < 0 and d >= 0:
-            return "Q2: Temas Especializados / Nicho"
-        elif c < 0 and d < 0:
-            return "Q3: Temas Emergentes ou Marginais"
-        else:
-            return "Q4: Temas Básicos / Transversais"
-
-    res_df["quadrant"] = res_df.apply(_quadrant, axis=1)
-
-    return {
-        "themes_df": res_df,
-        "median_density": med_density,
-        "median_centrality": med_centrality,
-    }
-
-
-def keyword_cooccurrence_graph(
-    df: pd.DataFrame, min_cooccurrence: int = 3, top_n_keywords: int = 40
-) -> dict:
-    """Build a keyword co-occurrence network with Jaccard edge weights and Louvain clustering."""
-    import itertools
-    from collections import Counter
-
-    import networkx as nx
-
-    if df.empty or "keywords" not in df.columns:
-        return {"nodes": [], "edges": [], "n_communities": 0}
-
-    kw_counts = Counter()
-    doc_kws = []
-    # Stopwords/generic terms in keywords to filter
-    generic_kws = {
-        "planning",
-        "distribution systems",
-        "distribution system",
-        "distribution network",
-        "distribution networks",
-        "electric power",
-        "power distribution",
-        "power systems",
-        "paper",
-        "method",
-        "models",
-    }
-
-    for kws in df["keywords"]:
-        if not isinstance(kws, list):
-            continue
-        cleaned = [
-            k.strip().lower()
-            for k in kws
-            if len(k.strip()) > 2 and k.strip().lower() not in generic_kws
-        ]
-        unique_k = sorted(set(cleaned))
-        if unique_k:
-            doc_kws.append(unique_k)
-            kw_counts.update(unique_k)
-
-    top_keywords = {term for term, _ in kw_counts.most_common(top_n_keywords)}
-    if not top_keywords:
-        return {"nodes": [], "edges": [], "n_communities": 0}
-
-    pair_counts = Counter()
-    for k_list in doc_kws:
-        filtered = [k for k in k_list if k in top_keywords]
-        for k1, k2 in itertools.combinations(filtered, 2):
-            pair_counts[(k1, k2)] += 1
-
-    # Filter by min_cooccurrence
-    edges = []
-    for (k1, k2), count in pair_counts.items():
-        if count >= min_cooccurrence:
-            jaccard = count / (kw_counts[k1] + kw_counts[k2] - count)
-            edges.append((k1, k2, count, jaccard))
-
-    G = nx.Graph()
-    for kw in top_keywords:
-        G.add_node(kw, count=kw_counts[kw])
-    for k1, k2, count, jaccard in edges:
-        G.add_edge(k1, k2, weight=count, jaccard=jaccard)
-
-    # Remove isolated nodes
-    isolated = list(nx.isolates(G))
-    G.remove_nodes_from(isolated)
-
-    if len(G.nodes) == 0:
-        return {"nodes": [], "edges": [], "n_communities": 0}
-
-    # Community detection via Louvain
-    try:
-        from networkx.algorithms.community import louvain_communities
-
-        communities = list(louvain_communities(G, seed=42))
-    except Exception:
-        communities = [set(G.nodes())]
-
-    comm_map = {}
-    for c_id, comm in enumerate(communities):
-        for node in comm:
-            comm_map[node] = c_id
-
-    # Spring layout
-    pos = nx.spring_layout(G, k=0.4, seed=42, iterations=50)
-
-    nodes_data = []
-    for node in G.nodes():
-        x, y = pos[node]
-        nodes_data.append(
-            {
-                "id": node,
-                "x": float(x),
-                "y": float(y),
-                "count": kw_counts[node],
-                "community": comm_map.get(node, 0),
-            }
-        )
-
-    edges_data = []
-    for u, v, data in G.edges(data=True):
-        x0, y0 = pos[u]
-        x1, y1 = pos[v]
-        edges_data.append(
-            {
-                "source": u,
-                "target": v,
-                "weight": data["weight"],
-                "jaccard": round(data["jaccard"], 3),
-                "x0": float(x0),
-                "y0": float(y0),
-                "x1": float(x1),
-                "y1": float(y1),
-            }
-        )
-
-    return {
-        "nodes": nodes_data,
-        "edges": edges_data,
-        "n_communities": len(communities),
-    }
-
-
-def thematic_centroids_similarity(
-    df: pd.DataFrame, embeddings: np.ndarray | None = None, dois: list[str] | None = None
-) -> pd.DataFrame:
-    """Compute pairwise cosine similarity matrix between thematic cluster centroids in R^384."""
-    if df.empty or "theme_label" not in df.columns or embeddings is None or dois is None:
-        return pd.DataFrame()
-
-    doi_to_idx = {d: i for i, d in enumerate(dois)}
-    valid = df.copy()
-    valid["emb_idx"] = valid["doi"].map(doi_to_idx)
-    valid = valid.dropna(subset=["emb_idx", "theme_label"])
-    if valid.empty:
-        return pd.DataFrame()
-
-    valid["emb_idx"] = valid["emb_idx"].astype(int)
-
-    # Normalize embeddings
-    norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
-    norms[norms == 0] = 1.0
-    normed = embeddings / norms
-
-    centroids = {}
-    for theme, grp in valid.groupby("theme_label"):
-        idxs = grp["emb_idx"].to_numpy()
-        cent = normed[idxs].mean(axis=0)
-        c_norm = np.linalg.norm(cent)
-        centroids[theme] = cent / (c_norm if c_norm > 0 else 1.0)
-
-    themes = sorted(centroids.keys())
-    C = np.vstack([centroids[t] for t in themes])
-    matrix = C @ C.T
-
-    return pd.DataFrame(matrix, index=themes, columns=themes)
-
-
-def thematic_radar_metrics(df: pd.DataFrame) -> pd.DataFrame:
-    """Compute 5 standardized dimensions (0-100) per theme for radar chart visualization:
-
-    1. Momentum Recente (% docs >= 2021)
-    2. Densidade Teórica (média de referências por artigo)
-    3. Impacto Citatório (média de citações)
-    4. Aderência Temática (margem de relevância média)
-    5. Tamanho de Equipe (média de autores por artigo)
-    """
-    if df.empty or "theme_label" not in df.columns:
-        return pd.DataFrame()
-
-    res = df.copy()
-    res["is_recent"] = (pd.to_numeric(res.get("year"), errors="coerce").fillna(0) >= 2021).astype(
-        int
-    )
-    res["citations"] = pd.to_numeric(res.get("citation_count"), errors="coerce").fillna(0)
-    res["references"] = pd.to_numeric(res.get("reference_count"), errors="coerce").fillna(0)
-    res["margin"] = pd.to_numeric(res.get("relevance_margin"), errors="coerce").fillna(0)
-    if "authors" in res.columns:
-        res["n_authors"] = res["authors"].apply(lambda a: len(a) if isinstance(a, list) else 1)
-    else:
-        res["n_authors"] = 1
-
-    stats = (
-        res.groupby("theme_label")
-        .agg(
-            n_articles=("id", "count"),
-            pct_recent=("is_recent", "mean"),
-            mean_citations=("citations", "mean"),
-            mean_refs=("references", "mean"),
-            mean_margin=("margin", "mean"),
-            mean_authors=("n_authors", "mean"),
-        )
-        .reset_index()
-    )
-
-    # Scale each dimension to 0-100
-    for col in ("pct_recent", "mean_citations", "mean_refs", "mean_margin", "mean_authors"):
-        min_v = stats[col].min()
-        max_v = stats[col].max()
-        range_v = max_v - min_v if max_v > min_v else 1.0
-        stats[f"{col}_score"] = ((stats[col] - min_v) / range_v * 100).round(1)
-
-    return stats
-
-
-def multivariate_correlation_matrix(df: pd.DataFrame) -> pd.DataFrame:
-    """Compute Spearman rank correlation matrix across 7 bibliometric and semantic variables."""
-    if df.empty:
-        return pd.DataFrame()
-
-    numeric_cols = {
-        "Ano": "year",
-        "Citações": "citation_count",
-        "Referências": "reference_count",
-        "Score Relevância": "relevance_score",
-        "Margem Relevância": "relevance_margin",
-    }
-    corr_df = pd.DataFrame()
-    for label, col in numeric_cols.items():
-        if col in df.columns:
-            corr_df[label] = pd.to_numeric(df[col], errors="coerce")
-        else:
-            corr_df[label] = 0.0
-
-    if "abstract" in df.columns:
-        corr_df["Tam. Abstract (carac.)"] = df["abstract"].fillna("").astype(str).apply(len)
-    else:
-        corr_df["Tam. Abstract (carac.)"] = 0
-
-    if "authors" in df.columns:
-        corr_df["Nº Autores"] = df["authors"].apply(lambda a: len(a) if isinstance(a, list) else 1)
-    else:
-        corr_df["Nº Autores"] = 1
-
-    corr = corr_df.corr(method="spearman").round(3)
-    # Fill diagonal with 1.0 and off-diagonal NaNs with 0.0 for zero-variance attributes
-    for col in corr.columns:
-        if pd.isna(corr.loc[col, col]):
-            corr.loc[col, col] = 1.0
-    corr = corr.fillna(0.0)
-
-    return corr
-
-
-def shannon_thematic_entropy(df: pd.DataFrame, min_year: int = 2000) -> pd.DataFrame:
-    """Compute Shannon Entropy H(t) and Gini-Simpson Index of thematic diversity over time."""
-    if df.empty or "theme_label" not in df.columns or "year" not in df.columns:
-        return pd.DataFrame()
-
-    res = df.copy()
-    res["year"] = pd.to_numeric(res["year"], errors="coerce")
-    res = res.dropna(subset=["year", "theme_label"])
-    res = res[res["year"] >= min_year]
-    if res.empty:
-        return pd.DataFrame()
-
-    records = []
-    for year, grp in sorted(res.groupby("year")):
-        counts = grp["theme_label"].value_counts()
-        total = counts.sum()
-        if total == 0:
-            continue
-        probs = counts / total
-        shannon = float(-np.sum(probs * np.log2(probs)))
-        simpson = float(1.0 - np.sum(probs**2))
-        records.append(
-            {
-                "year": int(year),
-                "shannon_entropy": round(shannon, 3),
-                "gini_simpson": round(simpson, 3),
-                "n_articles": len(grp),
-                "dominant_theme": counts.index[0],
-                "dominant_share": round(float(counts.iloc[0] / total * 100), 1),
-            }
-        )
-
-    return pd.DataFrame(records)
-
-
-def geographic_collaboration_stats(df: pd.DataFrame) -> dict:
-    """Compute country production counts, international collaboration rate, and bilateral country co-authorship pairs."""
-    import itertools
-    from collections import Counter
-
-    if df.empty or "countries" not in df.columns:
-        return {
-            "country_counts": pd.DataFrame(),
-            "collaboration_pairs": pd.DataFrame(),
-            "total_with_country": 0,
-            "intl_papers": 0,
-            "intl_pct": 0.0,
-        }
-
-    has_countries = df["countries"].dropna()
-    pair_counts = Counter()
-    country_counts = Counter()
-    intl_papers = 0
-    total_with_country = 0
-
-    for c_list in has_countries:
-        if not isinstance(c_list, list) or not c_list:
-            continue
-        total_with_country += 1
-        unique_c = sorted(set(str(c).strip() for c in c_list if str(c).strip()))
-        country_counts.update(unique_c)
-        if len(unique_c) > 1:
-            intl_papers += 1
-            for c1, c2 in itertools.combinations(unique_c, 2):
-                pair_counts[(c1, c2)] += 1
-
-    country_df = pd.DataFrame(
-        [{"country": c, "articles": n} for c, n in country_counts.most_common(20)]
-    )
-
-    pair_df = pd.DataFrame(
-        [
-            {
-                "country_a": p[0],
-                "country_b": p[1],
-                "pair": f"{p[0]} ↔ {p[1]}",
-                "collaborations": n,
-            }
-            for p, n in pair_counts.most_common(20)
-        ]
-    )
-
-    intl_pct = (intl_papers / total_with_country * 100) if total_with_country > 0 else 0.0
-
-    return {
-        "country_counts": country_df,
-        "collaboration_pairs": pair_df,
-        "total_with_country": total_with_country,
-        "intl_papers": intl_papers,
-        "intl_pct": round(intl_pct, 1),
-    }
 
 
 def optimization_methods_taxonomy(df: pd.DataFrame) -> dict:
@@ -1914,19 +1934,19 @@ def optimization_methods_taxonomy(df: pd.DataFrame) -> dict:
         return {"summary_df": pd.DataFrame(), "temporal_df": pd.DataFrame()}
 
     opt_patterns = {
-        "Otimização Multi-Objetivo": re.compile(r"multi-objective|pareto"),
-        "Algoritmos Genéticos (GA)": re.compile(r"genetic algorithm|\bga\b"),
-        "Otimização por Enxame (PSO)": re.compile(r"particle swarm|\bpso\b"),
-        "Prog. Linear Inteira Mista (MILP)": re.compile(r"milp|mixed-integer linear"),
-        "Aprendizado de Máquina & IA": re.compile(
+        "Multi-objective Optimization": re.compile(r"multi-objective|pareto"),
+        "Genetic Algorithms (GA)": re.compile(r"genetic algorithm|\bga\b"),
+        "Particle Swarm Optimization (PSO)": re.compile(r"particle swarm|\bpso\b"),
+        "Mixed-Integer Linear Programming (MILP)": re.compile(r"milp|mixed-integer linear"),
+        "Machine Learning & AI": re.compile(
             r"machine learning|deep learning|reinforcement learning|neural network"
         ),
-        "Meta-heurísticas Diversas": re.compile(
+        "Other Metaheuristics": re.compile(
             r"differential evolution|harmony search|simulated annealing|ant colony"
         ),
-        "Prog. Estocástica": re.compile(r"stochastic programming|scenario-based"),
-        "Otimização Robusta": re.compile(r"robust optimization|robust approach"),
-        "Relaxação Cônica / Convexa (SOCP)": re.compile(
+        "Stochastic Programming": re.compile(r"stochastic programming|scenario-based"),
+        "Robust Optimization": re.compile(r"robust optimization|robust approach"),
+        "Conical / Convex Relaxation (SOCP)": re.compile(
             r"second-order cone|conic|convex relaxation|socp"
         ),
     }
@@ -1981,22 +2001,22 @@ def benchmark_feeders_analysis(df: pd.DataFrame) -> dict:
         return {"feeders_df": pd.DataFrame(), "cross_matrix": pd.DataFrame()}
 
     feeder_patterns = {
-        "IEEE 33-Bus (Radial Padrão)": re.compile(r"33-bus|ieee 33|33 bus|33-node"),
+        "IEEE 33-Bus (standard radial)": re.compile(r"33-bus|ieee 33|33 bus|33-node"),
         "IEEE 69-Bus": re.compile(r"69-bus|ieee 69|69 bus|69-node"),
-        "Redes Reais de Concessionárias": re.compile(
+        "Real Utility Networks": re.compile(
             r"real distribution|real-world|practical distribution|actual distribution|utility network"
         ),
-        "Sistemas Regionais (Brasil / Europa)": re.compile(
+        "Regional Systems (Brazil / Europe)": re.compile(
             r"brazilian|european|california|uk distribution|nordic"
         ),
         "IEEE 123-Bus / 119-Bus": re.compile(r"123-bus|ieee 123|119-bus|ieee 119"),
     }
 
     resource_patterns = {
-        "Geração Solar (PV)": re.compile(r"photovoltaic|\bpv\b|solar"),
-        "Armazenamento / Baterias": re.compile(r"energy storage|battery|bess"),
-        "Veículos Elétricos (EV)": re.compile(r"electric vehicle|\bev\b|v2g|charging"),
-        "Reconfiguração de Redes": re.compile(r"reconfiguration|switching|switch"),
+        "Solar Generation (PV)": re.compile(r"photovoltaic|\bpv\b|solar"),
+        "Storage / Batteries": re.compile(r"energy storage|battery|bess"),
+        "Electric Vehicles (EV)": re.compile(r"electric vehicle|\bev\b|v2g|charging"),
+        "Network reconfiguration": re.compile(r"reconfiguration|switching|switch"),
     }
 
     if "_cached_titles_abs" not in df.columns:
@@ -2113,161 +2133,8 @@ def author_impact_advanced_indices(df: pd.DataFrame, min_papers: int = 2) -> pd.
     return pd.DataFrame(records).sort_values(by=["g_index", "h_index"], ascending=[False, False])
 
 
-def text_readability_and_stylometrics(df: pd.DataFrame) -> dict:
-    """Compute linguistic readability (Flesch Reading Ease, Flesch-Kincaid) and Type-Token Ratio."""
-    import re
-
-    if df.empty or "abstract" not in df.columns:
-        return {
-            "mean_fre": 0.0,
-            "mean_fkgl": 0.0,
-            "mean_ttr": 0.0,
-            "temporal_df": pd.DataFrame(),
-            "sample_df": pd.DataFrame(),
-        }
-
-    records = []
-    for _, row in df.iterrows():
-        text = str(row.get("abstract") or "")
-        if len(text.strip()) < 30:
-            continue
-
-        sentences = [s.strip() for s in re.split(r"[.!?]+", text) if len(s.strip()) > 3]
-        words = re.findall(r"\b[a-zA-Z]{2,}\b", text.lower())
-        if not sentences or not words:
-            continue
-
-        n_s = len(sentences)
-        n_w = len(words)
-
-        # Syllable approximation (vowel groups)
-        def _count_syllables(word: str) -> int:
-            w = word.lower()
-            count = len(re.findall(r"[aeiouy]+", w))
-            if w.endswith("e") and not w.endswith("le") and count > 1:
-                count -= 1
-            return max(1, count)
-
-        n_syll = sum(_count_syllables(w) for w in words)
-        asl = n_w / n_s
-        asw = n_syll / n_w
-
-        fre = 206.835 - (1.015 * asl) - (84.6 * asw)
-        fkgl = (0.39 * asl) + (11.8 * asw) - 15.59
-        ttr = len(set(words)) / n_w
-
-        year = pd.to_numeric(row.get("year"), errors="coerce")
-        cites = pd.to_numeric(row.get("citation_count"), errors="coerce")
-
-        records.append(
-            {
-                "id": row.get("id"),
-                "doi": row.get("doi"),
-                "year": int(year) if pd.notna(year) else 2015,
-                "citation_count": int(cites) if pd.notna(cites) else 0,
-                "fre": round(float(np.clip(fre, 0, 100)), 1),
-                "fkgl": round(float(np.clip(fkgl, 0, 30)), 1),
-                "ttr": round(float(ttr), 3),
-                "n_words": n_w,
-            }
-        )
-
-    res_df = pd.DataFrame(records)
-    if res_df.empty:
-        return {
-            "mean_fre": 0.0,
-            "mean_fkgl": 0.0,
-            "mean_ttr": 0.0,
-            "temporal_df": pd.DataFrame(),
-            "sample_df": pd.DataFrame(),
-        }
-
-    temporal = (
-        res_df[res_df["year"] >= 2005]
-        .groupby("year")
-        .agg(
-            mean_fre=("fre", "mean"),
-            mean_fkgl=("fkgl", "mean"),
-            mean_ttr=("ttr", "mean"),
-            n_articles=("id", "count"),
-        )
-        .reset_index()
-        .round(2)
-    )
-
-    return {
-        "mean_fre": round(float(res_df["fre"].mean()), 1),
-        "mean_fkgl": round(float(res_df["fkgl"].mean()), 1),
-        "mean_ttr": round(float(res_df["ttr"].mean()), 3),
-        "temporal_df": temporal,
-        "sample_df": res_df,
-    }
-
-
-def citation_longevity_and_decay(df: pd.DataFrame) -> dict:
-    """Analyze literature citation decay, half-life, and identify Evergreen classical papers."""
-    if df.empty or "year" not in df.columns:
-        return {
-            "half_life_years": 0.0,
-            "decay_curve": pd.DataFrame(),
-            "evergreen_df": pd.DataFrame(),
-        }
-
-    res = df.copy()
-    current_year = 2026
-    res["pub_year"] = pd.to_numeric(res["year"], errors="coerce")
-    res = res.dropna(subset=["pub_year"])
-    res["age"] = (current_year - res["pub_year"]).clip(lower=0)
-    res["cites"] = pd.to_numeric(res.get("citation_count"), errors="coerce").fillna(0)
-
-    # Citation accumulation by age
-    age_agg = res.groupby("age")["cites"].sum().reset_index()
-    age_agg = age_agg.sort_values(by="age")
-    age_agg["cum_cites"] = age_agg["cites"].cumsum()
-    total_cites = age_agg["cites"].sum()
-    age_agg["cum_pct"] = (
-        (age_agg["cum_cites"] / total_cites * 100).round(1) if total_cites > 0 else 0.0
-    )
-
-    # Find half-life age (50% of cumulative citations)
-    half_life = 0.0
-    for _, r in age_agg.iterrows():
-        if r["cum_pct"] >= 50.0:
-            half_life = float(r["age"])
-            break
-
-    # Evergreen papers: age >= 10, citations >= 40
-    evergreen = res[(res["age"] >= 10) & (res["cites"] >= 40)].copy()
-    evergreen["annual_velocity"] = (evergreen["cites"] / (evergreen["age"] + 1)).round(1)
-    evergreen = evergreen.sort_values(by="cites", ascending=False)
-
-    cols = ["id", "doi", "title", "year", "venue", "citation_count", "age", "annual_velocity"]
-    available_cols = [c for c in cols if c in evergreen.columns]
-
-    return {
-        "half_life_years": half_life,
-        "decay_curve": age_agg,
-        "evergreen_df": evergreen[available_cols].head(25),
-    }
-
-
 def objective_functions_taxonomy(df: pd.DataFrame) -> dict:
-    """Analyze mathematical objective functions and multi-criteria formulations.
-
-    Mapeia os critérios e objetivos otimizados na literatura:
-    - Custos Econômicos (CAPEX/OPEX de ativos)
-    - Confiabilidade & Índices de Interrupção (SAIDI/SAIFI/ENS)
-    - Perdas Técnicas de Energia (I^2R)
-    - Perfil de Tensão & Estabilidade
-    - Emissões & Descarbonização (CO2)
-    - Resiliência a Eventos Extremos (Blackouts/Clima)
-
-    Calcula:
-    - summary_df: [objective, articles, pct_recent, mean_citations]
-    - co_matrix: DataFrame simétrico de co-ocorrência dos objetivos
-    - multi_obj_ratio: percentual de artigos com >= 2 objetivos
-    - temporal_multiobj: série temporal de artigos mono-objetivo vs. multi-objetivo
-    """
+    """Analyze optimized objectives and multi-criteria formulations."""
     if df.empty:
         return {
             "summary_df": pd.DataFrame(),
@@ -2277,12 +2144,12 @@ def objective_functions_taxonomy(df: pd.DataFrame) -> dict:
         }
 
     objs = {
-        "Custos Econômicos": r"cost|capex|opex|investment|economic|capital expenditure",
-        "Confiabilidade (SAIDI/SAIFI/ENS)": r"reliability|saidi|saifi|ens|energy not supplied|interruption|outage|unserved",
-        "Perdas Técnicas": r"power loss|energy loss|technical loss|transmission loss|loss reduction",
-        "Perfil de Tensão": r"voltage profile|voltage deviation|voltage stability|power quality|voltage drop|voltage regulation",
-        "Descarbonização / Emissões": r"emission|carbon|decarboniz|greenhouse|environmental|co2",
-        "Resiliência": r"resilience|extreme weather|disaster|blackout|hardening|restoration",
+        "Economic Costs": r"cost|capex|opex|investment|economic|capital expenditure",
+        "Reliability (SAIDI/SAIFI/ENS)": r"reliability|saidi|saifi|ens|energy not supplied|interruption|outage|unserved",
+        "Technical losses": r"power loss|energy loss|technical loss|transmission loss|loss reduction",
+        "Voltage Profile": r"voltage profile|voltage deviation|voltage stability|power quality|voltage drop|voltage regulation",
+        "Decarbonization / Emissions": r"emission|carbon|decarboniz|greenhouse|environmental|co2",
+        "Resilience": r"resilience|extreme weather|disaster|blackout|hardening|restoration",
     }
 
     titles_abs = (
@@ -2354,15 +2221,7 @@ def objective_functions_taxonomy(df: pd.DataFrame) -> dict:
 
 
 def uncertainty_paradigms_analysis(df: pd.DataFrame) -> dict:
-    """Analyze mathematical paradigms for handling uncertainty in distribution systems.
-
-    - Programação Estocástica (Monte Carlo / Cenários)
-    - Otimização Robusta (Min-Max / Uncertainty Sets)
-    - Lógica Nebulosa (Fuzzy)
-    - Restrições Probabilísticas (Chance-Constrained)
-    - Otimização Distribucionalmente Robusta (DRO / Wasserstein)
-    - Abordagem Determinística
-    """
+    """Analyze mathematical paradigms for handling uncertainty in distribution systems."""
     if df.empty:
         return {
             "paradigms_df": pd.DataFrame(),
@@ -2371,19 +2230,19 @@ def uncertainty_paradigms_analysis(df: pd.DataFrame) -> dict:
         }
 
     paradigms = {
-        "Estocástico (Cenários / Monte Carlo)": r"stochastic|scenario-based|monte carlo|sample average",
-        "Otimização Robusta (Min-Max)": r"robust optimization|robust approach|uncertainty set|worst-case",
-        "Lógica Nebulosa (Fuzzy)": r"fuzzy",
-        "Distribucionalmente Robusta (DRO)": r"distributionally robust|wasserstein|ambiguity set",
-        "Restrição de Chance (Probabilística)": r"chance-constrained|chance constraint|probabilistic constraint",
-        "Determinístico (Caso Fixo)": r"deterministic",
+        "Stochastic (Scenarios / Monte Carlo)": r"stochastic|scenario-based|monte carlo|sample average",
+        "Robust Optimization (Min-Max)": r"robust optimization|robust approach|uncertainty set|worst-case",
+        "Fuzzy Logic": r"fuzzy",
+        "Distributionally Robust Optimization (DRO)": r"distributionally robust|wasserstein|ambiguity set",
+        "Chance Constraint (Probabilistic)": r"chance-constrained|chance constraint|probabilistic constraint",
+        "Deterministic (Fixed Case)": r"deterministic",
     }
 
     resources = {
-        "Geração Solar (PV)": r"photovoltaic|\bpv\b|solar",
-        "Baterias / Armazenamento (BESS)": r"energy storage|battery|bess",
-        "Veículos Elétricos (EV)": r"electric vehicle|\bev\b|v2g|charging",
-        "Incerteza de Demanda / Carga": r"load uncertainty|demand uncertainty|forecast error|load variation",
+        "Solar Generation (PV)": r"photovoltaic|\bpv\b|solar",
+        "Batteries / Storage (BESS)": r"energy storage|battery|bess",
+        "Electric Vehicles (EV)": r"electric vehicle|\bev\b|v2g|charging",
+        "Demand / Load Uncertainty": r"load uncertainty|demand uncertainty|forecast error|load variation",
     }
 
     titles_abs = (
@@ -2446,9 +2305,9 @@ def planning_time_horizons_analysis(df: pd.DataFrame) -> dict:
         return {"horizons_df": pd.DataFrame()}
 
     horizons = {
-        "Expansão Dinâmica Multi-Estágio": r"multi-stage|multistage|multi-year|sequential expansion|expansion planning|dynamic planning",
-        "Co-Otimização Planejamento + Operação": r"co-optimi|planning and operation|representative days|representative periods|operational constraints|chronological",
-        "Planejamento Estático (Ano-Alvo)": r"static planning|single-stage|target year|snapshot",
+        "Multistage Dynamic Expansion": r"multi-stage|multistage|multi-year|sequential expansion|expansion planning|dynamic planning",
+        "Co-Optimization Planning + Operation": r"co-optimi|planning and operation|representative days|representative periods|operational constraints|chronological",
+        "Static Planning (Target Year)": r"static planning|single-stage|target year|snapshot",
     }
 
     titles_abs = (
@@ -2485,14 +2344,14 @@ def computational_solvers_analysis(df: pd.DataFrame) -> dict:
         return {"solvers_df": pd.DataFrame(), "ecosystem_df": pd.DataFrame()}
 
     solvers = {
-        "GAMS / AMPL (Modeladores Algébricos)": (r"gams|ampl", "Modelador Algébrico"),
-        "MATLAB / Simulink": (r"matlab|simulink", "Scripting & Simulação"),
-        "CPLEX (IBM)": (r"cplex", "Solver Exato Comercial"),
-        "DIgSILENT PowerFactory": (r"digsilent|powerfactory", "Simulador Elétrico Especializado"),
-        "Gurobi Optimizer": (r"gurobi", "Solver Exato Comercial"),
-        "OpenDSS (EPRI)": (r"opendss|open dss", "Simulador de Distribuição"),
-        "Python (Pyomo / Pandapower)": (r"python|pyomo|pandapower", "Scripting & Open-Source"),
-        "PSCAD / EMTP": (r"pscad|emtp", "Simulador de Transitórios"),
+        "GAMS / AMPL (Algebraic Modelers)": (r"gams|ampl", "Algebraic Modeler"),
+        "MATLAB / Simulink": (r"matlab|simulink", "Scripting & Simulation"),
+        "CPLEX (IBM)": (r"cplex", "Commercial Exact Solver"),
+        "DIgSILENT PowerFactory": (r"digsilent|powerfactory", "Specialized Electric Simulator"),
+        "Gurobi Optimizer": (r"gurobi", "Commercial Exact Solver"),
+        "OpenDSS (EPRI)": (r"opendss|open dss", "Distribution Simulator"),
+        "Python (Pyomo / Pandapower)": (r"python|pyomo|pandapower", "Scripting & Open Source"),
+        "PSCAD / EMTP": (r"pscad|emtp", "Transient Simulator"),
     }
 
     titles_abs = (
@@ -2540,11 +2399,11 @@ def mathematical_complexity_spectrum(df: pd.DataFrame) -> dict:
         return {"spectrum_df": pd.DataFrame(), "temporal_spectrum": pd.DataFrame()}
 
     classes = {
-        "Prog. Linear / MILP (Exato)": r"milp|mixed-integer linear|\blp\b|linear programming",
-        "Relaxação Convexa / Cônica (SOCP/SDP)": r"second-order cone|socp|semidefinite|convex relaxation|conic",
-        "Prog. Não-Linear (NLP / MINLP)": r"minlp|mixed-integer nonlinear|nonlinear programming|\bnlp\b|non-convex",
-        "Meta-heurísticas (GA, PSO, DE, ACO)": r"genetic algorithm|particle swarm|\bpso\b|\bga\b|differential evolution|ant colony|harmony search|simulated annealing",
-        "IA & Aprendizado por Reforço": r"machine learning|deep learning|reinforcement learning|neural network|q-learning",
+        "Linear Programming / MILP (Exact)": r"milp|mixed-integer linear|\blp\b|linear programming",
+        "Convex / Conical Relaxation (SOCP/SDP)": r"second-order cone|socp|semidefinite|convex relaxation|conic",
+        "Non-Linear Prog (NLP / MINLP)": r"minlp|mixed-integer nonlinear|nonlinear programming|\bnlp\b|non-convex",
+        "Metaheuristics (GA, PSO, DE, ACO)": r"genetic algorithm|particle swarm|\bpso\b|\bga\b|differential evolution|ant colony|harmony search|simulated annealing",
+        "AI & Reinforcement Learning": r"machine learning|deep learning|reinforcement learning|neural network|q-learning",
     }
 
     titles_abs = (
@@ -2653,390 +2512,20 @@ def author_m_quotient_analysis(df: pd.DataFrame, min_papers: int = 2) -> pd.Data
 # ---------------------------------------------------------------------------
 
 
-def price_index_analysis(df: pd.DataFrame) -> dict:
-    """Evaluate theoretical recency via Derek de Solla Price's (1965) Index.
+def technological_burst_detection(
+    df: pd.DataFrame,
+    top_n: int = 15,
+    *,
+    state_multiplier: float = 2.0,
+    transition_penalty: float = 1.0,
+) -> dict:
+    """Detect two-state Kleinberg bursts in yearly concept frequencies.
 
-    The Price Index measures the proportion of cited references published in the
-    preceding 5 years. In fields with high technological dynamism (e.g. AI, Storage),
-    the Price Index typically exceeds 35-40%, whereas canonical fields stay below 25%.
-    """
-    if df.empty or "year" not in df.columns:
-        return {
-            "global_price_index": 0.0,
-            "theme_price_df": pd.DataFrame(),
-            "yearly_price_df": pd.DataFrame(),
-        }
-
-    res = df.copy()
-    res["pub_year"] = valid_years(res, lo=1990, hi=2026)
-    res = res.dropna(subset=["pub_year"])
-    if res.empty:
-        return {
-            "global_price_index": 0.0,
-            "theme_price_df": pd.DataFrame(),
-            "yearly_price_df": pd.DataFrame(),
-        }
-
-    res["refs"] = pd.to_numeric(res.get("reference_count"), errors="coerce").fillna(20.0)
-    res["cites"] = pd.to_numeric(res.get("citation_count"), errors="coerce").fillna(0.0)
-
-    # Calibrate Price's Index model:
-    # Based on Price (1965) and Glänzel & Schoepflin (1995),
-    # P_i relates to contemporary reference expansion and publication vintage.
-    year_factor = ((res["pub_year"] - 1990) / 35.0).clip(0, 1) * 15.0
-    ref_factor = np.minimum(res["refs"] / 40.0, 1.5) * 8.0
-    margin_factor = 0.0
-    if "relevance_margin" in res.columns:
-        margin_factor = (
-            pd.to_numeric(res["relevance_margin"], errors="coerce").fillna(0.0) * 5.0
-        ).clip(-5, 10)
-
-    res["price_index"] = (22.0 + year_factor + ref_factor + margin_factor).clip(10.0, 65.0)
-
-    # Global index
-    global_price = float(res["price_index"].mean())
-
-    # By Theme
-    if "theme_label" in res.columns:
-        theme_grp = (
-            res.groupby("theme_label")
-            .agg(
-                price_index=("price_index", "mean"),
-                mean_refs=("refs", "mean"),
-                articles=("title", "count"),
-                mean_cites=("cites", "mean"),
-            )
-            .reset_index()
-        )
-        theme_grp["price_index"] = theme_grp["price_index"].round(1)
-        theme_grp["mean_refs"] = theme_grp["mean_refs"].round(1)
-        theme_grp["mean_cites"] = theme_grp["mean_cites"].round(1)
-        theme_grp = theme_grp.sort_values(by="price_index", ascending=False)
-    else:
-        theme_grp = pd.DataFrame()
-
-    # Yearly evolution
-    yearly_grp = (
-        res.groupby("pub_year")
-        .agg(
-            price_index=("price_index", "mean"),
-            mean_refs=("refs", "mean"),
-            articles=("title", "count"),
-        )
-        .reset_index()
-    )
-    yearly_grp["pub_year"] = yearly_grp["pub_year"].astype(int)
-    yearly_grp["price_index"] = yearly_grp["price_index"].round(1)
-    yearly_grp["mean_refs"] = yearly_grp["mean_refs"].round(1)
-    yearly_grp = yearly_grp.sort_values(by="pub_year")
-
-    return {
-        "global_price_index": round(global_price, 1),
-        "theme_price_df": theme_grp,
-        "yearly_price_df": yearly_grp,
-    }
-
-
-def sleeping_beauties_detection(df: pd.DataFrame, min_age: int = 7) -> dict:
-    """Detect delayed recognition articles (Sleeping Beauties in Science).
-
-    Formalized by van Raan (2004) and Ke et al. (2015, PNAS). Identifies papers
-    published at least `min_age` years ago with significant cumulative citations
-    whose impact experienced a prolonged dormancy period before an awakening surge.
-    """
-    if df.empty or "year" not in df.columns:
-        return {"sleeping_beauties": pd.DataFrame(), "top_trajectories": pd.DataFrame(), "count": 0}
-
-    res = df.copy()
-    current_year = 2026
-    res["pub_year"] = valid_years(res, lo=1980, hi=current_year)
-    res = res.dropna(subset=["pub_year"])
-    res["age"] = (current_year - res["pub_year"]).clip(lower=0)
-    res["cites"] = pd.to_numeric(res.get("citation_count"), errors="coerce").fillna(0)
-
-    # Candidate filter: age >= min_age and citations >= 15
-    candidates = res[(res["age"] >= min_age) & (res["cites"] >= 15)].copy()
-    if candidates.empty:
-        return {"sleeping_beauties": pd.DataFrame(), "top_trajectories": pd.DataFrame(), "count": 0}
-
-    # Beauty Coefficient B calculation (Ke et al., 2015 approximation):
-    lags = []
-    b_scores = []
-
-    for _, row in candidates.iterrows():
-        age = row["age"]
-        cites = row["cites"]
-        lag = max(3, int(np.round(age * 0.55)))
-        b = (cites * lag) / (age + 1.0)
-        lags.append(lag)
-        b_scores.append(round(b, 2))
-
-    candidates["awakening_lag"] = lags
-    candidates["beauty_coefficient"] = b_scores
-    candidates = candidates.sort_values(by="beauty_coefficient", ascending=False)
-
-    keep_cols = [
-        "id",
-        "doi",
-        "title",
-        "year",
-        "venue",
-        "citation_count",
-        "age",
-        "awakening_lag",
-        "beauty_coefficient",
-        "theme_label",
-    ]
-    available_cols = [c for c in keep_cols if c in candidates.columns]
-    sb_table = candidates[available_cols].head(30)
-
-    # Historical trajectories for top 5 Sleeping Beauties
-    top5 = candidates.head(5)
-    traj_records = []
-    for _, r in top5.iterrows():
-        pub = int(r["pub_year"])
-        tot_c = float(r["cites"])
-        lag = int(r["awakening_lag"])
-        title_val = str(r.get("title") or "Artigo")
-        short_title = (title_val[:38] + "...") if len(title_val) > 40 else title_val
-
-        for yr in range(pub, current_year + 1):
-            elapsed = yr - pub
-            if elapsed <= lag:
-                cum = (tot_c * 0.12) * (elapsed / max(1, lag))
-            else:
-                surge_ratio = (elapsed - lag) / max(1, (r["age"] - lag))
-                cum = (tot_c * 0.12) + (tot_c * 0.88) * surge_ratio
-
-            traj_records.append(
-                {
-                    "paper": short_title,
-                    "year": yr,
-                    "cum_citations": round(cum, 1),
-                    "phase": "Dormência" if elapsed <= lag else "Despertar",
-                }
-            )
-
-    traj_df = pd.DataFrame(traj_records)
-
-    return {
-        "sleeping_beauties": sb_table,
-        "top_trajectories": traj_df,
-        "count": len(candidates),
-    }
-
-
-def disruption_index_estimation(df: pd.DataFrame) -> dict:
-    """Estimate the CD Disruption Index (Wu, Wang & Evans, Nature 2019).
-
-    CD in [-1, +1] quantifies whether a paper destabilizes the existing paradigm
-    (CD > 0, introducing novel concepts that eclipse older references) or
-    consolidates it (CD < 0, developing established approaches).
-    Also tests the hypothesis that small teams are more disruptive than large teams.
-    """
-    if df.empty:
-        return {
-            "disruption_df": pd.DataFrame(),
-            "team_size_analysis": pd.DataFrame(),
-            "theme_disruption": pd.DataFrame(),
-            "disruptive_ratio": 0.0,
-        }
-
-    res = df.copy()
-    res["cites"] = pd.to_numeric(res.get("citation_count"), errors="coerce").fillna(0.0)
-    res["refs"] = pd.to_numeric(res.get("reference_count"), errors="coerce").fillna(18.0)
-
-    def get_team_size(authors_val) -> int:
-        if isinstance(authors_val, list):
-            return len(authors_val) if authors_val else 1
-        if isinstance(authors_val, str) and authors_val.strip():
-            parts = [p.strip() for p in re.split(r"[,;]", authors_val) if p.strip()]
-            return len(parts) if parts else 1
-        return 1
-
-    res["team_size"] = res["authors"].apply(get_team_size) if "authors" in res.columns else 1
-    res["team_bucket"] = res["team_size"].apply(lambda n: str(n) if n <= 5 else "6+")
-
-    # CD Index model:
-    # High citations relative to prior references, amplified by semantic margin / originality
-    # produces positive disruption.
-    log_c = np.log1p(res["cites"])
-    log_r = np.log1p(res["refs"])
-    raw_cd = (log_c - 0.85 * log_r) / 3.0
-
-    if "relevance_margin" in res.columns:
-        margin = pd.to_numeric(res["relevance_margin"], errors="coerce").fillna(0.5)
-        raw_cd += (margin - 0.5) * 0.4
-
-    team_penalty = (res["team_size"] - 2.5) * 0.035
-    res["cd_index"] = np.clip(np.tanh(raw_cd - team_penalty), -1.0, 1.0).round(3)
-    res["is_disruptive"] = res["cd_index"] > 0
-
-    disruptive_ratio = float((res["is_disruptive"].sum() / len(res)) * 100) if len(res) > 0 else 0.0
-
-    # Team size aggregation
-    order = ["1", "2", "3", "4", "5", "6+"]
-    team_agg = (
-        res.groupby("team_bucket")
-        .agg(
-            mean_cd=("cd_index", "mean"),
-            median_cd=("cd_index", "median"),
-            pct_disruptive=("is_disruptive", lambda s: float((s.sum() / len(s)) * 100)),
-            articles=("cites", "count"),
-        )
-        .reindex(order)
-        .dropna(subset=["articles"])
-        .reset_index()
-    )
-    team_agg["mean_cd"] = team_agg["mean_cd"].round(3)
-    team_agg["pct_disruptive"] = team_agg["pct_disruptive"].round(1)
-
-    # Theme disruption aggregation
-    if "theme_label" in res.columns:
-        theme_agg = (
-            res.groupby("theme_label")
-            .agg(
-                mean_cd=("cd_index", "mean"),
-                pct_disruptive=("is_disruptive", lambda s: float((s.sum() / len(s)) * 100)),
-                articles=("cites", "count"),
-            )
-            .reset_index()
-            .sort_values(by="mean_cd", ascending=False)
-        )
-        theme_agg["mean_cd"] = theme_agg["mean_cd"].round(3)
-        theme_agg["pct_disruptive"] = theme_agg["pct_disruptive"].round(1)
-    else:
-        theme_agg = pd.DataFrame()
-
-    return {
-        "disruption_df": res,
-        "team_size_analysis": team_agg,
-        "theme_disruption": theme_agg,
-        "disruptive_ratio": round(disruptive_ratio, 1),
-    }
-
-
-def open_access_impact_analysis(df: pd.DataFrame) -> dict:
-    """Analyze the Open Access Citation Advantage (OACA) and licensing dynamics.
-
-    Compares citation accrual between Open Access articles (e.g. Creative Commons licenses)
-    and proprietary closed-access publications across time.
-    """
-    if df.empty:
-        return {
-            "oa_share_pct": 0.0,
-            "oaca_ratio": 1.0,
-            "yearly_oa": pd.DataFrame(),
-            "comparison_table": pd.DataFrame(),
-            "license_dist": pd.DataFrame(),
-        }
-
-    res = df.copy()
-    res["pub_year"] = valid_years(res, lo=1995, hi=2026)
-    res = res.dropna(subset=["pub_year"])
-    res["cites"] = pd.to_numeric(res.get("citation_count"), errors="coerce").fillna(0)
-
-    def is_open_access(row) -> bool:
-        lic = str(row.get("license") or "").lower()
-        doc = str(row.get("document_type") or "").lower()
-        if any(w in lic for w in ("cc", "creative", "open", "gold", "by", "public")):
-            return True
-        if "open access" in doc or "open" in lic:
-            return True
-        return False
-
-    res["is_oa"] = res.apply(is_open_access, axis=1)
-
-    oa_count = res["is_oa"].sum()
-    if oa_count < 10 and "doi" in res.columns:
-        res["is_oa"] = res["doi"].apply(lambda d: hash(str(d)) % 5 == 0)
-
-    res["access_type"] = res["is_oa"].map(
-        {True: "Acesso Aberto (OA)", False: "Acesso Fechado / Assinatura"}
-    )
-
-    oa_share = float((res["is_oa"].sum() / len(res)) * 100) if len(res) > 0 else 0.0
-
-    oa_stats = res[res["is_oa"]]["cites"]
-    closed_stats = res[~res["is_oa"]]["cites"]
-
-    mean_oa = float(oa_stats.mean()) if len(oa_stats) > 0 else 0.0
-    mean_closed = float(closed_stats.mean()) if len(closed_stats) > 0 else 1.0
-    oaca_ratio = round(mean_oa / max(0.1, mean_closed), 2)
-
-    comp_rows = [
-        {
-            "Modalidade de Acesso": "Acesso Aberto (OA)",
-            "Artigos": int(len(oa_stats)),
-            "Citações Médias": round(mean_oa, 1),
-            "Mediana Citações": round(float(oa_stats.median()) if len(oa_stats) > 0 else 0.0, 1),
-            "Percentil 75": round(float(oa_stats.quantile(0.75)) if len(oa_stats) > 0 else 0.0, 1),
-        },
-        {
-            "Modalidade de Acesso": "Acesso Fechado (Paywall)",
-            "Artigos": int(len(closed_stats)),
-            "Citações Médias": round(mean_closed, 1),
-            "Mediana Citações": round(
-                float(closed_stats.median()) if len(closed_stats) > 0 else 0.0, 1
-            ),
-            "Percentil 75": round(
-                float(closed_stats.quantile(0.75)) if len(closed_stats) > 0 else 0.0, 1
-            ),
-        },
-    ]
-    comp_df = pd.DataFrame(comp_rows)
-
-    # Yearly OA penetration
-    yearly = (
-        res.groupby("pub_year")
-        .agg(
-            total=("cites", "count"),
-            oa_count=("is_oa", "sum"),
-        )
-        .reset_index()
-    )
-    yearly["pub_year"] = yearly["pub_year"].astype(int)
-    yearly["oa_pct"] = ((yearly["oa_count"] / yearly["total"]) * 100).round(1)
-
-    # Compute mean cites per year for OA and closed
-    mean_oa_yr = []
-    mean_closed_yr = []
-    for yr in yearly["pub_year"]:
-        sub_yr = res[res["pub_year"] == yr]
-        c_oa = sub_yr[sub_yr["is_oa"]]["cites"]
-        c_cl = sub_yr[~sub_yr["is_oa"]]["cites"]
-        mean_oa_yr.append(round(float(c_oa.mean()), 1) if len(c_oa) > 0 else 0.0)
-        mean_closed_yr.append(round(float(c_cl.mean()), 1) if len(c_cl) > 0 else 0.0)
-
-    yearly["mean_cites_oa"] = mean_oa_yr
-    yearly["mean_cites_closed"] = mean_closed_yr
-    yearly = yearly.sort_values(by="pub_year")
-
-    # License distribution
-    if "license" in res.columns:
-        lic_s = (
-            res["license"].fillna("Não especificado / Fechado").value_counts().head(8).reset_index()
-        )
-        lic_s.columns = ["Licença", "Quantidade"]
-    else:
-        lic_s = pd.DataFrame(
-            {"Licença": ["Fechado", "Aberto"], "Quantidade": [len(closed_stats), len(oa_stats)]}
-        )
-
-    return {
-        "oa_share_pct": round(oa_share, 1),
-        "oaca_ratio": oaca_ratio,
-        "yearly_oa": yearly,
-        "comparison_table": comp_df,
-        "license_dist": lic_s,
-    }
-
-
-def technological_burst_detection(df: pd.DataFrame, top_n: int = 15) -> dict:
-    """Implement Jon Kleinberg's (2002) Burst Detection for technological concepts.
-
-    Identifies technical terms in titles and abstracts that experienced sudden
-    surges in relative publication frequency (birth and maturity of research frontiers).
+    The observation at each year is the number of matching documents out of
+    all documents published that year. Dynamic programming chooses between a
+    baseline binomial state and a burst state with ``state_multiplier`` times
+    the baseline probability. Moving into the burst state incurs Kleinberg's
+    transition penalty; contiguous burst-state years become intervals.
     """
     if df.empty or "year" not in df.columns:
         return {
@@ -3076,8 +2565,41 @@ def technological_burst_detection(df: pd.DataFrame, top_n: int = 15) -> dict:
         "Soft Open Points (SOP)": r"\b(?:soft open points?|sop|power electronic devices?)\b",
     }
 
+    all_years = np.arange(int(res["pub_year"].min()), int(res["pub_year"].max()) + 1)
+    totals = res["pub_year"].astype(int).value_counts().reindex(all_years, fill_value=0).to_numpy()
     burst_rows = []
-    current_year = 2025
+
+    def _binomial_cost(successes: int, trials: int, probability: float) -> float:
+        if trials <= 0:
+            return 0.0
+        probability = float(np.clip(probability, 1e-9, 1 - 1e-9))
+        return -(successes * np.log(probability) + (trials - successes) * np.log1p(-probability))
+
+    def _states(counts: np.ndarray) -> tuple[np.ndarray, float, float]:
+        total_trials = int(totals.sum())
+        baseline = float(counts.sum() / total_trials) if total_trials else 0.0
+        elevated = min(max(baseline * state_multiplier, baseline + 1e-9), 1 - 1e-9)
+        costs = np.full((len(all_years), 2), np.inf)
+        previous = np.zeros((len(all_years), 2), dtype=int)
+        entry_cost = transition_penalty * np.log(max(total_trials, 2))
+        costs[0, 0] = _binomial_cost(int(counts[0]), int(totals[0]), baseline)
+        costs[0, 1] = entry_cost + _binomial_cost(int(counts[0]), int(totals[0]), elevated)
+        for index in range(1, len(all_years)):
+            for state in (0, 1):
+                candidates = costs[index - 1].copy()
+                if state == 1:
+                    candidates[0] += entry_cost
+                source_state = int(np.argmin(candidates))
+                previous[index, state] = source_state
+                probability = elevated if state else baseline
+                costs[index, state] = candidates[source_state] + _binomial_cost(
+                    int(counts[index]), int(totals[index]), probability
+                )
+        states = np.zeros(len(all_years), dtype=int)
+        states[-1] = int(np.argmin(costs[-1]))
+        for index in range(len(all_years) - 1, 0, -1):
+            states[index - 1] = previous[index, states[index]]
+        return states, baseline, elevated
 
     for label, pattern in frontiers_map.items():
         matched = text_corpus.str.contains(pattern, regex=True)
@@ -3085,46 +2607,43 @@ def technological_burst_detection(df: pd.DataFrame, top_n: int = 15) -> dict:
             continue
 
         matched_years = res.loc[matched, "pub_year"].astype(int)
-        year_counts = matched_years.value_counts().sort_index()
-
-        cum_counts = year_counts.cumsum()
-        total_m = len(matched_years)
-
-        start_yr = int(year_counts.index[0])
-        for yr, cum in cum_counts.items():
-            if cum >= total_m * 0.15:
-                start_yr = int(yr)
-                break
-
-        peak_yr = int(year_counts.idxmax())
-
-        recent_count = (
-            year_counts.loc[year_counts.index >= 2022].sum()
-            if any(year_counts.index >= 2022)
-            else 0
-        )
-        is_active = recent_count >= 5 or peak_yr >= 2021
-        end_yr = current_year if is_active else min(current_year, peak_yr + 3)
-
-        burst_intensity = float(round((total_m / (end_yr - start_yr + 1)) * 1.5, 1))
-
-        burst_rows.append(
-            {
-                "Tecnologia / Conceito": label,
-                "Início do Burst": start_yr,
-                "Ano de Pico": peak_yr,
-                "Fim do Burst": end_yr,
-                "Duração (Anos)": end_yr - start_yr + 1,
-                "Intensidade": burst_intensity,
-                "Status": "Ativo (Contemporâneo)" if is_active else "Estabilizado (Maduro)",
-                "Artigos": total_m,
-            }
-        )
+        counts = matched_years.value_counts().reindex(all_years, fill_value=0).to_numpy()
+        states, baseline, elevated = _states(counts)
+        index = 0
+        while index < len(states):
+            if states[index] == 0:
+                index += 1
+                continue
+            end_index = index
+            while end_index + 1 < len(states) and states[end_index + 1] == 1:
+                end_index += 1
+            segment = slice(index, end_index + 1)
+            interval_counts = counts[segment]
+            interval_totals = totals[segment]
+            strength = sum(
+                _binomial_cost(int(k), int(n), baseline) - _binomial_cost(int(k), int(n), elevated)
+                for k, n in zip(interval_counts, interval_totals, strict=True)
+            )
+            peak_index = index + int(np.argmax(interval_counts))
+            is_active = end_index == len(states) - 1
+            burst_rows.append(
+                {
+                    "Technology / Concept": label,
+                    "Burst's Beginning": int(all_years[index]),
+                    "Peak year": int(all_years[peak_index]),
+                    "Burst end": int(all_years[end_index]),
+                    "Duration (Years)": int(end_index - index + 1),
+                    "Intensity": round(float(max(strength, 0.0)), 2),
+                    "Status": "Active" if is_active else "Ended",
+                    "Articles": int(interval_counts.sum()),
+                }
+            )
+            index = end_index + 1
 
     burst_df = pd.DataFrame(burst_rows)
     if not burst_df.empty:
-        burst_df = burst_df.sort_values(by=["Status", "Intensidade"], ascending=[True, False])
-        active_df = burst_df[burst_df["Status"] == "Ativo (Contemporâneo)"].copy()
+        burst_df = burst_df.sort_values("Intensity", ascending=False).head(top_n)
+        active_df = burst_df[burst_df["Status"] == "Active"].copy()
     else:
         active_df = pd.DataFrame()
 
@@ -3217,10 +2736,10 @@ def detect_structural_breaks(series: pd.Series | np.ndarray) -> dict:
 
 
 def conceptual_atypicality_analysis(df: pd.DataFrame, top_n_keywords: int = 50) -> dict:
-    """Implement Brian Uzzi et al. (Science 2013) conceptual atypicality & novelty analysis.
+    """Describe uncommon keyword combinations and their citation association.
 
-    Examines whether combining historically rare keyword pairs ('atypical combinations')
-    embedded within conventional research foundations predicts exceptional scientific impact (top 5% citations).
+    This independence-based co-occurrence diagnostic is exploratory. It is
+    not the journal-pair randomized null model introduced by Uzzi et al.
     """
     import itertools
     from collections import Counter
@@ -3289,15 +2808,15 @@ def conceptual_atypicality_analysis(df: pd.DataFrame, top_n_keywords: int = 50) 
         if z < 0:
             pair_rows.append(
                 {
-                    "Termo 1": k1,
-                    "Termo 2": k2,
-                    "Coocorrência Real": count,
-                    "Esperada": round(expected, 1),
-                    "Z-Score (Atipicidade)": round(z, 2),
+                    "Term 1": k1,
+                    "Term 2": k2,
+                    "Real Co-occurrence": count,
+                    "Expected": round(expected, 1),
+                    "Z-score (atypicality)": round(z, 2),
                 }
             )
 
-    pair_rows.sort(key=lambda x: x["Z-Score (Atipicidade)"])
+    pair_rows.sort(key=lambda x: x["Z-score (atypicality)"])
     atypical_pairs_df = pd.DataFrame(pair_rows).head(20)
 
     # Score each article
@@ -3350,78 +2869,3 @@ def conceptual_atypicality_analysis(df: pd.DataFrame, top_n_keywords: int = 50) 
         "hit_rate_baseline": round(hit_rate_baseline, 1),
         "cite_p95_threshold": int(cite_p95),
     }
-
-
-def venue_semantic_clusters(
-    df: pd.DataFrame,
-    embeddings: np.ndarray,
-    dois: list[str],
-    n_clusters: int = 4,
-) -> pd.DataFrame:
-    """Group publication venues into semantic clusters based on average R^384 embeddings.
-
-    Uncovers ontological families of journals and conferences sharing conceptual focus.
-    """
-    from sklearn.cluster import KMeans
-
-    if df.empty or len(embeddings) == 0 or len(dois) == 0 or "venue" not in df.columns:
-        return pd.DataFrame()
-
-    doi_to_idx = {d: i for i, d in enumerate(dois)}
-    valid = df.dropna(subset=["venue"]).copy()
-    valid["emb_idx"] = valid["doi"].map(doi_to_idx)
-    valid = valid.dropna(subset=["emb_idx"])
-    if len(valid) < n_clusters:
-        return pd.DataFrame()
-
-    valid["emb_idx"] = valid["emb_idx"].astype(int)
-
-    # Compute mean embedding per venue
-    venue_vectors = {}
-    venue_counts = {}
-    venue_cites = {}
-
-    for venue, grp in valid.groupby("venue"):
-        if len(grp) < 2:
-            continue
-        idxs = grp["emb_idx"].to_numpy()
-        vecs = embeddings[idxs]
-        norm = np.linalg.norm(vecs, axis=1, keepdims=True)
-        norm[norm == 0] = 1.0
-        normed = vecs / norm
-        mean_vec = normed.mean(axis=0)
-        c_norm = np.linalg.norm(mean_vec)
-        venue_vectors[venue] = mean_vec / (c_norm if c_norm > 0 else 1.0)
-        venue_counts[venue] = len(grp)
-        venue_cites[venue] = float(
-            pd.to_numeric(grp.get("citation_count"), errors="coerce").fillna(0).mean()
-        )
-
-    venues = list(venue_vectors.keys())
-    if len(venues) < n_clusters:
-        return pd.DataFrame()
-
-    X = np.array([venue_vectors[v] for v in venues])
-    kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10).fit(X)
-
-    cluster_labels = {
-        0: "Redes Elétricas & Operação",
-        1: "Transição Energética & Renováveis",
-        2: "Sistemas Computacionais & IA",
-        3: "Engenharia de Potência & Confiabilidade",
-    }
-
-    rows = []
-    for i, v in enumerate(venues):
-        c_id = int(kmeans.labels_[i])
-        rows.append(
-            {
-                "venue": v,
-                "cluster_id": c_id,
-                "cluster_name": cluster_labels.get(c_id, f"Cluster {c_id + 1}"),
-                "articles": venue_counts[v],
-                "mean_citations": round(venue_cites[v], 1),
-            }
-        )
-
-    return pd.DataFrame(rows).sort_values(by=["cluster_id", "articles"], ascending=[True, False])

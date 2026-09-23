@@ -11,6 +11,8 @@ import datetime as dt
 from sqlalchemy import JSON, Boolean, Date, DateTime, Float, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+from lake_research_map.db.time import naive_utc_now
+
 
 class Base(DeclarativeBase):
     pass
@@ -20,10 +22,13 @@ class Article(Base):
     __tablename__ = "lit_articles"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    dataset_version_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
 
     doi: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     sources: Mapped[list] = mapped_column(JSON, default=list)  # ['ieee'] | ['elsevier'] | both
     record_type: Mapped[str] = mapped_column(String(32))
+    publication_category: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    publication_category_basis: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     title: Mapped[str | None] = mapped_column(Text, nullable=True)
     authors: Mapped[list] = mapped_column(JSON, default=list)
@@ -62,7 +67,7 @@ class Article(Base):
         JSON, default=list
     )  # source bronze.articles ids merged
 
-    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=naive_utc_now)
 
 
 class RejectedArticle(Base):
@@ -75,10 +80,13 @@ class RejectedArticle(Base):
     __tablename__ = "lit_rejected"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    dataset_version_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
 
     bronze_id: Mapped[int] = mapped_column(Integer, nullable=False)
     source: Mapped[str] = mapped_column(String(32), nullable=False)
     source_id: Mapped[str] = mapped_column(String(256), nullable=False)
     title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    publication_category: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    publication_category_basis: Mapped[str | None] = mapped_column(String(64), nullable=True)
     reason: Mapped[str] = mapped_column(String(64), nullable=False)  # e.g. 'no_doi'
     rejected_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False)
