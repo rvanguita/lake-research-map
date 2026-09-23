@@ -51,6 +51,7 @@ class VersionFingerprint:
     code_revision: str | None
     code_sha256: str
     curation_sha256: str
+    enrichment_sha256: str | None = None
 
 
 def _sha256_file(path: Path, chunk_size: int = 1 << 20) -> str:
@@ -188,9 +189,29 @@ def config_hash(sources: list[ScannedSource]) -> str:
     )
 
 
+# Presentation-only dashboard modules: nothing a pipeline stage imports, so
+# they cannot change a published output. Hashing them made a caption edit mint
+# a new dataset version and re-run bronze through semantic for identical data.
+# `dashboard/analytics.py` stays in the hash on purpose -- the semantic stage
+# persists `semantic_stability_diagnostics` from it into the version.
+PRESENTATION_ONLY = (
+    "src/lake_research_map/dashboard/pages/",
+    "src/lake_research_map/dashboard/app.py",
+    "src/lake_research_map/dashboard/charts.py",
+    "src/lake_research_map/dashboard/components.py",
+    "src/lake_research_map/dashboard/theme.py",
+    "src/lake_research_map/dashboard/pipeline_control.py",
+    "src/lake_research_map/dashboard/airflow_client.py",
+)
+
+
 def code_fingerprint(repo_root: Path = REPO_ROOT) -> tuple[str | None, str]:
     """Hash transformation code and locked dependencies, including dirty edits."""
-    paths = sorted((repo_root / "src").rglob("*.py"))
+    paths = sorted(
+        path
+        for path in (repo_root / "src").rglob("*.py")
+        if not _relative(path, repo_root).startswith(PRESENTATION_ONLY)
+    )
     paths.extend(
         path for path in (repo_root / "pyproject.toml", repo_root / "uv.lock") if path.exists()
     )
@@ -217,21 +238,30 @@ def build_fingerprint(
     sources: list[ScannedSource],
     *,
     curation_records: list[dict[str, Any]] | None = None,
+    enrichment_records: list[list[Any]] | None = None,
     repo_root: Path = REPO_ROOT,
 ) -> VersionFingerprint:
     source_sha = manifest_hash(sources)
     config_sha = config_hash(sources)
     code_revision, code_sha = code_fingerprint(repo_root)
     curation_sha = _stable_hash(curation_records or [])
-    version_id = _stable_hash(
-        {
-            "schema_version": FINGERPRINT_SCHEMA_VERSION,
-            "source_manifest_sha256": source_sha,
-            "config_sha256": config_sha,
-            "code_sha256": code_sha,
-            "curation_sha256": curation_sha,
-        }
-    )
+    payload = {
+        "schema_version": FINGERPRINT_SCHEMA_VERSION,
+        "source_manifest_sha256": source_sha,
+        "config_sha256": config_sha,
+        "code_sha256": code_sha,
+        "curation_sha256": curation_sha,
+    }
+    # Bronze reads the latest OpenAlex observation per DOI into citation and
+    # reference counts, so those observations are an input like any source
+    # file. Leaving them out meant a refresh never changed the version id: the
+    # next full run matched the active version, skipped every stage as
+    # unchanged, and the new counts could never be published. Added only when
+    # observations exist, so an install without enrichment keeps its ids.
+    enrichment_sha = _stable_hash(enrichment_records) if enrichment_records else None
+    if enrichment_sha:
+        payload["enrichment_sha256"] = enrichment_sha
+    version_id = _stable_hash(payload)
     return VersionFingerprint(
         version_id=version_id,
         source_manifest_sha256=source_sha,
@@ -239,6 +269,7 @@ def build_fingerprint(
         code_revision=code_revision,
         code_sha256=code_sha,
         curation_sha256=curation_sha,
+        enrichment_sha256=enrichment_sha,
     )
 
 

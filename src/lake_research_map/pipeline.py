@@ -214,6 +214,9 @@ def _ensure_execution(
         execution.dataset_version_id = version_id
     execution.status = "running"
     execution.error_message = None
+    # A resumed execution is not finished; a stale timestamp left by an earlier
+    # recovery would otherwise show a live run as having ended.
+    execution.finished_at = None
     execution.heartbeat_at = datetime.now(UTC).replace(tzinfo=None)
     session.flush()
     return execution
@@ -392,6 +395,23 @@ def _append_effective_sources(raw_session, scanned: list[ScannedSource]) -> list
     return sorted(effective.values(), key=lambda source: source.path)
 
 
+def _enrichment_records() -> list[list]:
+    """The observation state bronze will read, as a stable fingerprint input."""
+    from lake_research_map.ingest.enrichment import load_enrichment_observations
+
+    session = get_session("bronze")
+    try:
+        observed = load_enrichment_observations(session)
+    except Exception:  # pragma: no cover - a pre-enrichment database
+        return []
+    finally:
+        session.close()
+    return [
+        [doi, values.get("citation_count"), values.get("reference_count")]
+        for doi, values in sorted(observed.items())
+    ]
+
+
 def _prepare_raw_version(execution_id: str, workflow: str, trigger: str, source_policy: str):
     from lake_research_map.db.gold_models import DatasetVersion, PublicationState
 
@@ -404,7 +424,11 @@ def _prepare_raw_version(execution_id: str, workflow: str, trigger: str, source_
         raw_session.close()
     gold_session = get_session("gold")
     try:
-        fingerprint = build_fingerprint(sources, curation_records=_curation_records(gold_session))
+        fingerprint = build_fingerprint(
+            sources,
+            curation_records=_curation_records(gold_session),
+            enrichment_records=_enrichment_records(),
+        )
         state = gold_session.get(PublicationState, 1)
         if state is None:
             state = PublicationState(id=1)
@@ -2043,6 +2067,7 @@ def recover_abandoned_executions(
     *,
     cutoff: datetime | None = None,
     reason: str = "recovered after stale heartbeat",
+    exclude: set[str] | None = None,
 ) -> list[str]:
     """Fail every execution still marked `running` that nothing is driving.
 
@@ -2067,6 +2092,13 @@ def recover_abandoned_executions(
     query = select(PipelineExecution).where(PipelineExecution.status == "running")
     if cutoff is not None:
         query = query.where(last_signal < cutoff)
+    if exclude:
+        # Airflow's full-pipeline DAG runs each stage as its own process under
+        # one execution id, and every stage but the last leaves that execution
+        # `running` on purpose. Holding the lock proves no *other* writer is
+        # alive; it says nothing about the execution this process is about to
+        # continue, which the sweep used to mark as crashed between every task.
+        query = query.where(PipelineExecution.execution_id.not_in(sorted(exclude)))
     executions = session.scalars(query).all()
     for execution in executions:
         execution.status = "error"
@@ -2101,7 +2133,9 @@ def _recover_before_run(execution_id: str) -> None:
     session = get_session("gold")
     try:
         recovered = recover_abandoned_executions(
-            session, reason="recovered automatically at the start of a later run"
+            session,
+            reason="recovered automatically at the start of a later run",
+            exclude={execution_id},
         )
         if recovered:
             logger.warning(
@@ -2237,8 +2271,17 @@ def _run_version_command(args: argparse.Namespace) -> None:
         version = session.get(DatasetVersion, args.version_id)
         if version is None:
             raise ValueError(f"unknown dataset version {args.version_id}")
-        is_legacy = bool(version.stats and version.stats.get("kind") == "legacy_import")
-        if not is_legacy and not _version_ready(session, version.version_id):
+        if version.stats and version.stats.get("kind") == "legacy_import":
+            # This used to skip the readiness check for legacy snapshots, but
+            # `materialize_version` re-asserts the publication contract anyway,
+            # and a legacy import cannot pass it: its chunks carry no embedding
+            # revision or text hash and it has no semantic run. The bypass could
+            # only ever end in a contract violation, so say so up front.
+            raise ValueError(
+                "a legacy_import version cannot be re-activated: it predates the embedding "
+                "and semantic contracts every publication must pass"
+            )
+        if not _version_ready(session, version.version_id):
             raise ValueError("the requested version has not passed every required quality gate")
         execution_id = str(uuid.uuid4())
         session.add(
@@ -2260,6 +2303,26 @@ def _run_version_command(args: argparse.Namespace) -> None:
         raise
     finally:
         session.close()
+
+
+def _mutates_published_inputs(args: argparse.Namespace) -> bool:
+    """Whether a CLI command changes what the next publication would contain.
+
+    These take the same advisory lock as a stage run. Without it a duplicate
+    merge recorded while bronze and silver were running was folded in by the
+    gold stage of a version whose id had hashed the decisions *before* it,
+    and `versions activate` could race `materialize_version` over the live
+    tables. The citation-edge, reference-year and Crossref crawls feed only
+    audits, not any stage, so they stay unlocked rather than blocking the
+    pipeline for the hours a crawl can take.
+    """
+    if args.command == "duplicates":
+        return args.duplicate_action != "list"
+    if args.command == "versions":
+        return args.version_action == "activate"
+    if args.command == "enrichment":
+        return args.enrichment_action == "refresh-openalex"
+    return False
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -2289,6 +2352,18 @@ def main(argv: list[str] | None = None) -> None:
     _configure_audit_commands(subparsers)
     _configure_maintenance_commands(subparsers)
     args = parser.parse_args(argv if argv is not None else sys.argv[1:])
+    lock = (
+        _pipeline_lock(f"cli-{args.command}-{uuid.uuid4()}")
+        if _mutates_published_inputs(args)
+        else contextlib.nullcontext()
+    )
+    try:
+        lock.__enter__()
+    except PipelineBusyError as exc:
+        logger.error("command not started: %s", exc)
+        if invoked_as_cli:
+            raise SystemExit(2) from exc
+        raise
     try:
         if args.command == "duplicates":
             from lake_research_map.transform.duplicate_resolution import DuplicateResolutionError
@@ -2351,6 +2426,8 @@ def main(argv: list[str] | None = None) -> None:
         if invoked_as_cli:
             raise SystemExit(1) from exc
         raise
+    finally:
+        lock.__exit__(None, None, None)
 
 
 if __name__ == "__main__":

@@ -159,3 +159,37 @@ def test_the_status_command_reports_progress_and_the_disagreement_queue(gold_ses
     # One clean disagreement, which is exactly what adjudication is for.
     assert "Disagreement queue" in printed
     assert "10.1000/a [disagreement]" in printed
+
+
+def test_the_execution_being_continued_is_not_recovered(gold_session):
+    """Airflow runs each stage of the full DAG as a process under one id.
+
+    Every stage but the last leaves the execution `running` on purpose, so the
+    next task's start-up sweep used to mark the live pipeline as crashed.
+    """
+    _execution(gold_session, "dag:run-1", started=NOW - timedelta(hours=1))
+    _execution(gold_session, "abandoned", started=NOW - timedelta(hours=2))
+
+    recovered = recover_abandoned_executions(gold_session, exclude={"dag:run-1"})
+
+    assert recovered == ["abandoned"]
+    assert gold_session.get(PipelineExecution, "dag:run-1").status == "running"
+
+
+def test_only_commands_that_change_published_inputs_take_the_lock():
+    import argparse
+
+    from lake_research_map.pipeline import _mutates_published_inputs
+
+    def ns(**kw):
+        return argparse.Namespace(**kw)
+
+    assert _mutates_published_inputs(ns(command="duplicates", duplicate_action="merge"))
+    assert not _mutates_published_inputs(ns(command="duplicates", duplicate_action="list"))
+    assert _mutates_published_inputs(ns(command="versions", version_action="activate"))
+    assert not _mutates_published_inputs(ns(command="versions", version_action="list"))
+    assert _mutates_published_inputs(ns(command="enrichment", enrichment_action="refresh-openalex"))
+    # Audit-only crawls would otherwise hold the pipeline hostage for hours.
+    for action in ("refresh-citations", "resolve-references", "crossref-references"):
+        assert not _mutates_published_inputs(ns(command="enrichment", enrichment_action=action))
+    assert not _mutates_published_inputs(ns(command="audit", audit_action="citation-graph"))

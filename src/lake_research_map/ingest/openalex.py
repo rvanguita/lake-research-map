@@ -315,12 +315,18 @@ def fetch_openalex_batch(
                 # The whole batch shares one verdict, which is what lets the
                 # circuit breaker see a throttle as a throttle rather than as
                 # fifty unrelated failures.
-                return _failure(
+                failed = _failure(
                     "rate_limited" if status_code == 429 else "error",
                     status_code,
                     retry_count,
                     f"OpenAlex returned HTTP {status_code}",
                 )
+                # A wait longer than the cap is an exhausted quota: no retry
+                # inside this run can succeed, so the caller stops at once.
+                if retrying_is_futile(response):
+                    for value in failed.values():
+                        value["futile"] = True
+                return failed
             response.raise_for_status()
             payload = response.json()
         except (requests.RequestException, ValueError) as exc:
@@ -529,26 +535,29 @@ def refresh_openalex_observations(
             inserted += 1
             success += int(result["status"] == "success")
 
-            if result["status"] in {"rate_limited", "error"}:
-                consecutive_failures += 1
-            else:
-                consecutive_failures = 0
-            if consecutive_failures >= CONSECUTIVE_FAILURE_LIMIT:
-                stopped_early = result["status"]
-                logger.warning(
-                    "openalex refresh: stopping after %d consecutive %s responses at %d/%d; "
-                    "progress is committed and the next run resumes here",
-                    consecutive_failures,
-                    stopped_early,
-                    position,
-                    len(batch),
-                )
-                break
-
             if commit_every and position % commit_every == 0:
                 session.commit()
                 logger.info("openalex refresh: %d/%d fetched, %d ok", position, len(batch), success)
 
+        # The breaker counts failed *requests*. Counting DOIs made one failed
+        # 50-DOI batch look like fifty consecutive failures and stopped the
+        # whole crawl on a single transient 500. With batching off, a request
+        # is one DOI and the behaviour is unchanged.
+        outcomes = [resolved[doi] for doi in chunk]
+        if outcomes and all(o["status"] in {"rate_limited", "error"} for o in outcomes):
+            consecutive_failures += 1
+            futile = any(o.get("futile") for o in outcomes)
+            if futile or consecutive_failures >= CONSECUTIVE_FAILURE_LIMIT:
+                stopped_early = outcomes[-1]["status"]
+                logger.warning(
+                    "openalex refresh: stopping at %d/%d (%s); progress is committed and "
+                    "the next run resumes here",
+                    position,
+                    len(batch),
+                    "quota exhausted" if futile else f"{consecutive_failures} failed requests",
+                )
+        else:
+            consecutive_failures = 0
         if stopped_early:
             break
 
@@ -765,6 +774,45 @@ def persist_incoming_edges(
     return inserted
 
 
+def contradicted_zeros(session: Session) -> dict[str, set[str]]:
+    """Work ids whose OpenAlex zero another source contradicts.
+
+    OpenAlex reports `reference_count = len(referenced_works)`, and an empty
+    list is sometimes OpenAlex lacking the list rather than the work citing
+    nothing: of 324 works it reported at zero references, 81 have references
+    deposited in Crossref and 18 a positive count in the corpus's own
+    metadata. A zero is only a known answer when no source disagrees.
+    """
+    from lake_research_map.db.bronze_models import Article as BronzeArticle
+    from lake_research_map.db.bronze_models import CrossrefReferenceList
+
+    work_of = {
+        _normalize_doi(doi): work_id
+        for work_id, doi in session.execute(
+            select(ExternalWork.provider_work_id, ExternalWork.doi)
+        ).all()
+        if doi
+    }
+    references: set[str] = set()
+    citations: set[str] = set()
+    for doi, deposited in session.execute(
+        select(CrossrefReferenceList.doi, CrossrefReferenceList.deposited)
+    ).all():
+        if deposited and _normalize_doi(doi) in work_of:
+            references.add(work_of[_normalize_doi(doi)])
+    for doi, reference_count, citation_count in session.execute(
+        select(BronzeArticle.doi, BronzeArticle.reference_count, BronzeArticle.citation_count)
+    ).all():
+        work_id = work_of.get(_normalize_doi(doi)) if doi else None
+        if work_id is None:
+            continue
+        if (reference_count or 0) > 0:
+            references.add(work_id)
+        if (citation_count or 0) > 0:
+            citations.add(work_id)
+    return {"references": references, "citations": citations}
+
+
 def citation_graph_coverage(session: Session, work_ids: list[str]) -> dict:
     """Report how much of the corpus has usable forward and backward edges.
 
@@ -808,13 +856,14 @@ def citation_graph_coverage(session: Session, work_ids: list[str]) -> dict:
     # mistake had already been fixed for the forward direction; this is its
     # mirror image.
     backward_with_edges = len(backward)
+    disputed = contradicted_zeros(session)["references"]
     for work_id, reference_count in session.execute(
         select(EnrichmentObservation.provider_work_id, EnrichmentObservation.reference_count).where(
             EnrichmentObservation.provider == "openalex",
             EnrichmentObservation.status == "success",
         )
     ).all():
-        if work_id in wanted_set and reference_count == 0:
+        if work_id in wanted_set and reference_count == 0 and work_id not in disputed:
             backward.add(work_id)
 
     # Forward coverage is a property of the crawl, not of the edges it found.
@@ -1332,7 +1381,7 @@ def citation_year_coverage(session: Session, corpus_years: dict[str, int] | None
             )
         ).all()
         if work_id in works and (count or 0) == 0
-    }
+    } - contradicted_zeros(session)["citations"]
     known = with_series | never_cited
     series_start = session.scalar(
         select(func.min(CitationYearCount.year)).where(CitationYearCount.provider == "openalex")

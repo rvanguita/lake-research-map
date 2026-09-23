@@ -698,10 +698,11 @@ def test_golden_corpus_add_edit_rename_remove_and_reactivate(monkeypatch, tmp_pa
         ),
     )
 
-    def fixture_fingerprint(sources, *, curation_records=None):
+    def fixture_fingerprint(sources, *, curation_records=None, enrichment_records=None):
         return build_fingerprint(
             sources,
             curation_records=curation_records,
+            enrichment_records=enrichment_records,
             repo_root=tmp_path,
         )
 
@@ -890,3 +891,36 @@ def test_recover_stale_clears_executions_with_no_heartbeat(monkeypatch, gold_ses
         select(PipelineRun).where(PipelineRun.execution_id == "abandoned")
     ).one()
     assert run_row.status == "error"
+
+
+def test_new_enrichment_observations_mint_a_new_version(tmp_path):
+    """A refresh has to be publishable: its observations are a bronze input."""
+    before = build_fingerprint([], repo_root=tmp_path)
+    same = build_fingerprint([], enrichment_records=[], repo_root=tmp_path)
+    after = build_fingerprint([], enrichment_records=[["10.1/a", 7, 12]], repo_root=tmp_path)
+    later = build_fingerprint([], enrichment_records=[["10.1/a", 9, 12]], repo_root=tmp_path)
+
+    # No observations: the id an install without enrichment already had.
+    assert same.version_id == before.version_id
+    assert after.version_id != before.version_id
+    assert later.version_id != after.version_id
+
+
+def test_a_presentation_only_edit_does_not_mint_a_new_version(tmp_path):
+    from lake_research_map.ingest.snapshots import code_fingerprint
+
+    page = tmp_path / "src/lake_research_map/dashboard/pages/overview.py"
+    analytics = tmp_path / "src/lake_research_map/dashboard/analytics.py"
+    page.parent.mkdir(parents=True)
+    page.write_text("CAPTION = 'a'\n")
+    analytics.write_text("K = 1\n")
+    _, first = code_fingerprint(tmp_path)
+
+    page.write_text("CAPTION = 'b'\n")
+    _, caption_edit = code_fingerprint(tmp_path)
+    analytics.write_text("K = 2\n")
+    _, analytics_edit = code_fingerprint(tmp_path)
+
+    assert caption_edit == first
+    # analytics.py feeds the semantic stage's persisted diagnostics.
+    assert analytics_edit != first
