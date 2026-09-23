@@ -25,6 +25,7 @@ from lake_research_map.db.raw_models import BibEntry, IeeeCsvRow
 from lake_research_map.ingest.enrichment import (
     load_enrichment_cache,
     load_enrichment_observations,
+    merge_enrichment,
 )
 from lake_research_map.transform.publication_categories import classify_publication
 
@@ -322,8 +323,7 @@ def _enrich_citation_counts(bronze_session: Session) -> int:
     are the authoritative source where they exist and must never be
     overwritten by the cache.
     """
-    cache = load_enrichment_cache()
-    cache.update(load_enrichment_observations(bronze_session))
+    cache = merge_enrichment(load_enrichment_cache(), load_enrichment_observations(bronze_session))
     if not cache:
         return 0
 

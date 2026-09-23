@@ -103,8 +103,12 @@ def build_dataset_gold(
         for row in active_chunks:
             stored.setdefault((row.doi, row.chunk_type, row.seq), row)
     elif gold_session.scalar(select(func.count()).select_from(Chunk)):
-        live_chunks = gold_session.scalars(select(Chunk)).all()
-        stored = {(row.doi, row.chunk_type, row.seq): row for row in live_chunks}
+        # Fill gaps only. Replacing `stored` here threw away vectors a killed
+        # first run had already committed to the candidate -- the exact case
+        # the comment above promises to protect -- because the legacy rows
+        # carry no revision and so send every chunk back to be re-embedded.
+        for row in gold_session.scalars(select(Chunk)).all():
+            stored.setdefault((row.doi, row.chunk_type, row.seq), row)
 
     gold_session.execute(
         delete(DatasetDuplicatePair).where(

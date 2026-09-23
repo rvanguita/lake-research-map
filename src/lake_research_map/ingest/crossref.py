@@ -390,6 +390,9 @@ def reference_year_coverage(session: Session, corpus_years: dict[str, int | None
         if work_id is not None and count is not None:
             openalex_count[work_id] = count
 
+    from lake_research_map.ingest.openalex import contradicted_zeros
+
+    disputed = contradicted_zeros(session)["references"]
     source_of: dict[str, str] = {}
     references = dated = checked = consistent = 0
     known_empty = unenumerated = 0
@@ -415,7 +418,7 @@ def reference_year_coverage(session: Session, corpus_years: dict[str, int | None
         elif work_id and openalex_refs.get(work_id):
             source_of[doi] = "openalex"
             years = [year_of.get(cited) for cited in openalex_refs[work_id]]
-        elif work_id and openalex_count.get(work_id) == 0:
+        elif work_id and openalex_count.get(work_id) == 0 and work_id not in disputed:
             known_empty += 1
             continue
         else:

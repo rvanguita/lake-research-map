@@ -94,3 +94,30 @@ def load_enrichment_observations(
             },
         )
     return selected
+
+
+def merge_enrichment(
+    cache: dict[str, dict[str, int | None]],
+    observations: dict[str, dict[str, int | None]],
+) -> dict[str, dict[str, int | None]]:
+    """Overlay provider observations on the hand-built cache, field by field.
+
+    A plain ``dict.update`` replaced a DOI's whole cache entry, so an OpenAlex
+    work with an empty `referenced_works` turned a curated `reference_count`
+    of 42 into 0. That zero is often OpenAlex not holding the list rather than
+    the work citing nothing: of 324 works it reported at zero, 81 have
+    references deposited in Crossref. An observation therefore replaces a
+    field only when it carries a value, and never lowers a positive count to
+    zero.
+    """
+    merged = {doi: dict(values) for doi, values in cache.items()}
+    for doi, observed in observations.items():
+        target = merged.setdefault(doi, {"citation_count": None, "reference_count": None})
+        for field in ("citation_count", "reference_count"):
+            value = observed.get(field)
+            if value is None:
+                continue
+            if value == 0 and (target.get(field) or 0) > 0:
+                continue
+            target[field] = value
+    return merged
