@@ -323,16 +323,6 @@ def project_umap(matrix: np.ndarray, n_neighbors: int = 15, min_dist: float = 0.
     return reducer.fit_transform(matrix).astype("float32")
 
 
-def compute_thematic_centroids(matrix: np.ndarray, labels: np.ndarray) -> dict[int, np.ndarray]:
-    """Compute the 2D centroid (mean coordinate) for each theme."""
-    centroids: dict[int, np.ndarray] = {}
-    for label in np.unique(labels):
-        mask = labels == label
-        if np.any(mask):
-            centroids[int(label)] = np.mean(matrix[mask], axis=0).astype("float32")
-    return centroids
-
-
 def compute_temporal_drift(
     coords_2d: np.ndarray,
     labels: np.ndarray,

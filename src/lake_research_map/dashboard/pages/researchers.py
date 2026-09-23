@@ -64,12 +64,12 @@ def render() -> None:
         return
 
     hero_banner(
-        "...Canonicized names, non-identities verified",
-        "The names are normalized for <b>initial + surname</b> (e.g. <code>Junyong Liu</code> and "
-        "<code>J. Liu</code> collapse to the same key) because IEEE exports initials and Elsevier exports "
-        "full names. This merges spelling variants for the same researcher, but may also merge <b>namesakes "
-        "different </b> that share initial and surname — treat the numbers as an approximation, not "
-        "como identidade confirmada.",
+        "Canonicalized names, unverified identities",
+        "Names are normalized to <b>initial + surname</b> (e.g. <code>Junyong Liu</code> and "
+        "<code>J. Liu</code> collapse to the same key) because IEEE exports initials and Elsevier "
+        "exports full names. That merges spelling variants of the same researcher, but it can just "
+        "as easily merge <b>two different people</b> who share an initial and a surname — treat "
+        "these numbers as an approximation, not as a confirmed identity.",
     )
 
     n_authors = author_rows["author_key"].nunique()
@@ -300,6 +300,7 @@ def _bibliometric_laws_section(articles_df: pd.DataFrame, author_rows: pd.DataFr
 
 
 def _render_scientific_leadership_tab(articles_df: pd.DataFrame) -> None:
+    observation_year, observation_basis = loaders.citation_observation_context()
     st.markdown("### Corpus impact indicators")
     st.caption(
         "It compares researchers only by the articles present in this corpus. "
@@ -307,11 +308,12 @@ def _render_scientific_leadership_tab(articles_df: pd.DataFrame) -> None:
         "canonical bibliometrics: the **$h$-index** (consistency of production and citation), the **$g$-index Egghe** "
         "(that punctuates disproportionate impact articles or blockbusters), the **$e$-index of Zhang** "
         "(which measures the cumulative excess citation beyond the nucleus $h$), and the "
-        "**Hirsch $m$-quotient** ($m = h / \\text{years observed in the corpus}$)."
+        "**Hirsch $m$-quotient** ($m = h / \\text{years observed in the corpus}$). "
+        f"Career spans end in {observation_year} ({observation_basis})."
     )
 
     auth_df = author_impact_advanced_indices(articles_df, min_papers=2)
-    m_df = author_m_quotient_analysis(articles_df, min_papers=2)
+    m_df = author_m_quotient_analysis(articles_df, observation_year=observation_year, min_papers=2)
 
     if auth_df.empty:
         st.info("Authors with minimum production of 2 articles not found.")
@@ -323,17 +325,17 @@ def _render_scientific_leadership_tab(articles_df: pd.DataFrame) -> None:
     metric_row(
         [
             (
-                "🥇 Maior g-index",
+                "🥇 Highest g-index",
                 f"{top_g['author']} (g={top_g['g_index']})",
                 f"h-index: {top_g['h_index']}",
             ),
             (
-                "🔥 Maior Excesso Citacional (e)",
+                "🔥 Highest excess citations (e-index)",
                 f"{auth_df.sort_values(by='e_index', ascending=False).iloc[0]['author']}",
                 f"e={auth_df.sort_values(by='e_index', ascending=False).iloc[0]['e_index']:.1f}",
             ),
             (
-                "⚡ Maior Velocidade (m-quotient)",
+                "⚡ Highest velocity (m-quotient)",
                 f"{top_m['author']} (m={top_m['m_quotient']})" if top_m is not None else "N/A",
                 "h-index per year of career",
             ),
@@ -573,7 +575,7 @@ def _render_team_collaboration_stats(articles_df: pd.DataFrame) -> None:
 
 
 def _top_authors(author_rows: pd.DataFrame) -> None:
-    st.subheader("")
+    st.subheader("Most prolific authors")
     count_col = "doi" if "doi" in author_rows.columns else "author_display"
     agg = "nunique" if count_col == "doi" else "size"
     counts = author_rows.groupby("author_display")[count_col].agg(agg)
@@ -636,11 +638,10 @@ def _lead_authors_ranking(author_rows: pd.DataFrame) -> None:
         fig.update_traces(hovertemplate="<b>%{y}</b><br>%{x:,} articles<extra></extra>")
     render_chart(
         fig,
-        caption="Combined counting of articles in which the author appears in the 1st OR 2nd position of the list "
-        "Authors, in the order registered by the source (it is not alphabetical). "
-        "this -- a position; does not indicate a specific role of authorship (the convention on what 1st/2th "
-        "position means varies by area, and this corpus does not record papers). "
-        "Canonicization of the top of the page.",
+        caption="Counts articles in which an author appears first or second in the source-provided "
+        "author order. Position does not establish a specific contribution role: conventions vary "
+        "by field, and this corpus has no contributor-role metadata. Names use the canonicalization "
+        "rule disclosed at the top of the page.",
     )
 
 
@@ -875,10 +876,10 @@ def _volume_vs_impact(author_rows: pd.DataFrame) -> None:
     fig.update_layout(coloraxis_showscale=False)
     render_chart(
         fig,
-        caption="`citation_count` null is treated as 'not collected' and excluded from the average — not as zero. "
-        "The bubble size is the total number of citations cumulative by the author. "
-        "included because it is more robust to long tail distributions (a few authors with production or "
-        "citations far above average), common in bibliometric data.",
+        caption="A null `citation_count` means 'not collected' and is excluded from the average rather "
+        "than treated as zero. Bubble size is the author's cumulative citation count. The median is "
+        "reported because it is more robust to the long-tailed productivity and citation distributions "
+        "common in bibliometric data.",
     )
 
 
@@ -1003,10 +1004,9 @@ def _concentration_analysis(matrix: pd.DataFrame) -> None:
     )
     render_chart(
         fig,
-        caption="Gini index calculated on the historical total per author, separated by source (0 = "
-        "All publish the same, 1 = a single author concentrates all the production). "
-        "observed curve is away from the diagonal of perfect equity, more concentrated is production "
-        "in that source.",
+        caption="The Gini index is calculated from each author's historical output by source "
+        "(0 = equal output; 1 = one author holds all output). The farther the observed Lorenz curve "
+        "lies below the equality diagonal, the more concentrated the source's production is.",
     )
 
 

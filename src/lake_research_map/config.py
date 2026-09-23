@@ -26,8 +26,8 @@ def relative_path(path) -> str:
     """Path relative to the repo root, as stored in the database.
 
     The same file has a different absolute path depending on where the
-    pipeline runs -- `/home/<user>/.../data/ieee/x.csv` on the host vs
-    `/opt/airflow/project/data/ieee/x.csv` inside the Airflow container. Since
+    pipeline runs -- `/home/<user>/.../data/references/x.bib` on the host vs
+    `/opt/airflow/project/data/references/x.bib` inside the Airflow container. Since
     raw-layer idempotency keys off this string, storing the absolute path made
     the same file look like two different files and duplicated every row on a
     cross-environment run. Relative to REPO_ROOT it is identical in both.
@@ -59,8 +59,10 @@ IEEE_BIB_DIRS = (IEEE_DIR, REFERENCES_DIR / "IEEE Xplore")
 ELSEVIER_BIB_DIRS = (ELSEVIER_DIR, REFERENCES_DIR / "Science Direct")
 SEARCH_CONFIG_PATHS = (
     ("ieee", IEEE_DIR / "config.csv"),
+    ("ieee", REFERENCES_DIR / "IEEE Xplore" / "config.csv"),
     ("elsevier", ELSEVIER_DIR / "config.csv"),
     ("elsevier", DATA_DIR / "config.csv"),
+    ("elsevier", REFERENCES_DIR / "Science Direct" / "config.csv"),
 )
 
 # Official CAPES/Qualis journal-classification export (2017-2020 quadriênio, all

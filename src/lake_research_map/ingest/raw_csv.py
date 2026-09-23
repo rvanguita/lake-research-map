@@ -1,4 +1,4 @@
-"""Load data/ieee/export*.csv (the IEEE Xplore metadata export, 28 columns)
+"""Load configured IEEE Xplore metadata CSV exports (28 columns)
 into lit_raw.ieee_csv_rows -- one row per CSV row, values kept as JSON so no
 typing/normalization happens yet (that's bronze's job).
 """
@@ -25,7 +25,7 @@ def _clean_value(v):
 
 
 def load_ieee_csv(session: Session) -> int:
-    """Load every data/ieee/export*.csv file. Returns rows written."""
+    """Load every configured IEEE metadata CSV file and return rows written."""
     written = 0
     for csv_path in sorted(IEEE_DIR.glob("export*.csv")):
         _, changed = record_source_file(session, csv_path, source="ieee", kind="csv")

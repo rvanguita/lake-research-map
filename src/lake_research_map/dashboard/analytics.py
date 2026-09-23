@@ -13,6 +13,7 @@ import logging
 import re
 import unicodedata
 import warnings
+from datetime import UTC, datetime
 
 import numpy as np
 import pandas as pd
@@ -51,17 +52,34 @@ PDF_BIAS_METRICS = {
 }
 
 
-def valid_years(df: pd.DataFrame, lo: int = 1950, hi: int = 2026) -> pd.Series:
+def plausible_year_bound() -> int:
+    """Highest publication year a record may legitimately carry.
+
+    Next calendar year, not this one: publishers assign an in-press record the
+    year of its future issue, so the corpus genuinely contains rows ahead of
+    today. Computed per call rather than at import, because the dashboard is a
+    long-running process that would otherwise keep whichever bound was true
+    when it started.
+    """
+    return datetime.now(UTC).year + 1
+
+
+def valid_years(df: pd.DataFrame, lo: int = 1950, hi: int | None = None) -> pd.Series:
     """Coerce `year` to numeric and drop rows outside a plausible window.
 
-    The corpus spans 1926-2027 (in-press records included), but a handful of
-    very old or future-dated rows would otherwise dominate any rate/trend
-    calculation. Returns a Series aligned to `df`'s index (NaN where invalid),
-    matching `pd.to_numeric(..., errors="coerce")` semantics -- callers that
-    need only valid rows should `.dropna()` the result themselves.
+    The guard exists for parse garbage -- a year of 9999 or 201 would dominate
+    any rate or trend calculation -- not for records that are merely ahead of
+    the calendar. `hi` was pinned at 2026 and silently discarded the 11 in-press
+    2027 articles from every trend, production and keyword surface, which is
+    exactly the kind of drop this function's own docstring claimed it spanned.
+    It now follows `plausible_year_bound()`.
+
+    Returns a Series aligned to `df`'s index (NaN where invalid), matching
+    `pd.to_numeric(..., errors="coerce")` semantics -- callers that need only
+    valid rows should `.dropna()` the result themselves.
     """
     years = pd.to_numeric(df.get("year"), errors="coerce")
-    return years.where(years.between(lo, hi))
+    return years.where(years.between(lo, plausible_year_bound() if hi is None else hi))
 
 
 def _field_present(series: pd.Series, field: str) -> pd.Series:
@@ -910,7 +928,7 @@ def fit_heavy_tail_distributions(
     }
 
 
-def age_normalized_citations(df: pd.DataFrame, current_year: int = 2026) -> pd.DataFrame:
+def age_normalized_citations(df: pd.DataFrame, *, observation_year: int) -> pd.DataFrame:
     """Calculate annual citation rates, cohort z-scores, and cohort percentiles.
 
     Prevents older papers from structurally dominating impact rankings.
@@ -922,7 +940,7 @@ def age_normalized_citations(df: pd.DataFrame, current_year: int = 2026) -> pd.D
     years = pd.to_numeric(res["year"], errors="coerce")
     cites = pd.to_numeric(res["citation_count"], errors="coerce").fillna(0)
 
-    age = (current_year - years + 1).clip(lower=1)
+    age = (observation_year - years + 1).clip(lower=1)
     res["citation_rate_annual"] = cites / age
 
     cohort_mean = res.groupby(years)["citation_count"].transform("mean")
@@ -1865,7 +1883,7 @@ def _signs_agree(specifications: list[dict], focal_features: list[str]) -> bool:
     return True
 
 
-def citation_determinants_glm(df: pd.DataFrame, *, observation_year: int = 2026) -> dict:
+def citation_determinants_glm(df: pd.DataFrame, *, observation_year: int) -> dict:
     """Fit an exposure-adjusted count GLM with robust uncertainty estimates.
 
     Citation counts accumulate over time, so ``log(article_age + 1)`` is used
@@ -2389,7 +2407,7 @@ def detect_bibliometric_anomalies(df: pd.DataFrame, contamination: float = 0.03)
     except Exception:
         res["anomaly_score"] = 0.0
         res["is_anomaly"] = False
-        res["anomaly_reason"] = "Erro no ajuste"
+        res["anomaly_reason"] = "Model fit error"
 
     return res
 
@@ -3120,7 +3138,9 @@ def mathematical_complexity_spectrum(df: pd.DataFrame) -> dict:
     }
 
 
-def author_m_quotient_analysis(df: pd.DataFrame, min_papers: int = 2) -> pd.DataFrame:
+def author_m_quotient_analysis(
+    df: pd.DataFrame, *, observation_year: int, min_papers: int = 2
+) -> pd.DataFrame:
     """Compute career-length normalized impact (Hirsch's m-quotient = h / career_years).
 
     Distinguishes rapidly emerging high-velocity researchers from established veterans.
@@ -3128,7 +3148,6 @@ def author_m_quotient_analysis(df: pd.DataFrame, min_papers: int = 2) -> pd.Data
     if df.empty or "authors" not in df.columns:
         return pd.DataFrame()
 
-    current_year = 2026
     author_records: dict[str, dict] = {}
 
     for _, row in df.iterrows():
@@ -3159,7 +3178,7 @@ def author_m_quotient_analysis(df: pd.DataFrame, min_papers: int = 2) -> pd.Data
                 break
 
         first_year = min(data["years"])
-        career_span = max(1, current_year - first_year + 1)
+        career_span = max(1, observation_year - first_year + 1)
         m_quotient = round(h / career_span, 2)
 
         rows.append(
@@ -3206,7 +3225,7 @@ def technological_burst_detection(
         }
 
     res = df.copy()
-    res["pub_year"] = valid_years(res, lo=2000, hi=2026)
+    res["pub_year"] = valid_years(res, lo=2000)
     res = res.dropna(subset=["pub_year"])
     if res.empty:
         return {

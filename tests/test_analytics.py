@@ -89,3 +89,37 @@ def test_publication_category_counts_by_year_include_zero_categories_and_total()
         "other": 0,
         "total": 1,
     }
+
+
+def test_valid_years_keeps_in_press_records_dated_next_year():
+    """In-press rows carry their future issue year and are real publications.
+
+    The bound used to be pinned at 2026 while the corpus already held 11
+    articles dated 2027, so every trend, production and keyword surface
+    dropped them without saying so.
+    """
+    from datetime import UTC, datetime
+
+    from lake_research_map.dashboard.analytics import plausible_year_bound, valid_years
+
+    next_year = datetime.now(UTC).year + 1
+    assert plausible_year_bound() == next_year
+
+    df = pd.DataFrame({"year": [1949, 2020, next_year, next_year + 1, 9999, None]})
+    kept = valid_years(df).dropna().astype(int).tolist()
+
+    assert kept == [2020, next_year]
+
+
+def test_valid_years_still_rejects_parse_garbage():
+    from lake_research_map.dashboard.analytics import valid_years
+
+    df = pd.DataFrame({"year": [201, 0, -5, "not a year"]})
+    assert valid_years(df).dropna().empty
+
+
+def test_valid_years_honours_an_explicit_upper_bound():
+    from lake_research_map.dashboard.analytics import valid_years
+
+    df = pd.DataFrame({"year": [2020, 2024]})
+    assert valid_years(df, hi=2021).dropna().astype(int).tolist() == [2020]

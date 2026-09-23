@@ -308,7 +308,7 @@ def lorenz_chart(series: dict[str, pd.DataFrame], *, entity_label: str = "author
         go.Scatter(
             x=[0, 1],
             y=[0, 1],
-            name="Equidade perfeita",
+            name="Perfect equality",
             mode="lines",
             line=dict(color=OTHER_COLOR, width=2, dash="dash"),
         )

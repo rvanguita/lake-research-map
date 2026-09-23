@@ -1,4 +1,4 @@
-"""️ T Topics and Periodics — where the corpus publishes, about what, and how the themes evolved."""
+"""Topics and venues: where the corpus publishes and how its themes evolved."""
 
 from __future__ import annotations
 
@@ -181,7 +181,7 @@ def render() -> None:
 
 
 def _top_venues(articles_df: pd.DataFrame) -> None:
-    st.subheader("Periodics and Events")
+    st.subheader("Journals and conferences")
     if not require_columns(articles_df, ["venue"]) or not articles_df["venue"].notna().any():
         return
 
@@ -209,7 +209,7 @@ def _top_venues(articles_df: pd.DataFrame) -> None:
             top_venues,
             color_by=modal_source,
             x_title="Number of articles",
-            y_title="Periodic / Event",
+            y_title="Journal / conference",
         )
         fig.update_traces(hovertemplate="<b>%{y}</b><br>%{x:,} published articles<extra></extra>")
         render_chart(
@@ -247,7 +247,7 @@ def _top_venues(articles_df: pd.DataFrame) -> None:
             venue_impact["mean"],
             color_by=modal_source,
             x_title="Average citations per article",
-            y_title="Periodic / Event",
+            y_title="Journal / conference",
         )
         for trace in fig.data:
             trace.customdata = venue_impact["articles"].reindex(trace.y).to_numpy().reshape(-1, 1)
@@ -299,7 +299,7 @@ def _top_keywords(articles_df: pd.DataFrame) -> None:
         )
     render_chart(
         fig,
-        caption="Pass the mouse over the bars to check the divisionexata entre IEEE e Elsevier.",
+        caption="Hover over the bars to inspect the exact IEEE and Elsevier breakdown.",
     )
 
 
@@ -318,10 +318,10 @@ def _keyword_stats(kw_lists: pd.Series, all_keywords: list[str]) -> None:
 def _zipf_analysis(articles_df: pd.DataFrame) -> None:
     st.subheader("📖 Zipf Law of the Technical Vocabulary")
     st.caption(
-        "The Zipf Law states that the frequency of a word is inversely proportional to its rank "
-        "($f \\propto 1/r^\\gamma$). "
-        "approaches $\\gamma \\approx 1.0$, indicating a balanced linguistic vocabulary between central terms "
-        "and long tail of specialization."
+        "Zipf's law states that word frequency is inversely proportional to rank "
+        "($f \\propto 1/r^\\gamma$). In established bibliometric corpora, a coefficient near "
+        "$\\gamma \\approx 1.0$ indicates a vocabulary with both recurring core terms and a long "
+        "tail of specialized language."
     )
 
     zipf_res = zipf_law_analysis(articles_df)
@@ -442,7 +442,7 @@ def _prepare_keyword_trend_data(articles_df: pd.DataFrame) -> pd.DataFrame | Non
     kw_year = explode_keywords(articles_df)
     if kw_year.empty or "year" not in kw_year.columns:
         return None
-    kw_year["year"] = valid_years(kw_year, lo=TREND_MIN_YEAR, hi=2026)
+    kw_year["year"] = valid_years(kw_year, lo=TREND_MIN_YEAR)
     kw_year = kw_year.dropna(subset=["year"]).astype({"year": int})
     if len(kw_year) < 30:
         return None
@@ -450,7 +450,7 @@ def _prepare_keyword_trend_data(articles_df: pd.DataFrame) -> pd.DataFrame | Non
 
 
 def _topic_share_area(kw_year: pd.DataFrame) -> None:
-    st.markdown("* Annual participation of the main keywords**")
+    st.markdown("**Annual share of the main keywords**")
     top_terms = kw_year["keyword"].value_counts().head(TOP_KEYWORDS_TREND).index.tolist()
     scoped = kw_year[kw_year["keyword"].isin(top_terms)]
     by_year_kw = scoped.groupby(["year", "keyword"]).size().reset_index(name="count")
@@ -659,10 +659,10 @@ def _first_appearance(kw_year: pd.DataFrame) -> None:
 
     render_chart(
         fig,
-        caption="Terms in the upper right corner are recent vocabulary that has already gained volume; terms to the "
-        "Left with high counting are the foundational vocabulary of the area. "
-        "to see the term; fixed labels highlight only the most extreme points (higher volume and debut "
-        "more recent), not to overlap the others.",
+        caption="Terms in the upper-right are recent vocabulary that has already gained volume; "
+        "high-count terms on the left are foundational vocabulary. Hover to inspect each term. "
+        "Fixed labels mark only the most extreme combinations of volume and recent debut to avoid "
+        "overplotting.",
     )
 
 
@@ -718,7 +718,7 @@ def _qualis_table(
     metric_row(
         [
             ("📚 Periodicals classified", f"{n_classified}/{len(match_df)}", None),
-            ("🥇 Periodics A1", f"{len(a1_venues)}", None),
+            ("🥇 A1 journals", f"{len(a1_venues)}", None),
             (
                 "📄 Articles in A1 journals",
                 f"{len(a1_articles_df):,}",
@@ -738,10 +738,10 @@ def _qualis_table(
     st.dataframe(
         match_df.rename(
             columns={
-                "venue": "Periodic (corpus)",
-                "matched_title": "Married title (CAPES)",
-                "estrato": "Estrato",
-                "score": "Similaridade (%)",
+                "venue": "Venue (corpus)",
+                "matched_title": "Matched title (CAPES)",
+                "estrato": "Tier",
+                "score": "Similarity (%)",
                 "articles": "Articles",
             }
         ),
@@ -797,7 +797,7 @@ def _qualis_cumulative_chart(with_estrato: pd.DataFrame, estrato_order: list[str
 
 
 def _qualis_a1_a3_combined(with_estrato: pd.DataFrame) -> None:
-    st.subheader("Periodics A1-A3 — Cumulative")
+    st.subheader("A1–A3 journals — cumulative")
     combined_df = with_estrato[with_estrato["estrato"].isin(("A1", "A2", "A3"))]
     if combined_df.empty:
         st.info("No journal articles classified A1, A2 or A3 in this layer/filter.")
@@ -838,11 +838,11 @@ def _qualis_a1_a3_combined(with_estrato: pd.DataFrame) -> None:
             "venue",
             title="Top 15 A1–A3 journals by article count and source",
             x_title="Number of articles",
-            y_title="Periodic",
+            y_title="Journal",
         )
         render_chart(
             fig,
-            caption="Periodicals more published by the corpus, adding the strata A1, A2 and A3, "
+            caption="Most frequent journals in the corpus across the A1, A2, and A3 tiers, "
             "colored by source.",
         )
 
@@ -855,9 +855,9 @@ def _qualis_a1_a3_combined(with_estrato: pd.DataFrame) -> None:
             top_venues,
             color_by=venue_to_estrato,
             palette=tier_palette,
-            title="Top 15 A1-A3 Periodicals per Number of Articles, by CAPES/Qualis Classification",
+            title="Top 15 A1–A3 journals by article count and CAPES/Qualis classification",
             x_title="Number of articles",
-            y_title="Periodic",
+            y_title="Journal",
         )
         fig.update_traces(hovertemplate="<b>%{y}</b><br>%{x:,} articles<extra></extra>")
         render_chart(
@@ -914,17 +914,17 @@ def _bradford_analysis(articles_df: pd.DataFrame) -> None:
     metric_row(
         [
             (
-                "🎯 Nucleus Periodics (Zone 1)",
+                "🎯 Core journals (Zone 1)",
                 f"{int(zone_sum.iloc[0]['venues'])}",
                 f"{int(zone_sum.iloc[0]['articles']):,} articles",
             ),
             (
-                "📚 Periodics in Zone 2",
+                "📚 Journals in Zone 2",
                 f"{int(zone_sum.iloc[1]['venues'])}",
                 f"{int(zone_sum.iloc[1]['articles']):,} articles",
             ),
             (
-                "🌐 Periodics in Zone 3",
+                "🌐 Journals in Zone 3",
                 f"{int(zone_sum.iloc[2]['venues'])}",
                 f"{int(zone_sum.iloc[2]['articles']):,} articles",
             ),
@@ -1008,7 +1008,7 @@ def _semantic_venues_analysis(articles_df: pd.DataFrame) -> None:
             "map_x": False,
             "map_y": False,
         },
-        title="Semantic Centroids of Periodics (minimum 3 articles in the corpus)",
+        title="Semantic centroids of venues (minimum 3 corpus articles)",
         labels={
             "source": "Predominant source",
             "articles": "Articles",

@@ -26,7 +26,7 @@ Dependencies use work-package IDs. Horizons are sequencing bands rather than cal
 
 ## 2. Delivered baseline
 
-The following capabilities are implemented and covered by the current 303-test suite (229 before this cycle, plus regression tests for the defects `WP-15` through `WP-19` fixed, the 21 application-wide page tests `WP-22` added, the evidence-sample coverage from Section 4, and the 23 tests added on 2026-09-22 for the durable-label join, the citation-graph wiring, and automatic run recovery):
+The following capabilities are implemented and covered by the current 314 passing tests plus two opt-in MySQL tests skipped in the default run (229 before this cycle, followed by regression, application-wide page, evidence-workflow, retrieval, provenance, semantic-persistence, MySQL migration, and year-bound coverage):
 
 - Raw/Bronze/Silver/Gold ingestion and transformations with DOI normalization and rejection audit.
 - Local PDF inventory/matching, full-text extraction, chunk reconciliation, and local BGE embeddings.
@@ -74,7 +74,7 @@ This baseline does not imply that every analytical method is confirmatory. The l
 - **Dependencies:** `WP-01`, `WP-02`.
 - **Deliverable:** `lit_quality_results`, severity policy, uniqueness/referential/coverage/range checks, stage gate API, and dashboard contract status.
 - **Completion:** Required-check failure keeps the prior version active, records expected versus observed values, and returns a failed pipeline status.
-- **Evidence:** Persisted Raw/Bronze/Silver/Gold/Embed/Semantic contracts block publication in automated tests; candidate Gold tables are isolated until atomic materialization; the existing pipeline page exposes versions, execution lineage, file changes, and gate outcomes. MySQL transaction and BLOB/JSON behavior still require integration evidence.
+- **Evidence:** Persisted Raw/Bronze/Silver/Gold/Embed/Semantic contracts block publication in automated tests; candidate Gold tables are isolated until atomic materialization; the existing pipeline page exposes versions, execution lineage, file changes, and gate outcomes. MySQL 8.4.11 acceptance on 2026-09-22 verified JSON/NULL/LONGBLOB round trips, transaction rollback, advisory locks, and the idempotent `lit_config` uniqueness migration. End-to-end injected-failure publication remains a separate WP-08 gate.
 
 ### `WP-04` — Gold as the canonical analytical population
 
@@ -131,7 +131,7 @@ This baseline does not imply that every analytical method is confirmatory. The l
 
 ### `WP-09` — Persistent dual-review screening workflow
 
-- **Status:** Persistent protocols, dual assignments, append-only label revisions, CSV export/import, and adjudication delivered. The agreement report, per-reviewer progress, and the disagreement queue became readable from the durable tables on 2026-09-22 -- see Evidence. Independent reviewer labels and the protocols' inclusion criteria remain open, and are human decisions rather than missing code.
+- **Status:** Persistent protocols, dual assignments, append-only label revisions, CSV export/import, and adjudication delivered. Screening inclusion criteria were approved and persisted as protocol `v2` on 2026-09-22, with 60 assignments over the 30 no-DOI subjects. Independent reviewer labels remain open and are human decisions rather than missing code.
 - **Objective:** Calibrate screening against reproducible human judgments.
 - **Justification:** The dashboard now measures agreement from uploaded decisions, but labels, assignments, and adjudication are not durable or dataset-versioned.
 - **Dependencies:** `WP-01`, `WP-04`, `WP-06`.
@@ -161,24 +161,25 @@ This baseline does not imply that every analytical method is confirmatory. The l
 
 ### `WP-12` — Engineering-taxonomy validation
 
-- **Status:** Complete on 2026-09-22 under the second branch of its own completion rule -- every displayed taxonomy reports measured coverage and is labelled exploratory. Per-class precision remains unmeasured and upgrades itself when a review lands; a stratified sample and 240 dual assignments are already waiting.
+- **Status:** Complete on 2026-09-22 under the second branch of its own completion rule -- every displayed taxonomy reports measured coverage and is labelled exploratory. An explicitly AI-assisted draft now covers all 120 stratified subjects, while the 240 independent human assignments remain outstanding; per-class precision is therefore still unapproved human evidence.
 
 - **Objective:** Treat regex extraction as a measured multi-label classifier.
 - **Justification:** Frequency charts currently lack precision/recall evidence and an explicit unknown class.
 - **Dependencies:** `WP-04`.
 - **Deliverable:** Stratified labeled articles, label guide, per-class precision/recall/F1, ambiguous/unclassified reporting, and refined non-overlapping rules where justified.
 - **Completion:** Each displayed taxonomy reports evaluated coverage and meets a declared minimum precision or is labeled exploratory.
-- **Evidence:** The completion rule has two branches and this closes on the second, deliberately: *evaluated coverage* is measurable today, *declared minimum precision* is not, and labelling the taxonomies exploratory is the honest reading rather than a way around the bar. All seven regex taxonomies on the Engineering-evidence page -- optimization methods, objective functions, uncertainty paradigms, planning horizons, computational solvers, mathematical complexity, benchmark feeders -- were previously inline pattern dicts; they are hoisted to module constants and enumerated in `analytics.py::TAXONOMY_REGISTRY`, which is what makes "each displayed taxonomy" checkable instead of a promise, and a test asserts the registry matches the page. `taxonomy_coverage` reports the classified share, the unclassified count and the multi-label count beside every chart. The measured numbers are the finding: **objective functions classify 78.3% of the corpus but assign 1,457 of those articles to more than one class, while the other six classify between 16.1% and 31.8%** -- planning horizons 17.2%, computational solvers 16.1%, benchmark feeders 19.9%, uncertainty paradigms 20.3%, mathematical complexity 28.3%, optimization methods 31.8%. A frequency chart over the matched subset answers "among the ones I recognised, which is most common?" while looking like it answers "what does this corpus do?", so each panel now says which question it is answering and over what share. `taxonomy_precision_from_labels` scores a reviewed sample per class, excluding `ambiguous` from precision and recall and counting it separately -- a reviewer who could not decide is evidence about the class boundary, not a negative -- and the panel swaps the exploratory notice for measured precision as soon as labels exist, with no further code change.
+- **Evidence:** The completion rule has two branches and this closes on the second, deliberately: *evaluated coverage* is measurable today, *declared minimum precision* is not, and labelling the taxonomies exploratory is the honest reading rather than a way around the bar. All seven regex taxonomies on the Engineering-evidence page -- optimization methods, objective functions, uncertainty paradigms, planning horizons, computational solvers, mathematical complexity, benchmark feeders -- were previously inline pattern dicts; they are hoisted to module constants and enumerated in `analytics.py::TAXONOMY_REGISTRY`, which is what makes "each displayed taxonomy" checkable instead of a promise, and a test asserts the registry matches the page. `taxonomy_coverage` reports the classified share, the unclassified count and the multi-label count beside every chart. The measured numbers are the finding: **objective functions classify 78.3% of the corpus but assign 1,457 of those articles to more than one class, while the other six classify between 16.1% and 31.8%** -- planning horizons 17.2%, computational solvers 16.1%, benchmark feeders 19.9%, uncertainty paradigms 20.3%, mathematical complexity 28.3%, optimization methods 31.8%. A frequency chart over the matched subset answers "among the ones I recognised, which is most common?" while looking like it answers "what does this corpus do?", so each panel now says which question it is answering and over what share. `taxonomy_precision_from_labels` scores a human-reviewed sample per class, excluding `ambiguous` from precision and recall and counting it separately -- a reviewer who could not decide is evidence about the class boundary, not a negative -- and the panel swaps the exploratory notice for measured precision only when human labels exist. Reviewer `codex-assisted` completed 120 immutable labels under taxonomy protocol `v1`: 108 `present`, 11 `absent`, and 1 `ambiguous`; label-set SHA-256 `37f8c9e019ff40f148325021054f66c83f4b1a10c2ff3d27ba1a06b1e975e0a2`. Three `unclassified` subjects were flagged as likely misses (MILP, Machine Learning & AI, and Stochastic Programming). This is a documented draft rather than human ground truth: reviewers `rene` and `revisor2` retain 120 assignments each, the dashboard excludes `-assisted` reviewers from validation metrics, and no taxonomy subject is resolved until independent agreement or adjudication exists.
 
 ### `WP-13` — Retrieval evaluation corpus
 
-- **Status:** `blocked-awaiting-evidence`; retrieval judgments can be persisted, but Recall@k/MRR/nDCG and default-mode selection require labeled technical queries.
+- **Status:** `blocked-awaiting-evidence`; the common Recall@k/MRR/nDCG/latency harness and inspectable dense/BM25/RRF ranks are implemented. One explicitly AI-assisted review labeled all 96 pooled subjects (92 relevant, 3 not relevant, 1 uncertain), but the two independent human reviews remain outstanding, so metric values and default-mode selection are not approved.
 
 - **Objective:** Choose dense, lexical, or hybrid retrieval from measured relevance and latency.
 - **Justification:** RRF is implemented, but no labeled query set supports a quality claim.
 - **Dependencies:** `WP-04`, `WP-06`.
 - **Deliverable:** Versioned technical queries, pooled judgments, abstract/full-text strata, Recall@k, MRR, nDCG, latency, and failure taxonomy.
 - **Completion:** All retrieval modes run on identical judgments; the default is selected by an explicit metric/latency rule and reproduced in tests.
+- **Evidence:** `dashboard/retrieval_eval.py` evaluates identical judged rankings and reports Recall@k, reciprocal rank, nDCG@k, and deterministic latency summaries for each mode; hand-computed fixtures protect the metric definitions. Search results retain dense and BM25 component ranks/scores beside the RRF rank, and the Quality page can execute each mode independently. Reviewer `codex-assisted` completed 96 immutable labels under retrieval protocol `v1`; label-set SHA-256 `4aef1027dc39602b6584f8befc457f157298e27f1707d689e2163871fc308fd4`. These labels are a documented draft, not human ground truth. Reviewers `rene` and `revisor2` each retain 96 independent assignments, and no retrieval subject is resolved until independent agreement or adjudication exists. No winner is claimed.
 
 ## 5. Medium term — statistical and model hardening
 
@@ -252,13 +253,14 @@ This baseline does not imply that every analytical method is confirmatory. The l
 
 ### `WP-20` — Analytical inventory and redundancy removal
 
-- **Status:** Complete on 2026-09-21; the inventory was taken and every unreachable analytical controller was removed.
+- **Status:** Complete on 2026-09-22; the inventory was refreshed and obsolete ingestion/analytical paths were removed without deleting intentional scale-up hooks. A second audit the same day found one survivor the inventory had missed -- `theme.apply_dashboard_theme()`, 205 lines of injected CSS with no caller anywhere while `.streamlit/config.toml` supplied the real palette. Removing it left `theme.py` with no Streamlit import at all, and the project skill that still documented it as the styling entry point was corrected with it.
 - **Objective:** Make every visualization answer one unique question.
 - **Justification:** The repository retains inactive helpers and analytical functions for retired pages, while Overview contains deep-dive diagnostics.
 - **Dependencies:** `WP-04`, validity work packages relevant to each method.
 - **Deliverable:** Machine-readable or documented chart inventory with owner/question/population; removal of dead helpers/tests; relocation or deletion of duplicates; Overview reduced to macro state.
 - **Completion:** A review finds one canonical owner per question; no unreachable analytical controller remains; removed methods are not claimed in docs/tests.
 - **Evidence:** Twenty public functions had no page controller calling them, and seventeen still had passing tests, so the suite stayed green while the features were unreachable. Five implemented methods that `METHODOLOGY.md` already declares unavailable were deleted outright (`price_index_analysis`, `sleeping_beauties_detection`, `disruption_index_estimation`, `citation_longevity_and_decay`, `open_access_impact_analysis`) -- the last of these fabricated a 20% open-access share from a salted `hash()` when real access data was missing, which is exactly the kind of manufactured evidence `ADR-05` forbids. Eleven further exploratory functions with no owner page in the section 7 matrix, plus `fit_quantile_forecast`, were removed with their tests, and `tests/test_strategic_analytics.py` disappeared entirely. Five orphans were wired into their owner pages under `WP-14` through `WP-19` instead of being deleted. The `src/lake_literature` compatibility shim was kept because external importers cannot be ruled out from inside the repository.
+- **Reconciliation:** The second inventory removed the obsolete dashboard-side Raw upload module, the file-cache OpenAlex enrichment path, an unused layer selector, a redundant source serializer, and an unused thematic-centroid function. The optional vector-index builder remains intentionally reachable as the measured WP-25 scale-up path; it is not the current serving path.
 
 ### `WP-21` — Integrate validated analyses into existing pages
 
@@ -278,7 +280,7 @@ This baseline does not imply that every analytical method is confirmatory. The l
 
 ### `WP-22` — Streamlit performance, behavior, and accessibility
 
-- **Status:** Complete on 2026-09-22; every tab group is lazy, the mixed-language copy is gone, and `AppTest` spans all ten pages. The under-five-second target is withdrawn and replaced by a measured one -- see Evidence.
+- **Status:** Complete on 2026-09-22; every tab group is lazy, the mixed-language copy is gone, and `AppTest` spans all ten pages. The under-five-second target is withdrawn and replaced by a measured one -- see Evidence. The language claim took two passes: a second audit the same day found a Portuguese fragment and an empty `st.metric` label that the first scan test could not see, because its word list held domain nouns while the survivor was built from function words. The test now covers closed-class words and rejects an empty metric label through the AST, since `st.metric` takes its label positionally and leaves no `st.subheader("")` to find.
 - **Objective:** Keep the 10-page app responsive and testable as analytical depth grows.
 - **Justification:** Some pages still compute hidden tab content, and first-party AppTest coverage does not yet span navigation, filters, and all degraded states.
 - **Dependencies:** `WP-20`, `WP-21`.

@@ -10,13 +10,13 @@ from __future__ import annotations
 from lake_research_map.dashboard import airflow_client
 
 STAGE_LABELS = {
-    "raw": "Gross Data (Raw)",
-    "bronze": "Bronze (Padronizado)",
-    "silver": "Silver (Limpo e Deduplicado)",
+    "raw": "Raw data",
+    "bronze": "Bronze (standardized)",
+    "silver": "Silver (cleaned and deduplicated)",
     "gold": "Gold (RAG)",
     "embed": "Embeddings (RAG)",
     "semantic": "Semantics (Relevance and Themes)",
-    "all": "Todas as Etapas",
+    "all": "All stages",
 }
 
 DAG_IDS = {

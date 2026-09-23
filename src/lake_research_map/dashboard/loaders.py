@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import ast
 import json
+import os
+from datetime import UTC, datetime
 
 import numpy as np
 import pandas as pd
@@ -20,12 +22,14 @@ from lake_research_map.dashboard.data import (
     bronze_doi_dropped_counts,
     layer_row_counts,
     load_abstract_embeddings_data,
+    load_active_semantic_run,
     load_articles_all_layers,
     load_chunk_search_data,
     load_chunks,
     load_dataset_versions,
     load_duplicate_overrides,
     load_duplicate_pairs,
+    load_enrichment_observation_times,
     load_pipeline_executions,
     load_pipeline_runs,
     load_publication_state,
@@ -68,6 +72,24 @@ def quality_results() -> pd.DataFrame:
 @st.cache_data(ttl=30)
 def source_changes() -> pd.DataFrame:
     return load_source_changes()
+
+
+@st.cache_data(ttl=300)
+def citation_observation_context() -> tuple[int, str]:
+    """Year used for citation-age exposure and how that year was obtained."""
+    observations = load_enrichment_observation_times()
+    if not observations.empty:
+        observed = pd.to_datetime(observations["observed_at"], errors="coerce").dropna()
+        if not observed.empty:
+            return int(observed.max().year), "latest persisted enrichment observation"
+
+    configured = os.environ.get("LAKE_RESEARCH_MAP_CITATION_OBSERVATION_YEAR")
+    if configured:
+        return int(configured), "configured citation-observation fallback"
+    complete_year = os.environ.get("LAKE_RESEARCH_MAP_COMPLETE_YEAR")
+    if complete_year:
+        return int(complete_year), "configured complete-year fallback"
+    return datetime.now(UTC).year - 1, "previous-calendar-year fallback"
 
 
 @st.cache_data(ttl=60)
@@ -444,7 +466,7 @@ def require_articles() -> pd.DataFrame:
         reasons = " ".join(status["fallback_reasons"])
         st.warning(
             f"Degraded mode: analyses use the `{status['layer']}` layer instead of the curated "
-            f"curada Gold. {reasons}"
+            f"curated Gold dataset. {reasons}"
         )
     _, df = filtered_articles()
     if df.empty:
@@ -521,51 +543,21 @@ def abstract_embeddings() -> tuple[list[str], np.ndarray] | None:
 
 
 @st.cache_data(ttl=300)
-def semantic_stability(points: tuple[tuple[str, str, float, float], ...]) -> dict | None:
-    """Bootstrap-ARI for the theme solution and trustworthiness for the shown map.
-
-    Cached here, not in the page, for two reasons. It refits KMeans 30 times,
-    which is seconds of work that must not repeat on every widget interaction;
-    and the key is `(doi, theme, x, y)` tuples rather than the embedding matrix,
-    so Streamlit hashes a few thousand small values instead of a 3115x384 array.
-
-    Clustering stability is measured in the SAME PCA space the themes were built
-    in (`transform/semantics.reduced_space`), not in the raw 384-dimensional
-    space: measuring the stability of a geometry nothing was clustered in would
-    answer a different question, and it is an order of magnitude cheaper.
-    Trustworthiness is measured against the coordinates actually on screen,
-    whichever projection the user selected, for the same reason.
-    """
-    import numpy as np
-
-    from lake_research_map.dashboard.analytics import semantic_stability_diagnostics
-    from lake_research_map.transform.semantics import reduced_space
-
-    if not points:
+def semantic_stability(_points: tuple[tuple[str, str, float, float], ...]) -> dict | None:
+    """Stability persisted with the active run that produced the semantic map."""
+    run = load_active_semantic_run()
+    if run.empty or "stability" not in run.columns:
         return None
-    embeddings = abstract_embeddings()
-    if embeddings is None:
-        return None
-    dois, matrix = embeddings
-
-    by_doi = {doi: (theme, x, y) for doi, theme, x, y in points}
-    rows = [index for index, doi in enumerate(dois) if doi in by_doi]
-    if len(rows) < 10:
-        return None
-    labels = np.array([by_doi[dois[index]][0] for index in rows])
-    projection = np.array([by_doi[dois[index]][1:] for index in rows], dtype=float)
-
-    reduced = reduced_space(matrix[rows])
-    if reduced.ndim != 2 or reduced.shape[1] < 2:
-        return None
-    result = semantic_stability_diagnostics(reduced, labels, projection)
-    if result.get("valid"):
-        # The sweep runs on the same reduced space the themes were found in,
-        # so the numbers on the page describe the search that actually chose k.
-        from lake_research_map.transform.semantics import theme_sweep
-
-        result["k_sweep"] = theme_sweep(reduced)
-    return result
+    value = run.iloc[0]["stability"]
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+    return None
 
 
 @st.cache_data(ttl=300)

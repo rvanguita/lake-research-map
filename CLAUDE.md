@@ -40,7 +40,7 @@ MySQL connection settings and `AIRFLOW_BASE_URL` live in `.env` (git-ignored; se
 |---|---|
 | `medallion-transform` | authoring `ingest/`, `transform/`, `db/`, `pipeline.py` |
 | `pipeline-ops` | *running* stages: local CLI vs. Docker/Airflow, `.env`, idempotency, debugging a run |
-| `streamlit-dashboard` | `dashboard/` page contract, chart contract, theme tokens, aggregation rules |
+| `developing-with-streamlit` | `dashboard/` page contract, chart contract, theme tokens, aggregation rules |
 | `python-testing-conventions` | pytest layout, per-layer SQLite fixtures, pure-function-first testing |
 
 ## Architecture
@@ -116,9 +116,9 @@ Pages are read-only, with no exception: pipeline execution goes through Airflow'
 `actions.py`; it was removed on 2026-09-21 because it wrote the live `lit_chunks` table that publication
 rebuilds from the versioned candidate, so the vectors were silently discarded on the next publish.
 
-The dashboard reads MySQL directly and prefers the **silver** layer (`pick_best_articles_layer`), while
-`lit_semantics` lives in gold — hence `loaders.with_semantics()` joins it on `doi` rather than treating it as
-a column of the active layer.
+The dashboard reads the active immutable **Gold** version through the publication pointer. It falls back to
+Silver and then Bronze only when Gold fails its readiness contract, and displays that degraded mode explicitly.
+`lit_semantics` remains a separate Gold table, so `loaders.with_semantics()` joins it on `doi`.
 
 `main.py` calls `app.main()` **as a function** on purpose: Streamlit re-executes the entry script on every
 rerun, and a module imported for its top-level side effects would only render once.
@@ -151,18 +151,22 @@ anyone else. Treat it as read-only input: it is raw publisher output, re-downloa
 (A `PreToolUse` hook in `.claude/settings.json` blocks edits to it, except `config.csv`.)
 
 ```
-data/ieee/       IEEE Xplore export: one metadata CSV + paginated .bib files + bulk-download*.zip of PDFs
-data/elsevier/   ScienceDirect export: paginated .bib files only (no CSV, no PDFs)
-data/articles/   ~96 PDFs, extracted from the IEEE bulk-download zips
-data/sciencedirect.zip            original archive that data/elsevier/ was unpacked from
+data/references/IEEE Xplore/      current IEEE Xplore BibTeX exports
+data/references/Science Direct/   current ScienceDirect BibTeX exports
+data/articles/                    192 PDF files on disk; 97 currently link to Gold articles
+data/archive/                     retained publisher export archives
 data/enrichment_cache.json        hand-built {doi: {citation_count, reference_count}}, not produced by any code here
 data/classificações_publicadas_*.xlsx   official CAPES/Qualis export (see dashboard/qualis.py)
 ```
 
-**`config.csv` is provenance, not data.** Each source directory has one, and it holds the free-text record of the
-search that produced that export — query string, filters, year range, and the full search URL. It is not a
-parseable table; never feed it to `pd.read_csv` expecting columns. When the corpus is refreshed, update the
-matching `config.csv` so the search is reproducible.
+**`config.csv` is provenance, not data.** Every directory that contains publisher exports must have its own
+free-text search report: query, filters, year range, and full search URL. It is not a parseable table; never feed
+it to `pd.read_csv` expecting columns. Raw stores one row per `source_file`, so multiple reports from the same
+publisher coexist. A file containing `TODO` is intentionally rejected by the provenance coverage check.
+
+Raw scanning defaults to **append** semantics: a partial download does not make previously archived sources
+disappear. Use explicit snapshot mode only when the supplied directory set is known to be the complete corpus;
+snapshot mode is the operation that propagates removals.
 
 ### The two sources are not interchangeable
 
@@ -184,9 +188,16 @@ DOI is the only reliable cross-source join/dedup key — strip the `https://doi.
 comparing, or the same paper indexed by both publishers will survive deduplication twice. Records with no DOI
 at all are dropped at silver (counted as `skipped_no_doi`, never silently).
 
-The IEEE-only fields (`countries`, `online_date`, `document_type`, `license`) carry through bronze → silver →
-gold but cover only the IEEE subset — 302 of 1,831 articles, 16.5%. **Any analysis built on them must say it covers the IEEE subset**, not
-the whole corpus.
+The fields `countries`, `online_date`, `document_type` and `license` carry through bronze → silver → gold, but
+they come from the IEEE **CSV**, not from IEEE generally, and the CSV has only 304 rows while the IEEE `.bib`
+files contribute 1,468 distinct DOIs. Measured 2026-09-22: `online_date` and `document_type` on 301 articles,
+`countries` on 295, `license` on 265 — roughly 9.7% of the 3,115-article corpus and only about a fifth of its
+IEEE half. Calling this "the IEEE subset" therefore overstates it by 5×. **Any analysis built on these fields
+must say it covers the IEEE CSV subset**, and give that denominator.
+
+`countries` is a JSON column whose empty value is the array `[]`, not `NULL`, so `IS NOT NULL` and
+`NOT IN ('', '[]')` both count all 3,115 rows as populated. Use `JSON_LENGTH(countries) > 0` in SQL, or a
+truthiness test on the parsed list in pandas — `dashboard/pages/quality.py` already does the latter.
 
 ### BibTeX parsing gotcha
 
@@ -199,7 +210,7 @@ followed by the next `@ARTICLE{`, on the same line:
 
 Line-oriented or naive split-on-`@` parsing will silently merge or truncate records. Use a real BibTeX parser
 (e.g. `bibtexparser`) or split on `}@` deliberately. Elsevier's files do put each entry on its own lines, so code
-tested only against `data/elsevier/` will appear to work and then fail on IEEE.
+tested only against the ScienceDirect export directory will appear to work and then fail on IEEE.
 
 ### PDF filenames
 
@@ -210,15 +221,27 @@ than exact string equality — and prefer DOI-keyed renaming if a linking step i
 
 ### Counts don't line up
 
-Measured on the current corpus (2026-09-17): 304 IEEE CSV rows and 1,815 BibTeX entries across both sources
-ingest to 1,836 bronze records; 1,831 survive silver's DOI deduplication (5 dropped as `skipped_no_doi`); 96
-have a PDF. The gap between search hits, downloaded entries and retrieved PDFs is a property of how the
-corpus was hand-assembled — do not treat a count mismatch as a bug to fix in code. Re-measure before quoting
-these numbers; the corpus grows whenever a new export is added.
+Measured on the current corpus (2026-09-22): 304 IEEE CSV rows and 5,174 BibTeX entries across both sources
+ingest to 4,877 bronze records; 3,115 survive silver's DOI deduplication (48 dropped as `skipped_no_doi`);
+192 PDFs are inventoried and 97 link to an article. The gap between search hits, downloaded entries and
+retrieved PDFs is a property of how the corpus was hand-assembled — do not treat a count mismatch as a bug to
+fix in code. Re-measure before quoting these numbers; the corpus grows whenever a new export is added, and it
+roughly doubled between 2026-09-17 and 2026-09-21.
 
-The split is also lopsided: 1,529 articles come from Elsevier and 302 from IEEE, and **no article is
-currently indexed by both** — DOI deduplication is insurance the design needs, not the dominant problem in
-this corpus. The 18 near-identical abstracts under distinct DOIs in `lit_duplicate_pairs` are.
+**Most of the bronze → silver drop is within-source, not cross-source.** Elsevier contributes 3,289 bronze
+rows carrying 1,647 distinct DOIs and IEEE 1,588 rows carrying 1,468, while the number of DOIs appearing under
+*both* publishers is still **0**. The near-2× Elsevier ratio is overlapping export runs of the same search:
+bronze keys on the source artifact, so the same paper in two exports is two rows, and silver collapses them.
+That is the design working, not duplication to fix. It does mean the funnel's "36% removed at silver" is a
+property of how the exports overlap, not of the literature.
+
+Cross-source deduplication therefore remains insurance the design needs rather than the dominant problem here.
+The 206 near-identical abstracts under distinct DOIs in `lit_duplicate_pairs` are the real duplicate question,
+and they are resolved by human decision, never automatically.
+
+The corpus also contains 11 articles dated **2027** — publishers stamp an in-press record with its future
+issue year. Any plausibility window on `year` must allow next year; `analytics.plausible_year_bound()` is the
+one place that decides this, and pinning a literal instead silently deletes those rows from every trend.
 
 ## Conventions
 
