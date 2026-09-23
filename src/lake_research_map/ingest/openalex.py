@@ -881,7 +881,10 @@ CITING_BATCH_SIZE = 50
 # works in this corpus, i.e. five pages; 50 pages leave room for the rare batch
 # holding several heavily cited papers.
 CITING_BATCH_MAX_PAGES = 50
-REFERENCE_BATCH_SIZE = 50
+REFERENCE_BATCH_SIZE = 100
+# The width proven against the live API for DOI filters; used if the
+# provider rejects the wider one.
+REFERENCE_BATCH_FALLBACK = 50
 
 
 def short_work_id(work_id: str) -> str:
@@ -1081,8 +1084,10 @@ def resolve_reference_years(
 
     resolved = not_found = consecutive_failures = requests_made = 0
     stopped_early = None
-    for start in range(0, len(batch), max(batch_size, 1)):
-        chunk = batch[start : start + max(batch_size, 1)]
+    size = max(batch_size, 1)
+    start = 0
+    while start < len(batch):
+        chunk = batch[start : start + size]
         by_short = {short_work_id(work_id): work_id for work_id in chunk}
         params = {
             "filter": "ids.openalex:" + "|".join(sorted(by_short)),
@@ -1093,6 +1098,20 @@ def resolve_reference_years(
             params["mailto"] = resolved_email
         fetched = _paged_filter(params, get=get, email=resolved_email, max_pages=1)
         requests_made += max(fetched["pages"], 1)
+        if fetched["error"] and size > REFERENCE_BATCH_FALLBACK:
+            # OpenAlex documents OR filters of up to 100 values, and 100 halves
+            # the requests (564 instead of 1,130 for this corpus) -- enough to
+            # fit the whole resolution into one quota window. If the provider
+            # rejects the wider filter, fall back to the width already proven
+            # in production and retry the same chunk, instead of stopping.
+            logger.warning(
+                "reference years: %d-value filter rejected (%s); falling back to %d",
+                size,
+                fetched["error"],
+                REFERENCE_BATCH_FALLBACK,
+            )
+            size = REFERENCE_BATCH_FALLBACK
+            continue
         if fetched["throttled"] or fetched["error"]:
             consecutive_failures += 1
             if fetched["error"]:
@@ -1100,6 +1119,7 @@ def resolve_reference_years(
             if consecutive_failures >= CONSECUTIVE_FAILURE_LIMIT or fetched["error"]:
                 stopped_early = "rate_limited" if fetched["throttled"] else "error"
                 break
+            start += len(chunk)
             continue
         consecutive_failures = 0
         years = {
@@ -1121,6 +1141,7 @@ def resolve_reference_years(
             resolved += int(found)
             not_found += int(not found)
         session.commit()
+        start += len(chunk)
         if delay:
             time.sleep(delay)
     session.commit()
@@ -1132,6 +1153,7 @@ def resolve_reference_years(
         "resolved": resolved,
         "not_found": not_found,
         "requests": requests_made,
+        "batch_size": size,
         "stopped_early": stopped_early,
         "remaining": max(len(pending) - done_now, 0),
     }
@@ -1263,7 +1285,7 @@ def access_validation(session: Session, ieee_licenses: dict[str, str]) -> dict:
     }
 
 
-def citation_year_coverage(session: Session) -> dict:
+def citation_year_coverage(session: Session, corpus_years: dict[str, int] | None = None) -> dict:
     """WP-23's two measurements: annual trajectories, and cited-reference years.
 
     **Trajectories.** OpenAlex's `counts_by_year` lists only years with at
@@ -1337,6 +1359,30 @@ def citation_year_coverage(session: Session) -> dict:
     distinct_cited = {cited for _, cited in reference_pairs}
     dated_pairs = sum(1 for _, cited in reference_pairs if cited in year_of)
 
+    # Validation, as opposed to coverage: are the years themselves right?
+    # (1) The provider's year for a corpus work against the corpus's own
+    # metadata. A one-year gap is the online-first versus issue-year
+    # difference, not an error, so agreement is scored within +/-1.
+    agreement_pairs = agreement_within_one = 0
+    if corpus_years:
+        normalized_corpus = {
+            _normalize_doi(doi): year for doi, year in corpus_years.items() if year is not None
+        }
+        for doi, year in ((d, y) for d, y in works.values() if d and y is not None):
+            corpus_year = normalized_corpus.get(_normalize_doi(doi))
+            if corpus_year is not None:
+                agreement_pairs += 1
+                agreement_within_one += int(abs(year - corpus_year) <= 1)
+    # (2) Temporal consistency: a reference cannot be published after the
+    # work citing it, beyond the one year an in-press citation allows.
+    consistent_pairs = checked_pairs = 0
+    for citing, cited in reference_pairs:
+        citing_year = year_of.get(citing)
+        cited_year = year_of.get(cited)
+        if citing_year is not None and cited_year is not None:
+            checked_pairs += 1
+            consistent_pairs += int(cited_year <= citing_year + 1)
+
     population = len(works)
     return {
         "population": population,
@@ -1353,6 +1399,11 @@ def citation_year_coverage(session: Session) -> dict:
         "reference_year_coverage": dated_pairs / len(reference_pairs) if reference_pairs else 0.0,
         "distinct_cited": len(distinct_cited),
         "distinct_cited_dated": len(distinct_cited & set(year_of)),
+        "year_agreement_pairs": agreement_pairs,
+        "year_agreement": agreement_within_one / agreement_pairs if agreement_pairs else None,
+        "temporal_checked": checked_pairs,
+        "temporal_inconsistent": checked_pairs - consistent_pairs,
+        "temporal_consistency": consistent_pairs / checked_pairs if checked_pairs else None,
         "known_ids": known,
         "complete_history_ids": complete_history,
         "work_dois": {w: doi for w, (doi, _) in works.items()},

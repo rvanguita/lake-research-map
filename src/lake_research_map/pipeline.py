@@ -1271,7 +1271,7 @@ def _configure_enrichment_commands(subparsers) -> None:
         help="Record the publication year of every work the corpus cites (Price, reference age)",
     )
     references.add_argument("--max-fetch", type=int, default=60_000)
-    references.add_argument("--batch-size", type=int, default=50)
+    references.add_argument("--batch-size", type=int, default=100)
     references.add_argument("--delay", type=float, default=0.25)
 
 
@@ -1610,6 +1610,11 @@ def _configure_audit_commands(subparsers) -> None:
 INTEGRITY_AGREEMENT_GATE = 0.95
 ACCESS_AGREEMENT_GATE = 0.90
 COVERAGE_GATE = 0.80
+# The provider's year may differ from the corpus's by the online-first gap;
+# anything wider than a year on more than 5% of works would mean the years
+# Price's index rests on are not the years the corpus reports.
+YEAR_AGREEMENT_GATE = 0.95
+TEMPORAL_GATE = 0.99
 
 
 def _verdict(passed: bool | None) -> str:
@@ -1810,12 +1815,29 @@ def _audit_citation_years() -> None:
     them, because a trajectory that starts in 2012 is complete for Price's
     index and incomplete for any analysis that needs the whole history.
     """
+    from lake_research_map.db.gold_models import DatasetArticle, PublicationState
     from lake_research_map.ingest.openalex import citation_year_coverage
 
     bootstrap()
+    gold = get_session("gold")
+    try:
+        state = gold.get(PublicationState, 1)
+        corpus_years = (
+            dict(
+                gold.execute(
+                    select(DatasetArticle.doi, DatasetArticle.year).where(
+                        DatasetArticle.dataset_version_id == state.active_version_id
+                    )
+                ).all()
+            )
+            if state and state.active_version_id
+            else {}
+        )
+    finally:
+        gold.close()
     session = get_session("bronze")
     try:
-        cov = citation_year_coverage(session)
+        cov = citation_year_coverage(session, corpus_years)
         if not cov["population"]:
             print(
                 "No OpenAlex works observed, so annual-count coverage is 0 by absence rather "
@@ -1850,12 +1872,35 @@ def _audit_citation_years() -> None:
             f"{cov['distinct_cited_dated']}/{cov['distinct_cited']}"
         )
 
+        print("\nValidation of the years themselves")
+        if cov["year_agreement"] is not None:
+            print(
+                f"  Provider year vs corpus metadata: {cov['year_agreement']:.1%} within one year "
+                f"over {cov['year_agreement_pairs']} works (gate {YEAR_AGREEMENT_GATE:.0%}; a one-"
+                "year gap is online-first versus issue year)"
+            )
+        if cov["temporal_consistency"] is not None:
+            print(
+                f"  Reference not newer than its citer (+1 in-press): "
+                f"{cov['temporal_consistency']:.2%} over {cov['temporal_checked']} dated pairs, "
+                f"{cov['temporal_inconsistent']} inconsistent (gate {TEMPORAL_GATE:.0%})"
+            )
+
         trajectories_ok = cov["known_coverage"] >= COVERAGE_GATE
         references_ok = cov["reference_year_coverage"] >= COVERAGE_GATE
+        validation_ok = (
+            None
+            if cov["year_agreement"] is None or cov["temporal_consistency"] is None
+            else cov["year_agreement"] >= YEAR_AGREEMENT_GATE
+            and cov["temporal_consistency"] >= TEMPORAL_GATE
+        )
         print(
             f"\nVerdict: trajectories {_verdict(trajectories_ok)}, reference years "
-            f"{_verdict(references_ok)} (gate {COVERAGE_GATE:.0%} each)"
+            f"{_verdict(references_ok)} (coverage gate {COVERAGE_GATE:.0%} each), "
+            f"validation {_verdict(validation_ok)}"
         )
+        if trajectories_ok and references_ok and validation_ok:
+            print("  WP-23 gates met: Price, longevity and Sleeping Beauty may enter WP-21 review.")
         if not references_ok:
             print(
                 "  Price's index stays unavailable until reference years are resolved: run "

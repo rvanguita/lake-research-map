@@ -26,7 +26,7 @@ Dependencies use work-package IDs. Horizons are sequencing bands rather than cal
 
 ## 2. Delivered baseline
 
-The following capabilities are implemented and covered by the current 382 passing tests plus two opt-in MySQL tests skipped in the default run (229 before this cycle, followed by regression, application-wide page, evidence-workflow, retrieval, provenance, semantic-persistence, MySQL migration, and year-bound coverage):
+The following capabilities are implemented and covered by the current 387 passing tests plus two opt-in MySQL tests skipped in the default run (229 before this cycle, followed by regression, application-wide page, evidence-workflow, retrieval, provenance, semantic-persistence, MySQL migration, and year-bound coverage):
 
 - Raw/Bronze/Silver/Gold ingestion and transformations with DOI normalization and rejection audit.
 - Local PDF inventory/matching, full-text extraction, chunk reconciliation, and local BGE embeddings.
@@ -294,7 +294,7 @@ This baseline does not imply that every analytical method is confirmatory. The l
 
 ### `WP-23` — Reference-year and citation-history ingestion
 
-- **Status:** Annual trajectories: **gate passes** -- 3,055 of 3,099 observed works (98.6%) have a known trajectory, of which 677 are never-cited works whose empty series is a known zero, not a gap. 584 works published before 2012 are left-censored because the provider's series begins in 2012, so longevity and Sleeping Beauty may use only the 2,515 works whose history is complete from publication. Cited-reference years: **gate fails today at 6.4%** of 89,700 reference pairs; the resolver (`enrichment resolve-references`, 50 works per request) is implemented and tested, and is running across the next two quota windows. Closes when `audit citation-years` reports both verdicts as PASS.
+- **Status:** Two of three gates **pass**. *Trajectories*: 3,055 of 3,099 observed works (98.6%) have a known trajectory, 677 of them never-cited works whose empty series is a known zero; 584 works published before 2012 are left-censored, so longevity and Sleeping Beauty may use only the 2,515 works complete from publication. *Validation*: the provider's year agrees with the corpus metadata within one year for 98.9% of 3,099 works (gate 95%), and 2 of 5,780 dated reference pairs have a reference newer than its citer (99.97% consistent, gate 99%). *Cited-reference years*: **6.4% today, gate 80%** -- 56,330 cited works still need a year. The resolver asks for 100 per request with an automatic fall-back to the proven 50, which should fit the whole resolution into the next quota window; the package closes when `audit citation-years` prints all three verdicts as PASS.
 
 - **Objective:** Enable valid literature-age and delayed-recognition analyses.
 - **Justification:** Price's index, citation longevity, and Sleeping Beauty metrics cannot be reconstructed from cumulative counts.

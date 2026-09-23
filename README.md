@@ -1,7 +1,7 @@
 # lake-research-map
 
 [![Python 3.13](https://img.shields.io/badge/python-3.13-blue.svg)](https://www.python.org/downloads/)
-[![Tests: 382 passed](https://img.shields.io/badge/tests-382%20passed-brightgreen.svg)](tests/)
+[![Tests: 387 passed](https://img.shields.io/badge/tests-387%20passed-brightgreen.svg)](tests/)
 [![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
 [![Streamlit Dashboard](https://img.shields.io/badge/dashboard-Streamlit-FF4B4B.svg)](src/lake_research_map/dashboard/)
 [![Airflow Orchestration](https://img.shields.io/badge/orchestration-Apache%20Airflow-017CEE.svg)](airflow/)
@@ -297,7 +297,7 @@ lake-research-map/
 ├── scripts/
 │   ├── generate_hero.py          # Programmatic vector renderer for hero assets
 │   └── git-hooks/                # Pre-commit hook shell scripts
-├── tests/                        # 382 unit/integration tests (SQLite in-memory)
+├── tests/                        # 387 unit/integration tests (SQLite in-memory)
 ├── AGENTS.md                     # Universal guidelines for AI assistants
 ├── CLAUDE.md                     # Source-data quirks and environment notes
 ├── docker-compose.yml            # Airflow + Dashboard container orchestration
