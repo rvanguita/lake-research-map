@@ -109,14 +109,14 @@ All analytical functions reside in `dashboard/analytics.py` and `dashboard/forec
 ```
                                   ANALYTICAL RIGOR
  ┌───────────────────────────────────────┬──────────────────────────────────────────┐
- │ Scientometrics & Bibliometrics        │ Formulations & Algorithmic Foundations    │
+ │ Scientometrics & Bibliometrics        │ Formulations & Algorithmic Foundations   │
  ├───────────────────────────────────────┼──────────────────────────────────────────┤
- │ Contrastive Relevance Screening       │ Δ = cos(e_i, a_topic) - cos(e_i, a_log)   │
- │ Bass Innovation Diffusion             │ f(t) = (p+q)^2 / p * e^-(p+q)t / (1+q/p)  │
+ │ Contrastive Relevance Screening       │ Δ = cos(e_i, a_topic) - cos(e_i, a_log)  │
+ │ Bass Innovation Diffusion             │ f(t) = (p+q)^2 / p * e^-(p+q)t / (1+q/p) │
  │ Conformal Forecast Intervals          │ ŷ_{t+h} ± Q₀.₉(|rolling error|) * √h     │
  │ Hybrid Retrieval (RRF)                │ RRF(d) = Σ 1 / (60 + rank_m(d))          │
- │ Exposure-adjusted Count GLM           │ log E[y] = Xβ + log(article age + 1)      │
- │ Two-state Kleinberg Burst             │ min emission cost + upward state penalty  │
+ │ Exposure-adjusted Count GLM           │ log E[y] = Xβ + log(article age + 1)     │
+ │ Two-state Kleinberg Burst             │ min emission cost + upward state penalty │
  │ Small-World Network Topology          │ σ = (C / C_rand) / (L / L_rand)          │
  │ Zhang's Excess Impact Index           │ e^2 = Σ_{i=1}^h c_i - h^2                │
  └───────────────────────────────────────┴──────────────────────────────────────────┘
