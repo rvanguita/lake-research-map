@@ -129,6 +129,60 @@ class ReferenceWork(Base):
     observed_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False)
 
 
+class CrossrefReferenceList(Base):
+    """Whether Crossref holds a deposited reference list for a corpus DOI.
+
+    A second source for WP-23's cited-reference years, chosen because Crossref
+    has no per-window request quota, and because a publisher's own deposit
+    carries the year of most references inline. Recorded per observation so a
+    work with no deposit is a stated fact rather than a missing row.
+    """
+
+    __tablename__ = "lit_crossref_reference_lists"
+    __table_args__ = (UniqueConstraint("doi", "observed_at", name="uq_crossref_list_doi_time"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    doi: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    observed_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)  # success | not_found
+    deposited: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class CrossrefReference(Base):
+    """One deposited reference, as the citing work's publisher wrote it."""
+
+    __tablename__ = "lit_crossref_references"
+    __table_args__ = (
+        UniqueConstraint("citing_doi", "position", "observed_at", name="uq_crossref_reference"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    citing_doi: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    reference_doi: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    # The year as deposited inline, parsed; None when the deposit carries none.
+    year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    observed_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False)
+
+
+class DoiYear(Base):
+    """Publication year looked up for a DOI that a reference named without a year.
+
+    Kept apart from `lit_crossref_references` so a lookup never rewrites an
+    observation: the deposit said "no year", and that remains true.
+    """
+
+    __tablename__ = "lit_doi_years"
+    __table_args__ = (UniqueConstraint("provider", "doi", name="uq_doi_year"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    doi: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)  # success | not_found
+    observed_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False)
+
+
 class CitationYearCount(Base):
     __tablename__ = "lit_citation_year_counts"
     __table_args__ = (
