@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from urllib.parse import quote
 
 import requests
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from lake_research_map.db.bronze_models import (
@@ -784,18 +784,38 @@ def citation_graph_coverage(session: Session, work_ids: list[str]) -> dict:
             "backward_coverage": 0.0,
             "forward_coverage": 0.0,
             "usable_for_disruption": 0,
+            "backward_ids": set(),
+            "forward_ids": set(),
+            "usable_ids": set(),
         }
 
+    wanted_set = set(wanted)
     rows = session.execute(
         select(CitationEdge.citing_work_id, CitationEdge.cited_work_id, CitationEdge.discovered_via)
     ).all()
     backward: set[str] = set()
     forward_edges: set[str] = set()
     for citing, cited, via in rows:
-        if via == "referenced_works" and citing in wanted:
+        if via == "referenced_works" and citing in wanted_set:
             backward.add(citing)
-        elif via == "cites_query" and cited in wanted:
+        elif via == "cites_query" and cited in wanted_set:
             forward_edges.add(cited)
+
+    # A work whose own observation reports zero references has a *known*,
+    # empty reference list. It produces no edge, so counting edge presence
+    # alone scored all 324 such works in the corpus as uncovered and reported
+    # backward coverage at 89.5% when the true figure was 100%. The same
+    # mistake had already been fixed for the forward direction; this is its
+    # mirror image.
+    backward_with_edges = len(backward)
+    for work_id, reference_count in session.execute(
+        select(EnrichmentObservation.provider_work_id, EnrichmentObservation.reference_count).where(
+            EnrichmentObservation.provider == "openalex",
+            EnrichmentObservation.status == "success",
+        )
+    ).all():
+        if work_id in wanted_set and reference_count == 0:
+            backward.add(work_id)
 
     # Forward coverage is a property of the crawl, not of the edges it found.
     # Counting works that have an incoming edge silently excludes every work
@@ -812,7 +832,7 @@ def citation_graph_coverage(session: Session, work_ids: list[str]) -> dict:
                 ExternalWork.citing_truncated,
             ).where(ExternalWork.provider == "openalex")
         ).all():
-            if work_id in wanted and crawled_at is not None:
+            if work_id in wanted_set and crawled_at is not None:
                 crawled.add(work_id)
                 if was_truncated:
                     truncated.add(work_id)
@@ -823,11 +843,17 @@ def citation_graph_coverage(session: Session, work_ids: list[str]) -> dict:
         crawled = set(forward_edges)
 
     forward = crawled or forward_edges
-    population = len(set(wanted))
+    population = len(wanted_set)
     both = (backward & forward) - truncated
     return {
         "population": population,
         "with_backward": len(backward),
+        "with_backward_edges": backward_with_edges,
+        # The sets themselves, so an audit can break coverage out by publisher
+        # without re-deriving (and possibly re-mis-deriving) them.
+        "backward_ids": backward,
+        "forward_ids": forward,
+        "usable_ids": both,
         "with_forward": len(forward),
         "with_forward_edges": len(forward_edges),
         "truncated": len(truncated),
@@ -838,4 +864,496 @@ def citation_graph_coverage(session: Session, work_ids: list[str]) -> dict:
         # and never a work whose forward tail was cut off.
         "usable_for_disruption": len(both),
         "disruption_coverage": len(both) / population,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Batched graph collection: incoming edges and reference years
+# ---------------------------------------------------------------------------
+
+# One `cites:` query per work cost 2,254 requests for the 2,215 works still
+# uncrawled after the first window -- more than two quota windows. OR-joining
+# 50 works into one filter and paging the union costs 233. Each citing work in
+# the union is attributed back to the batch members it cites through its own
+# `referenced_works`, so nothing is lost by asking once.
+CITING_BATCH_SIZE = 50
+# Budget per batch, not per work. A union of 50 works averages ~950 citing
+# works in this corpus, i.e. five pages; 50 pages leave room for the rare batch
+# holding several heavily cited papers.
+CITING_BATCH_MAX_PAGES = 50
+REFERENCE_BATCH_SIZE = 50
+
+
+def short_work_id(work_id: str) -> str:
+    """`https://openalex.org/W123` -> `W123`, the form OpenAlex filters accept."""
+    return str(work_id).rstrip("/").rsplit("/", 1)[-1]
+
+
+def hash_order(values: list[str]) -> list[str]:
+    """A deterministic order uncorrelated with anything the values encode.
+
+    OpenAlex work ids are assigned over time, so sorting them orders by
+    ingestion era, which tracks publication year -- exactly the property the
+    reference-year resolution exists to measure. Resolving in that order and
+    stopping at the quota would reproduce `ADR-07`'s bias in a new dimension.
+    Ordering by a hash of the id is stable across runs and neutral with
+    respect to year, publisher and everything else.
+    """
+    return sorted(values, key=lambda value: hashlib.sha256(str(value).encode("utf-8")).hexdigest())
+
+
+def _paged_filter(
+    params: dict,
+    *,
+    get,
+    email: str | None,
+    max_pages: int,
+    timeout: float = 30.0,
+) -> dict:
+    """Page a filtered `/works` query, with the throttle policy of the single-DOI path.
+
+    Returns ``{"results", "count", "pages", "throttled", "error"}``. ``count`` is
+    OpenAlex's own total for the filter, which is what decides truncation
+    precisely: a crawl is complete when it holds ``count`` results, not when it
+    happened to stop before its page budget.
+    """
+    results: list[dict] = []
+    cursor = "*"
+    pages = 0
+    total: int | None = None
+    headers = {"User-Agent": _user_agent(email)}
+    while pages < max_pages and cursor:
+        page_params = dict(params, cursor=cursor)
+        response = None
+        for retry_count in range(CITING_MAX_RETRIES + 1):
+            try:
+                response = get(
+                    OPENALEX_BASE_URL, params=page_params, headers=headers, timeout=timeout
+                )
+            except (requests.RequestException, ValueError) as exc:
+                if retry_count < CITING_MAX_RETRIES:
+                    time.sleep(min(2**retry_count, 8))
+                    continue
+                return {
+                    "results": results,
+                    "count": total,
+                    "pages": pages,
+                    "throttled": False,
+                    "error": str(exc),
+                }
+            status = getattr(response, "status_code", 200)
+            if status == 429 or status >= 500:
+                _log_throttle_headers(response)
+                if retry_count < CITING_MAX_RETRIES and not retrying_is_futile(response):
+                    time.sleep(backoff_seconds(response, retry_count))
+                    continue
+                return {
+                    "results": results,
+                    "count": total,
+                    "pages": pages,
+                    "throttled": True,
+                    "error": None,
+                }
+            break
+        if getattr(response, "status_code", 200) >= 400:
+            # A 4xx is not a throttle: most likely the filter itself was
+            # rejected. Reported, never retried, so a malformed query fails
+            # loudly in one request instead of quietly per work.
+            return {
+                "results": results,
+                "count": total,
+                "pages": pages,
+                "throttled": False,
+                "error": f"OpenAlex returned HTTP {response.status_code}",
+            }
+        payload = response.json()
+        pages += 1
+        meta = payload.get("meta") or {}
+        if total is None and meta.get("count") is not None:
+            total = int(meta["count"])
+        batch = payload.get("results") or []
+        results.extend(batch)
+        cursor = meta.get("next_cursor") if batch else None
+    return {"results": results, "count": total, "pages": pages, "throttled": False, "error": None}
+
+
+def fetch_openalex_citing_batch(
+    work_ids: list[str],
+    *,
+    session_factory=None,
+    email: str | None = None,
+    api_key: str | None = None,
+    max_pages: int = CITING_BATCH_MAX_PAGES,
+) -> dict[str, dict]:
+    """Incoming edges for up to `CITING_BATCH_SIZE` works in one paged query.
+
+    Returns ``{work_id: {"citing_work_ids", "truncated", "throttled", "error"}}``
+    keyed by the ids exactly as passed. Truncation is decided by OpenAlex's own
+    result count, and applies to the whole batch: when the union was cut off
+    there is no way to tell which member lost edges, so every member is
+    flagged rather than any being certified complete.
+    """
+    get = session_factory or requests.get
+    resolved_email = email or os.environ.get("OPENALEX_EMAIL")
+    resolved_key = api_key or os.environ.get("OPENALEX_API_KEY")
+    by_short = {short_work_id(work_id): work_id for work_id in work_ids}
+    if not by_short:
+        return {}
+    params = {
+        "filter": "cites:" + "|".join(sorted(by_short)),
+        "per-page": CITING_PAGE_SIZE,
+        "select": "id,referenced_works",
+    }
+    if resolved_email:
+        params["mailto"] = resolved_email
+    if resolved_key:
+        params["api_key"] = resolved_key
+
+    fetched = _paged_filter(params, get=get, email=resolved_email, max_pages=max_pages)
+    citing: dict[str, list[str]] = {work_id: [] for work_id in work_ids}
+    for item in fetched["results"]:
+        citing_id = item.get("id")
+        if not citing_id:
+            continue
+        for reference in item.get("referenced_works") or []:
+            target = by_short.get(short_work_id(reference))
+            if target is not None and short_work_id(citing_id) != short_work_id(target):
+                citing[target].append(str(citing_id))
+
+    incomplete = (
+        fetched["throttled"]
+        or fetched["error"] is not None
+        or (fetched["count"] is not None and len(fetched["results"]) < fetched["count"])
+        or (fetched["count"] is None and fetched["pages"] >= max_pages)
+    )
+    return {
+        work_id: {
+            "citing_work_ids": list(dict.fromkeys(citing[work_id])),
+            "truncated": bool(incomplete),
+            "throttled": bool(fetched["throttled"]),
+            "error": fetched["error"],
+        }
+        for work_id in work_ids
+    }
+
+
+def resolve_reference_years(
+    session: Session,
+    *,
+    max_fetch: int = 60_000,
+    batch_size: int = REFERENCE_BATCH_SIZE,
+    delay: float = 0.25,
+    session_factory=None,
+    email: str | None = None,
+) -> dict:
+    """Record the publication year of every work the corpus cites.
+
+    Candidates are the distinct `cited_work_id`s of `referenced_works` edges
+    that are neither corpus works (whose year `lit_external_works` already
+    holds) nor already resolved. Resumable, hash-ordered (`hash_order`), and
+    stopped by the same five-in-a-row breaker as the other passes.
+    """
+    from lake_research_map.db.bronze_models import ReferenceWork
+
+    get = session_factory or requests.get
+    resolved_email = email or os.environ.get("OPENALEX_EMAIL")
+    observed_at = datetime.now(UTC).replace(tzinfo=None)
+
+    cited = set(
+        session.scalars(
+            select(CitationEdge.cited_work_id)
+            .where(CitationEdge.discovered_via == "referenced_works")
+            .distinct()
+        ).all()
+    )
+    in_corpus = set(session.scalars(select(ExternalWork.provider_work_id)).all())
+    done = set(session.scalars(select(ReferenceWork.provider_work_id)).all())
+    pending = hash_order(sorted(cited - in_corpus - done))
+    batch = pending[:max_fetch]
+    logger.info(
+        "reference years: %d cited works, %d in corpus, %d resolved, %d pending, resolving %d",
+        len(cited),
+        len(cited & in_corpus),
+        len(done),
+        len(pending),
+        len(batch),
+    )
+
+    resolved = not_found = consecutive_failures = requests_made = 0
+    stopped_early = None
+    for start in range(0, len(batch), max(batch_size, 1)):
+        chunk = batch[start : start + max(batch_size, 1)]
+        by_short = {short_work_id(work_id): work_id for work_id in chunk}
+        params = {
+            "filter": "ids.openalex:" + "|".join(sorted(by_short)),
+            "per-page": len(by_short),
+            "select": "id,publication_year",
+        }
+        if resolved_email:
+            params["mailto"] = resolved_email
+        fetched = _paged_filter(params, get=get, email=resolved_email, max_pages=1)
+        requests_made += max(fetched["pages"], 1)
+        if fetched["throttled"] or fetched["error"]:
+            consecutive_failures += 1
+            if fetched["error"]:
+                logger.warning("reference years: batch rejected: %s", fetched["error"])
+            if consecutive_failures >= CONSECUTIVE_FAILURE_LIMIT or fetched["error"]:
+                stopped_early = "rate_limited" if fetched["throttled"] else "error"
+                break
+            continue
+        consecutive_failures = 0
+        years = {
+            short_work_id(item.get("id")): item.get("publication_year")
+            for item in fetched["results"]
+            if item.get("id")
+        }
+        for short, work_id in by_short.items():
+            found = short in years
+            session.add(
+                ReferenceWork(
+                    provider="openalex",
+                    provider_work_id=work_id,
+                    publication_year=years.get(short),
+                    status="success" if found else "not_found",
+                    observed_at=observed_at,
+                )
+            )
+            resolved += int(found)
+            not_found += int(not found)
+        session.commit()
+        if delay:
+            time.sleep(delay)
+    session.commit()
+    done_now = resolved + not_found
+    return {
+        "cited_works": len(cited),
+        "in_corpus": len(cited & in_corpus),
+        "pending": len(pending),
+        "resolved": resolved,
+        "not_found": not_found,
+        "requests": requests_made,
+        "stopped_early": stopped_early,
+        "remaining": max(len(pending) - done_now, 0),
+    }
+
+
+def citation_graph_integrity(session: Session) -> dict:
+    """Structural checks, plus agreement between OpenAlex's two edge indexes.
+
+    OpenAlex exposes each citation twice: in the citing work's
+    `referenced_works` and in a `cites:` query on the cited work. For a pair
+    where *both* ends are corpus works, and the cited work's forward crawl is
+    complete, the two must agree. The agreement rate is therefore a direct
+    measure of how far the graph can be trusted, independent of any coverage
+    figure.
+    """
+    works = {
+        work_id: (crawled_at, truncated)
+        for work_id, crawled_at, truncated in session.execute(
+            select(
+                ExternalWork.provider_work_id,
+                ExternalWork.citing_crawled_at,
+                ExternalWork.citing_truncated,
+            ).where(ExternalWork.provider == "openalex")
+        ).all()
+    }
+    complete_forward = {w for w, (at, trunc) in works.items() if at is not None and not trunc}
+
+    backward: set[tuple[str, str]] = set()
+    forward: set[tuple[str, str]] = set()
+    self_loops = dangling = 0
+    for citing, cited, via in session.execute(
+        select(CitationEdge.citing_work_id, CitationEdge.cited_work_id, CitationEdge.discovered_via)
+    ).all():
+        if short_work_id(citing) == short_work_id(cited):
+            self_loops += 1
+        if via == "referenced_works":
+            backward.add((citing, cited))
+        elif via == "cites_query":
+            forward.add((citing, cited))
+            if cited not in works:
+                dangling += 1
+
+    # Backward -> forward: every corpus-internal reference to a fully crawled
+    # work should reappear in that work's `cites:` result.
+    checkable_b = {pair for pair in backward if pair[0] in works and pair[1] in complete_forward}
+    confirmed_b = checkable_b & forward
+    # Forward -> backward: every in-corpus citer found by the crawl should list
+    # the cited work among its own references.
+    checkable_f = {pair for pair in forward if pair[0] in works and pair[1] in complete_forward}
+    confirmed_f = checkable_f & backward
+
+    checkable = len(checkable_b) + len(checkable_f)
+    agreement = (len(confirmed_b) + len(confirmed_f)) / checkable if checkable else None
+    return {
+        "self_loops": self_loops,
+        "dangling_forward": dangling,
+        "internal_pairs_checked": checkable,
+        "backward_confirmed": len(confirmed_b),
+        "backward_checkable": len(checkable_b),
+        "forward_confirmed": len(confirmed_f),
+        "forward_checkable": len(checkable_f),
+        "agreement": agreement,
+    }
+
+
+# IEEE CSV licence values that *imply* open access. `IEEE` (publisher
+# copyright) does not imply closed: a repository copy makes an article green
+# OA, so that disagreement is legitimate and excluded from the test.
+IEEE_OPEN_LICENSES = {"CCBY": "cc-by", "CCBYNCND": "cc-by-nc-nd", "OAPA": None}
+
+
+def access_validation(session: Session, ieee_licenses: dict[str, str]) -> dict:
+    """Check OpenAlex access status against the IEEE CSV, an independent source.
+
+    Two implications are testable. An article the IEEE export licenses under
+    Creative Commons or OAPA must be open access in OpenAlex. And where both
+    sources name a CC licence, it must be the same one. Everything else --
+    including an `IEEE`-copyright article that OpenAlex finds green -- is not
+    a contradiction and is not counted as one.
+    """
+    work_by_doi = {
+        _normalize_doi(doi): work_id
+        for work_id, doi in session.execute(
+            select(ExternalWork.provider_work_id, ExternalWork.doi).where(
+                ExternalWork.provider == "openalex"
+            )
+        ).all()
+        if doi
+    }
+    latest: dict[str, tuple] = {}
+    for work_id, observed_at, is_oa, oa_status, license_ in session.execute(
+        select(
+            AccessObservation.provider_work_id,
+            AccessObservation.observed_at,
+            AccessObservation.is_oa,
+            AccessObservation.oa_status,
+            AccessObservation.license,
+        ).where(AccessObservation.provider == "openalex")
+    ).all():
+        if work_id not in latest or observed_at > latest[work_id][0]:
+            latest[work_id] = (observed_at, is_oa, oa_status, license_)
+
+    observed = sum(1 for row in latest.values() if row[1] is not None)
+    implied_open = open_confirmed = licence_pairs = licence_agree = 0
+    contradictions: list[str] = []
+    for doi, ieee_license in ieee_licenses.items():
+        work_id = work_by_doi.get(_normalize_doi(doi))
+        if work_id is None or work_id not in latest or ieee_license not in IEEE_OPEN_LICENSES:
+            continue
+        _, is_oa, _, oa_license = latest[work_id]
+        implied_open += 1
+        if is_oa:
+            open_confirmed += 1
+        else:
+            contradictions.append(doi)
+        expected = IEEE_OPEN_LICENSES[ieee_license]
+        if expected and oa_license:
+            licence_pairs += 1
+            licence_agree += int(oa_license == expected)
+    return {
+        "works_with_access": observed,
+        "works_observed": len(latest),
+        "ieee_open_licensed": implied_open,
+        "open_confirmed": open_confirmed,
+        "open_agreement": open_confirmed / implied_open if implied_open else None,
+        "licence_pairs": licence_pairs,
+        "licence_agreement": licence_agree / licence_pairs if licence_pairs else None,
+        "contradictions": contradictions[:20],
+    }
+
+
+def citation_year_coverage(session: Session) -> dict:
+    """WP-23's two measurements: annual trajectories, and cited-reference years.
+
+    **Trajectories.** OpenAlex's `counts_by_year` lists only years with at
+    least one citation, so a never-cited work arrives with an empty series. Its
+    trajectory is known -- zero every year -- and counting it as uncovered is
+    what reported 76.7% on a corpus whose true figure was 98.6%: 677 of the 721
+    "missing" series belonged to works with no citations at all.
+
+    The series also starts in a fixed year (2012 for this provider), so a work
+    published earlier has a *left-censored* history even when its series is
+    present. Longevity and Sleeping Beauty need the whole history from
+    publication, so those works are reported separately rather than folded
+    into coverage.
+
+    **Reference years.** Price's index needs the publication year of each
+    cited reference. A reference is dated when the cited work is in the corpus
+    (`lit_external_works`) or has been resolved (`lit_reference_works`).
+    """
+    from lake_research_map.db.bronze_models import ReferenceWork
+
+    works = {
+        work_id: (doi, year)
+        for work_id, doi, year in session.execute(
+            select(
+                ExternalWork.provider_work_id, ExternalWork.doi, ExternalWork.publication_year
+            ).where(ExternalWork.provider == "openalex")
+        ).all()
+    }
+    with_series = set(
+        session.scalars(
+            select(CitationYearCount.provider_work_id)
+            .where(CitationYearCount.provider == "openalex")
+            .distinct()
+        ).all()
+    ) & set(works)
+    never_cited = {
+        work_id
+        for work_id, count in session.execute(
+            select(
+                EnrichmentObservation.provider_work_id, EnrichmentObservation.citation_count
+            ).where(
+                EnrichmentObservation.provider == "openalex",
+                EnrichmentObservation.status == "success",
+            )
+        ).all()
+        if work_id in works and (count or 0) == 0
+    }
+    known = with_series | never_cited
+    series_start = session.scalar(
+        select(func.min(CitationYearCount.year)).where(CitationYearCount.provider == "openalex")
+    )
+    left_censored = (
+        {w for w, (_, year) in works.items() if year is not None and year < series_start}
+        if series_start is not None
+        else set()
+    )
+    complete_history = known - left_censored
+
+    year_of = {w: year for w, (_, year) in works.items() if year is not None}
+    for work_id, year, status in session.execute(
+        select(ReferenceWork.provider_work_id, ReferenceWork.publication_year, ReferenceWork.status)
+    ).all():
+        if status == "success" and year is not None:
+            year_of.setdefault(work_id, year)
+    references = session.execute(
+        select(CitationEdge.citing_work_id, CitationEdge.cited_work_id).where(
+            CitationEdge.discovered_via == "referenced_works"
+        )
+    ).all()
+    reference_pairs = {(citing, cited) for citing, cited in references}
+    distinct_cited = {cited for _, cited in reference_pairs}
+    dated_pairs = sum(1 for _, cited in reference_pairs if cited in year_of)
+
+    population = len(works)
+    return {
+        "population": population,
+        "with_series": len(with_series),
+        "never_cited": len(never_cited - with_series),
+        "known": len(known),
+        "known_coverage": len(known) / population if population else 0.0,
+        "unexplained": population - len(known),
+        "series_start": series_start,
+        "left_censored": len(left_censored),
+        "complete_history": len(complete_history),
+        "reference_pairs": len(reference_pairs),
+        "dated_reference_pairs": dated_pairs,
+        "reference_year_coverage": dated_pairs / len(reference_pairs) if reference_pairs else 0.0,
+        "distinct_cited": len(distinct_cited),
+        "distinct_cited_dated": len(distinct_cited & set(year_of)),
+        "known_ids": known,
+        "complete_history_ids": complete_history,
+        "work_dois": {w: doi for w, (doi, _) in works.items()},
     }
