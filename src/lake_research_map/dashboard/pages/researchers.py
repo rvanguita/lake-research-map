@@ -107,11 +107,17 @@ def render() -> None:
     )
 
     if section == "Productivity and ranking":
-        sub_prolific, sub_lead = st.tabs(["More Prolific", "🥇 1º/2º Autor"])
-        with sub_prolific:
-            _top_authors(author_rows)
-        with sub_lead:
-            _lead_authors_ranking(author_rows)
+        sub_prolific, sub_lead = st.tabs(
+            ["Most prolific", "🥇 1st/2nd author"],
+            on_change="rerun",
+            key="res_productivity_tab",
+        )
+        if sub_prolific.open:
+            with sub_prolific:
+                _top_authors(author_rows)
+        elif sub_lead.open:
+            with sub_lead:
+                _lead_authors_ranking(author_rows)
 
     elif section == "Corpus impact":
         _render_scientific_leadership_tab(articles_df)
@@ -126,118 +132,169 @@ def render() -> None:
                 "👥 Annual & Cumulative Volume",
                 "🔥 Activity heatmap",
                 "🌱 Emerging vs. established",
-            ]
+            ],
+            on_change="rerun",
+            key="res_temporal_tab",
         )
-        with sub_active:
-            active_view = (
-                st.segmented_control(
-                    "Activity Metric",
-                    options=[
-                        "Researchers/Year",
-                        "Cumulative Researchers",
-                        "1st/2nd Authors/Year",
-                        "1st/2nd Cumulative",
-                    ],
-                    default="Researchers/Year",
-                    key="res_active_view_selector",
-                )
-                or "Researchers/Year"
-            )
-            if active_view == "Researchers/Year":
-                _researchers_by_year(articles_df)
-            elif active_view == "Cumulative Researchers":
-                _cumulative_researchers_chart(articles_df)
-            elif active_view == "1st/2nd Authors/Year":
-                _lead_authors_by_year(articles_df)
-            else:
-                _cumulative_lead_authors_chart(articles_df)
-
-        with sub_heatmap:
-            _production_heatmap(author_rows)
-        with sub_emerging:
-            _emerging_vs_established(author_rows)
+        if sub_active.open:
+            with sub_active:
+                _temporal_activity_views(articles_df)
+        elif sub_heatmap.open:
+            with sub_heatmap:
+                _production_heatmap(author_rows)
+        elif sub_emerging.open:
+            with sub_emerging:
+                _emerging_vs_established(author_rows)
 
     elif section == "Collaboration and networks":
-        sub_teams, sub_network, sub_cognitive = st.tabs(
-            [
-                "👥 Teams & size",
-                "🕸️ Co-authorship network (Louvain)",
-                "🧠 Cognitive distance vs. Impact",
-            ]
+        _collaboration_section(articles_df, author_rows)
+
+    elif section == "Research lines":
+        _research_lines_section(articles_df, author_rows)
+
+    elif section == "Bibliometric laws":
+        _bibliometric_laws_section(articles_df, author_rows)
+
+
+def _temporal_activity_views(articles_df: pd.DataFrame) -> None:
+    """The four annual/cumulative views behind one segmented control."""
+    active_view = (
+        st.segmented_control(
+            "Activity Metric",
+            options=[
+                "Researchers/Year",
+                "Cumulative Researchers",
+                "1st/2nd Authors/Year",
+                "1st/2nd Cumulative",
+            ],
+            default="Researchers/Year",
+            key="res_active_view_selector",
         )
+        or "Researchers/Year"
+    )
+    if active_view == "Researchers/Year":
+        _researchers_by_year(articles_df)
+    elif active_view == "Cumulative Researchers":
+        _cumulative_researchers_chart(articles_df)
+    elif active_view == "1st/2nd Authors/Year":
+        _lead_authors_by_year(articles_df)
+    else:
+        _cumulative_lead_authors_chart(articles_df)
+
+
+def _collaboration_section(articles_df: pd.DataFrame, author_rows: pd.DataFrame) -> None:
+    sub_teams, sub_network, sub_cognitive = st.tabs(
+        [
+            "👥 Teams & size",
+            "🕸️ Co-authorship network (Louvain)",
+            "🧠 Cognitive distance vs. Impact",
+        ],
+        on_change="rerun",
+        key="res_collaboration_tab",
+    )
+    # The network and cognitive-distance panels each build a graph and refit a
+    # null model, so a hidden tab must not compute them.
+    if sub_teams.open:
         with sub_teams:
             _render_team_collaboration_stats(articles_df)
+    elif sub_network.open:
         with sub_network:
             _coauthorship_network(author_rows)
+    elif sub_cognitive.open:
         with sub_cognitive:
             _cognitive_distance_analysis(articles_df, author_rows)
 
-    elif section == "Research lines":
-        (
-            sub_leaders,
-            sub_trend,
-            sub_kw_year,
-            sub_kw_cum,
-            sub_kw_profile,
-            sub_kw_shift,
-        ) = st.tabs(
-            [
-                "🔎 Line Leaders",
-                "📈 Annual trajectory",
-                "👥 Researchers/Year",
-                "📈 Cumulative Researchers",
-                "🏷️ Keyword profile",
-                "🔀 Focus Change",
-            ]
-        )
+
+def _research_lines_section(articles_df: pd.DataFrame, author_rows: pd.DataFrame) -> None:
+    (
+        sub_leaders,
+        sub_trend,
+        sub_kw_year,
+        sub_kw_cum,
+        sub_kw_profile,
+        sub_kw_shift,
+    ) = st.tabs(
+        [
+            "🔎 Line Leaders",
+            "📈 Annual trajectory",
+            "👥 Researchers/Year",
+            "📈 Cumulative Researchers",
+            "🏷️ Keyword profile",
+            "🔀 Focus Change",
+        ],
+        on_change="rerun",
+        key="res_lines_tab",
+    )
+
+    # The two selectors stay outside the tabs: they own widget state that must
+    # survive a tab change, and they are what every panel below is scoped by.
+    keyword_tabs = (sub_leaders, sub_trend, sub_kw_year, sub_kw_cum)
+    if any(tab.open for tab in keyword_tabs):
         selected_kw, scoped_authors, dois_with_kw = _research_line_selector(
             author_rows, articles_df
         )
-        with sub_leaders:
-            if selected_kw:
-                _research_line_top_authors(selected_kw, scoped_authors)
-        with sub_trend:
-            if selected_kw:
-                _research_line_trend(selected_kw, scoped_authors)
-        with sub_kw_year:
-            if selected_kw:
-                _research_line_researchers_by_year(selected_kw, articles_df, dois_with_kw)
-        with sub_kw_cum:
-            if selected_kw:
-                _research_line_researchers_cumulative(selected_kw, articles_df, dois_with_kw)
-                _research_line_articles(articles_df, scoped_authors, selected_kw)
+        if sub_leaders.open:
+            with sub_leaders:
+                if selected_kw:
+                    _research_line_top_authors(selected_kw, scoped_authors)
+        elif sub_trend.open:
+            with sub_trend:
+                if selected_kw:
+                    _research_line_trend(selected_kw, scoped_authors)
+        elif sub_kw_year.open:
+            with sub_kw_year:
+                if selected_kw:
+                    _research_line_researchers_by_year(selected_kw, articles_df, dois_with_kw)
+        elif sub_kw_cum.open:
+            with sub_kw_cum:
+                if selected_kw:
+                    _research_line_researchers_cumulative(selected_kw, articles_df, dois_with_kw)
+                    _research_line_articles(articles_df, scoped_authors, selected_kw)
+        return
 
-        selected_author = _author_keyword_selector(author_rows)
-        working_kw = (
-            _author_keyword_working(selected_author, author_rows, articles_df)
-            if selected_author
-            else None
-        )
+    selected_author = _author_keyword_selector(author_rows)
+    working_kw = (
+        _author_keyword_working(selected_author, author_rows, articles_df)
+        if selected_author
+        else None
+    )
+    if sub_kw_profile.open:
         with sub_kw_profile:
             if working_kw is not None:
                 _author_keyword_overview(selected_author, working_kw)
+    elif sub_kw_shift.open:
         with sub_kw_shift:
             if working_kw is not None:
                 _author_keyword_shift(working_kw)
 
-    elif section == "Bibliometric laws":
-        sub_table, sub_lotka, sub_concentration, sub_trend_table, sub_vs_impact = st.tabs(
-            [
-                "📋 Complete table",
-                "📐 Lotka's law",
-                "📉 Concentration (Gini/Lorenz)",
-                "📈 Productivity trend",
-                "📊 Volume × impact",
-            ]
-        )
+
+def _bibliometric_laws_section(articles_df: pd.DataFrame, author_rows: pd.DataFrame) -> None:
+    sub_table, sub_lotka, sub_concentration, sub_trend_table, sub_vs_impact = st.tabs(
+        [
+            "📋 Complete table",
+            "📐 Lotka's law",
+            "📉 Concentration (Gini/Lorenz)",
+            "📈 Productivity trend",
+            "📊 Volume × impact",
+        ],
+        on_change="rerun",
+        key="res_laws_tab",
+    )
+    if sub_table.open:
         with sub_table:
-            matrix = _full_output_table(articles_df)
+            _full_output_table(articles_df)
+    elif sub_lotka.open:
         with sub_lotka:
             _lotka_law(author_rows)
+    elif sub_concentration.open:
         with sub_concentration:
-            _concentration_analysis(matrix)
+            # Read the matrix from its own cached loader rather than from the
+            # table tab, which no longer runs when this one is open.
+            _concentration_analysis(loaders.author_year_matrix_cached(loaders.filter_signature()))
+    elif sub_trend_table.open:
         with sub_trend_table:
-            _productivity_trend(matrix)
+            _productivity_trend(loaders.author_year_matrix_cached(loaders.filter_signature()))
+    elif sub_vs_impact.open:
         with sub_vs_impact:
             _volume_vs_impact(author_rows)
 
@@ -433,16 +490,16 @@ def _render_team_collaboration_stats(articles_df: pd.DataFrame) -> None:
             (
                 "📊 General Mean",
                 f"{means['total']:.1f} authors/article",
-                f"Mediana: {with_authors['n_authors'].median():.0f}",
+                f"Median: {with_authors['n_authors'].median():.0f}",
             ),
             (
                 "📘 Mean IEEE",
-                f"{means['ieee']:.1f}" if means["ieee"] is not None else "N/D",
+                f"{means['ieee']:.1f}" if means["ieee"] is not None else "n/a",
                 "IEEE Xplore source",
             ),
             (
                 "📙 Average Elsevier",
-                f"{means['elsevier']:.1f}" if means["elsevier"] is not None else "N/D",
+                f"{means['elsevier']:.1f}" if means["elsevier"] is not None else "n/a",
                 "ScienceDirect source",
             ),
             (
@@ -533,11 +590,11 @@ def _top_authors(author_rows: pd.DataFrame) -> None:
         by_source["total"] = counts.reindex(top_index)
         by_source = by_source.reindex(top_index).reset_index()
         fig = source_topn_hbar(
-            by_source, "author_display", x_title="Number of articles", y_title="Autor"
+            by_source, "author_display", x_title="Number of articles", y_title="Author"
         )
         fig.update_traces(hovertemplate="<b>%{y}</b><br>%{x:,} articles<extra></extra>")
     else:
-        fig = topn_hbar(counts.reindex(top_index), x_title="Number of articles", y_title="Autor")
+        fig = topn_hbar(counts.reindex(top_index), x_title="Number of articles", y_title="Author")
         fig.update_traces(hovertemplate="<b>%{y}</b><br>%{x:,} articles<extra></extra>")
     render_chart(fig)
 
@@ -569,12 +626,12 @@ def _lead_authors_ranking(author_rows: pd.DataFrame) -> None:
         by_source["total"] = counts.reindex(top_index)
         by_source = by_source.reindex(top_index).reset_index()
         fig = source_topn_hbar(
-            by_source, "author_display", x_title="Articles as 1st/2nd author", y_title="Autor"
+            by_source, "author_display", x_title="Articles as 1st/2nd author", y_title="Author"
         )
         fig.update_traces(hovertemplate="<b>%{y}</b><br>%{x:,} articles<extra></extra>")
     else:
         fig = topn_hbar(
-            counts.reindex(top_index), x_title="Articles as 1st/2nd author", y_title="Autor"
+            counts.reindex(top_index), x_title="Articles as 1st/2nd author", y_title="Author"
         )
         fig.update_traces(hovertemplate="<b>%{y}</b><br>%{x:,} articles<extra></extra>")
     render_chart(
@@ -707,11 +764,11 @@ def _production_heatmap(author_rows: pd.DataFrame) -> None:
         pivot,
         aspect="auto",
         color_continuous_scale=[zero_color, CATEGORICAL_PALETTE[0], CATEGORICAL_PALETTE[3]],
-        labels={"x": "Year of publication", "y": "Autor", "color": "Articles"},
+        labels={"x": "Year of publication", "y": "Author", "color": "Articles"},
     )
     fig.update_layout(
         xaxis_title="Year of publication",
-        yaxis_title="Autor",
+        yaxis_title="Author",
         height=max(420, 22 * len(pivot)),
     )
     render_chart(
@@ -903,9 +960,9 @@ def _full_output_table(articles_df: pd.DataFrame) -> pd.DataFrame:
     )
     st.dataframe(matrix, hide_index=True, width="stretch")
     st.download_button(
-        "▁Baixar",
+        "Download",
         data=matrix.to_csv(index=False).encode("utf-8"),
-        file_name="producao_por_autor_ano.csv",
+        file_name="production_by_author_year.csv",
         mime="text/csv",
         key="dl_author_year_matrix",
     )
@@ -970,7 +1027,7 @@ def _productivity_trend(matrix: pd.DataFrame) -> None:
     )
     display = trend_df.rename(
         columns={
-            "author": "Autor",
+            "author": "Author",
             "total": "Historical total",
             "first_year": "First year",
             "last_year": "Last year",
@@ -1019,14 +1076,82 @@ def _network_null_model(graph, net_metrics: dict) -> None:
                 ),
             ]
         )
+        assortativity = result.get("observed_assortativity")
+        assort_z = result.get("assortativity_z_score")
+        targeted = result.get("robustness_targeted")
+        random_removal = result.get("robustness_random")
+        if assortativity is not None or targeted is not None:
+            metric_row(
+                [
+                    (
+                        "🔗 Degree assortativity",
+                        "n/a" if assortativity is None else f"{assortativity:+.3f}",
+                        "n/a" if assort_z is None else f"z {assort_z:+.2f} vs. the same rewirings",
+                    ),
+                    (
+                        "💥 Giant component, hubs removed",
+                        "n/a" if targeted is None else f"{targeted:.0%}",
+                        f"{result.get('robustness_removed', 0)} highest-degree authors",
+                    ),
+                    (
+                        "🎲 Giant component, random removal",
+                        "n/a" if random_removal is None else f"{random_removal:.0%}",
+                        "Same count removed at random, averaged over 20 draws",
+                    ),
+                ]
+            )
         st.caption(
             "The null preserves each author's degree and rewires the ties, so a high z-score "
             "means the clustering is not just a consequence of how many co-authors each "
-            "person has. Path length and the small-world σ above are restricted to the "
-            "largest connected component, while density and the centralities cover the whole "
-            "graph including fragments — the two are not on the same population. Every "
-            "claim here is also bounded by heuristic author identity: homonyms merge and "
-            "spelling variants split."
+            "person has. Assortativity is scored against those same rewirings, because the "
+            "degree sequence alone forces part of it. The two removal figures are only "
+            "meaningful as a pair: a network that fragments when its hubs go but shrugs off "
+            "the same number of random losses is one held together by a few people, while "
+            "two similar numbers mean the structure is distributed. Path length and the "
+            "small-world σ above are restricted to the largest connected component, while "
+            "density and the centralities cover the whole graph including fragments — the "
+            "two are not on the same population. Every claim here is also bounded by "
+            "heuristic author identity: homonyms merge and spelling variants split."
+        )
+
+
+def _periodized_ties(author_rows: pd.DataFrame) -> None:
+    """Show whether the field keeps recruiting collaborators or has closed up.
+
+    A static recurrent-edge count cannot tell those apart: both produce the
+    same number of repeat pairs. Splitting by the period in which a tie first
+    appears is what separates them.
+    """
+    from lake_research_map.dashboard.analytics import periodized_collaboration_ties
+
+    ties = periodized_collaboration_ties(author_rows)
+    if ties.empty or len(ties) < 2:
+        return
+
+    with st.expander("New vs. returning collaborations over time", expanded=False):
+        shown = ties.rename(
+            columns={
+                "period": "Period",
+                "new_ties": "New ties",
+                "repeated_ties": "Returning ties",
+                "total_ties": "Active ties",
+                "new_share": "New share",
+            }
+        )
+        shown["New share"] = (shown["New share"] * 100).round(1)
+        st.dataframe(shown, hide_index=True, width="stretch")
+        first, last = ties.iloc[0]["new_share"], ties.iloc[-1]["new_share"]
+        direction = (
+            "the field is still recruiting new collaborators"
+            if last >= first
+            else "collaboration is consolidating into established pairs"
+        )
+        st.caption(
+            "A tie is *new* in the period containing its first-ever collaboration and "
+            "*returning* thereafter. The share of new ties moved from "
+            f"{first:.0%} to {last:.0%} across the periods shown, so on this corpus "
+            f"{direction}. Periods are equal splits of the observed years, not calendar "
+            "decades, and every count inherits the limits of heuristic author identity."
         )
 
 
@@ -1115,7 +1240,7 @@ def _coauthorship_network(author_rows: pd.DataFrame) -> None:
     n_recurrent = len(recurrent_edges)
     top_pair = max(recurrent_edges, key=lambda x: x[2]) if recurrent_edges else None
     top_pair_note = (
-        f"Mais forte: {top_pair[0]} & {top_pair[1]} ({top_pair[2]} arts)"
+        f"Strongest: {top_pair[0]} & {top_pair[1]} ({top_pair[2]} articles)"
         if top_pair
         else "None with ≥2 articles"
     )
@@ -1305,6 +1430,7 @@ def _coauthorship_network(author_rows: pd.DataFrame) -> None:
     )
 
     _network_null_model(graph, net_metrics)
+    _periodized_ties(author_rows)
 
     if not partners_df.empty:
         st.divider()
@@ -1501,7 +1627,7 @@ def _research_line_top_authors(selected: str, scoped_authors: pd.DataFrame) -> N
         leaders,
         title=f"Most productive authors in '{selected}'",
         x_title="Number of articles",
-        y_title="Autor",
+        y_title="Author",
     )
     render_chart(fig)
 

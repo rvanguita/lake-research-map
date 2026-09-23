@@ -141,97 +141,107 @@ def _ieee_extras(articles_df: pd.DataFrame) -> None:
                 "🗓️ Com data online",
                 f"{int(ieee_only['online_date'].notna().sum()):,}"
                 if "online_date" in ieee_only.columns
-                else "N/D",
+                else "n/a",
                 None,
             ),
         ]
     )
 
     sub_pais, sub_mes, sub_tipo = st.tabs(
-        ["🌍 Countries", "🗓️ Monthly granularity", "& License type"]
+        ["🌍 Countries", "🗓️ Monthly granularity", "📄 License type"],
+        on_change="rerun",
+        key="quality_ieee_tab",
     )
 
-    with sub_pais:
-        exploded = countries.explode().dropna()
-        if exploded.empty:
-            st.info("No affiliation with identifiable country.")
-        else:
-            top = exploded.value_counts().head(15)
-            fig = topn_hbar(
-                top,
-                title="Top 15 countries for participation in articles (IEEE basis)",
-                x_title="Articles with at least one author in the country",
-                y_title="Country",
-            )
-            fig.update_traces(hovertemplate="<b>%{y}</b><br>%{x:,} articles<extra></extra>")
-            render_chart(
-                fig,
-                caption="An article counts once a country present among its affiliations, then "
-                "International collaborations appear in more than one country and the sum of bars"
-                f"exceeds the {n_ieee:,} articles. It is extracted from the final segment of each affiliation "
-                "(`…, city, country`) and also handles the U.S. format (`…, UT, USA`).",
-            )
+    if sub_pais.open:
+        with sub_pais:
+            exploded = countries.explode().dropna()
+            if exploded.empty:
+                st.info("No affiliation with identifiable country.")
+            else:
+                top = exploded.value_counts().head(15)
+                fig = topn_hbar(
+                    top,
+                    title="Top 15 countries for participation in articles (IEEE basis)",
+                    x_title="Articles with at least one author in the country",
+                    y_title="Country",
+                )
+                fig.update_traces(hovertemplate="<b>%{y}</b><br>%{x:,} articles<extra></extra>")
+                render_chart(
+                    fig,
+                    caption="An article counts once a country present among its affiliations, then "
+                    "International collaborations appear in more than one country and the sum of bars"
+                    f"exceeds the {n_ieee:,} articles. It is extracted from the final segment of each affiliation "
+                    "(`…, city, country`) and also handles the U.S. format (`…, UT, USA`).",
+                )
 
-    with sub_mes:
-        if "online_date" not in ieee_only.columns or ieee_only["online_date"].isna().all():
-            st.info("'online_date' column unavailable.")
-        else:
-            dated = ieee_only.dropna(subset=["online_date"]).copy()
-            dated["mes"] = pd.to_datetime(dated["online_date"]).dt.to_period("M").dt.to_timestamp()
-            by_month = dated.groupby("mes").size().reset_index(name="articles")
-            fig = px.bar(
-                by_month,
-                x="mes",
-                y="articles",
-                title="Publications per month of online availability (IEEE database)",
-                labels={"mes": "Month", "articles": "Articles"},
-                color_discrete_sequence=[SOURCE_COLORS["ieee"]],
-            )
-            fig.update_layout(
-                xaxis_title="Online publication month", yaxis_title="Number of articles"
-            )
-            render_chart(
-                fig,
-                caption="`Online Date` is the unique** corpus field with finer resolution than the "
-                "year — in all the rest of the dashboard only the year survives. "
-                "and the gap between online publication and formal edition.",
-            )
-
-    with sub_tipo:
-        col_tipo, col_lic = st.columns(2)
-        with col_tipo:
-            if "document_type" in ieee_only.columns and ieee_only["document_type"].notna().any():
-                counts = ieee_only["document_type"].dropna().value_counts()
-                fig = px.pie(
-                    names=counts.index,
-                    values=counts.to_numpy(),
-                    title="Vehicle type (document identifier)",
-                    color_discrete_sequence=CATEGORICAL_PALETTE,
+    if sub_mes.open:
+        with sub_mes:
+            if "online_date" not in ieee_only.columns or ieee_only["online_date"].isna().all():
+                st.info("'online_date' column unavailable.")
+            else:
+                dated = ieee_only.dropna(subset=["online_date"]).copy()
+                dated["mes"] = (
+                    pd.to_datetime(dated["online_date"]).dt.to_period("M").dt.to_timestamp()
+                )
+                by_month = dated.groupby("mes").size().reset_index(name="articles")
+                fig = px.bar(
+                    by_month,
+                    x="mes",
+                    y="articles",
+                    title="Publications per month of online availability (IEEE database)",
+                    labels={"mes": "Month", "articles": "Articles"},
+                    color_discrete_sequence=[SOURCE_COLORS["ieee"]],
+                )
+                fig.update_layout(
+                    xaxis_title="Online publication month", yaxis_title="Number of articles"
                 )
                 render_chart(
                     fig,
-                    caption="It reveals that the IEEE Xplore also hosts periodicals from others "
-                    "publishers (CSEE, SGEPRI), as well as magazines and book chapters.",
+                    caption="`Online Date` is the unique** corpus field with finer resolution than the "
+                    "year — in all the rest of the dashboard only the year survives. "
+                    "and the gap between online publication and formal edition.",
                 )
-            else:
-                st.info("'document_type' column unavailable.")
-        with col_lic:
-            if "license" in ieee_only.columns and ieee_only["license"].notna().any():
-                counts = ieee_only["license"].dropna().value_counts()
-                oa = int(counts.filter(like="CC").sum())
-                fig = px.pie(
-                    names=counts.index,
-                    values=counts.to_numpy(),
-                    title="Publication license",
-                    color_discrete_sequence=CATEGORICAL_PALETTE,
-                )
-                render_chart(
-                    fig,
-                    caption=f"{oa} articles under a Creative Commons license (open access) among the "
-                    f"{int(counts.sum())} records with a declared license.",
-                )
-            else:
-                st.info("'License' column unavailable.")
+
+    if sub_tipo.open:
+        with sub_tipo:
+            col_tipo, col_lic = st.columns(2)
+            with col_tipo:
+                if (
+                    "document_type" in ieee_only.columns
+                    and ieee_only["document_type"].notna().any()
+                ):
+                    counts = ieee_only["document_type"].dropna().value_counts()
+                    fig = px.pie(
+                        names=counts.index,
+                        values=counts.to_numpy(),
+                        title="Vehicle type (document identifier)",
+                        color_discrete_sequence=CATEGORICAL_PALETTE,
+                    )
+                    render_chart(
+                        fig,
+                        caption="It reveals that the IEEE Xplore also hosts periodicals from others "
+                        "publishers (CSEE, SGEPRI), as well as magazines and book chapters.",
+                    )
+                else:
+                    st.info("'document_type' column unavailable.")
+            with col_lic:
+                if "license" in ieee_only.columns and ieee_only["license"].notna().any():
+                    counts = ieee_only["license"].dropna().value_counts()
+                    oa = int(counts.filter(like="CC").sum())
+                    fig = px.pie(
+                        names=counts.index,
+                        values=counts.to_numpy(),
+                        title="Publication license",
+                        color_discrete_sequence=CATEGORICAL_PALETTE,
+                    )
+                    render_chart(
+                        fig,
+                        caption=f"{oa} articles under a Creative Commons license (open access) among the "
+                        f"{int(counts.sum())} records with a declared license.",
+                    )
+                else:
+                    st.info("'License' column unavailable.")
 
 
 def _embedding_readiness(chunks_df: pd.DataFrame) -> None:
@@ -443,7 +453,7 @@ def _pdf_selection_bias(articles_df: pd.DataFrame) -> None:
     ].rename(
         columns={
             "transform": "Transformation",
-            "n_pdf": "n com PDF",
+            "n_pdf": "n with PDF",
             "n_no_pdf": "n without PDF",
             "smd": "SMD",
             "ci_low": "IC 2,5%",
@@ -467,9 +477,9 @@ def _metadata_coverage(articles_df: pd.DataFrame) -> None:
         "doi": "DOI",
         "title": "Title",
         "year": "Year",
-        "venue": "Periodic/event",
+        "venue": "Journal/event",
         "authors": "Authors",
-        "abstract": "Resumo",
+        "abstract": "Abstract",
         "keywords": "Keywords",
         "citation_count": "Citations",
         "reference_count": "References",
@@ -512,7 +522,7 @@ def _metadata_coverage(articles_df: pd.DataFrame) -> None:
 
 def _chunks_intro(chunks_df: pd.DataFrame) -> bool:
     """Guard + shared summary metric row. Returns True if there's data to show."""
-    st.subheader("🧩 Fragmentos (chunks) preparados para embedding")
+    st.subheader("🧩 Chunks prepared for embedding")
     if chunks_df.empty:
         st.info(
             "`lit_gold.chunks` has not yet been populated — run the complete pipeline "
@@ -540,7 +550,7 @@ def _chunks_intro(chunks_df: pd.DataFrame) -> bool:
             ("📝 Abstract chunks", f"{n_abstract:,}", None),
             ("📄 Full-text chunks", f"{n_fulltext:,}", f"{n_ft_dois} articles with PDFs"),
             (
-                "📄 DOIs distintos com fragmentos",
+                "📄 Distinct DOIs with chunks",
                 f"{n_dois:,}",
                 None,
             ),
@@ -559,9 +569,7 @@ def _chunks_intro(chunks_df: pd.DataFrame) -> bool:
 
 def _chunk_type_pie(chunks_df: pd.DataFrame) -> None:
     by_type = chunks_df["chunk_type"].value_counts().rename_axis("type").reset_index(name="count")
-    by_type["label_pt"] = by_type["type"].map(
-        {"abstract": "Resumo (Abstract)", "fulltext": "Texto Completo (Fulltext)"}
-    )
+    by_type["label_pt"] = by_type["type"].map({"abstract": "Abstract", "fulltext": "Full text"})
     fig = px.pie(by_type, names="label_pt", values="count", title="Proportion of chunk by type")
     fig.update_traces(
         texttemplate="<b>%{label}</b><br><b>%{value:,} (%{percent})</b>",
@@ -596,7 +604,7 @@ def _chunk_length_histogram(chunks_df: pd.DataFrame) -> None:
         nbins=40,
         category_orders={"chunk_type": type_order} if type_order else None,
         title="Chunk length (characters) by type",
-        labels={"char_len": "Comprimento em caracteres", "chunk_type": "Tipo"},
+        labels={"char_len": "Length in characters", "chunk_type": "Type"},
     )
     fig.update_traces(hovertemplate="Length: ~%{x} characters<br>Chunks: %{y:,}<extra></extra>")
     fig.update_layout(
@@ -673,7 +681,7 @@ def _render_result_card(
 
 
 def _search_demo(chunks_df: pd.DataFrame) -> None:
-    st.subheader("🔍 Busca nos chunks")
+    st.subheader("🔍 Search the chunks")
     has_embeddings = "has_embedding" in chunks_df.columns and bool(chunks_df["has_embedding"].any())
 
     if has_embeddings:
@@ -733,7 +741,7 @@ def _search_demo(chunks_df: pd.DataFrame) -> None:
             caption_mode = "Hybrid Search RRF (BGE-Small + BM25 Okapi)"
         else:
             matches = semantic_search(query, scoped, top_k=SEARCH_DEMO_MAX_RESULTS)
-            caption_mode = "Busca Vetorial Densa (BGE-Small)"
+            caption_mode = "Dense vector search (BGE-Small)"
         st.caption(
             f"{caption_mode} — Top {len(matches):,} most relevant chunks (of {len(scoped):,} available)."
         )

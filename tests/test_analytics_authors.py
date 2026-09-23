@@ -298,3 +298,61 @@ def test_analyze_coauthorship_partners_handles_empty_graph():
     assert df.empty
     assert "network_unique_count" in df.columns
     assert "global_unique_count" in df.columns
+
+
+def test_network_null_model_reports_assortativity_and_robustness():
+    """WP-19: a bare assortativity coefficient says nothing without a null,
+    and either removal figure alone is just a graph size."""
+    import warnings
+
+    import networkx as nx
+
+    from lake_research_map.dashboard.analytics import network_null_model_diagnostics
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        hubbed = network_null_model_diagnostics(
+            nx.barabasi_albert_graph(60, 2, seed=1), n_simulations=15, seed=1
+        )
+        even = network_null_model_diagnostics(
+            nx.watts_strogatz_graph(60, 4, 0.3, seed=1), n_simulations=15, seed=1
+        )
+
+    assert hubbed["observed_assortativity"] is not None
+    assert hubbed["assortativity_null_mean"] is not None
+    assert hubbed["assortativity_z_score"] is not None
+
+    # A hub-dominated graph must lose more of its giant component to targeted
+    # removal than an evenly-connected one does. That gap is the whole claim.
+    hub_gap = hubbed["robustness_random"] - hubbed["robustness_targeted"]
+    even_gap = even["robustness_random"] - even["robustness_targeted"]
+    assert hub_gap > even_gap
+    assert 0.0 <= hubbed["robustness_targeted"] <= 1.0
+    assert hubbed["robustness_removed"] == 6
+
+
+def test_periodized_ties_separate_new_from_returning_collaborations():
+    """A static recurrent-edge count cannot tell recruitment from consolidation."""
+    from lake_research_map.dashboard.analytics import periodized_collaboration_ties
+
+    rows = []
+    for doi, year, names in [
+        ("d1", 2010, ["A", "B"]),
+        ("d2", 2012, ["A", "B"]),
+        ("d3", 2015, ["A", "B"]),
+        ("d4", 2016, ["A", "C"]),
+        ("d5", 2019, ["A", "B"]),
+        ("d6", 2020, ["D", "E"]),
+        ("d7", 2021, ["D", "E"]),
+    ]:
+        rows.extend({"doi": doi, "year": year, "author_display": name} for name in names)
+
+    ties = periodized_collaboration_ties(pd.DataFrame(rows), n_periods=3)
+
+    assert list(ties["period"]) == ["2010–2015", "2016–2019", "2020–2021"]
+    # A-B is new in the first period and returning in the second.
+    assert ties.iloc[0]["new_ties"] == 1 and ties.iloc[0]["repeated_ties"] == 0
+    assert ties.iloc[1]["repeated_ties"] == 1
+    assert (ties["new_ties"] + ties["repeated_ties"] == ties["total_ties"]).all()
+
+    assert periodized_collaboration_ties(pd.DataFrame()).empty

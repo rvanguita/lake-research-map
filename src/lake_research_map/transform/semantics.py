@@ -184,6 +184,39 @@ def theme_labels_from_terms(
     return theme_labels
 
 
+def theme_sweep(matrix: np.ndarray) -> list[dict[str, float | int | bool]]:
+    """Score every candidate `k` the theme search considers, and keep the trace.
+
+    `discover_themes` sweeps MIN_THEMES..MAX_THEMES and then throws the sweep
+    away, so the page can show the winning `k` but never how close the race
+    was. On this corpus silhouette is nearly flat across the range, which means
+    the tie-break -- not the maximum -- is what actually picks `k`; that is only
+    auditable if the losing candidates are visible too.
+    """
+    from sklearn.cluster import KMeans
+    from sklearn.metrics import silhouette_score
+
+    n_samples = len(matrix)
+    rows: list[dict[str, float | int | bool]] = []
+    if n_samples < MIN_THEMES + 1:
+        return rows
+    for candidate in range(MIN_THEMES, min(MAX_THEMES, n_samples - 1) + 1):
+        labels = KMeans(n_clusters=candidate, n_init=10, random_state=RANDOM_SEED).fit_predict(
+            matrix
+        )
+        counts = np.bincount(labels)
+        smallest = float(counts.min(initial=n_samples) / n_samples)
+        rows.append(
+            {
+                "k": int(candidate),
+                "silhouette": float(silhouette_score(matrix, labels)),
+                "smallest_cluster_share": smallest,
+                "rejected_small_cluster": bool(smallest < 0.02),
+            }
+        )
+    return rows
+
+
 def discover_themes(
     matrix: np.ndarray, texts: list[str], k: int | None = None
 ) -> tuple[np.ndarray, dict[int, str]]:

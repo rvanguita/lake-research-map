@@ -111,7 +111,7 @@ def _render_bursts(df: pd.DataFrame) -> None:
     result = technological_burst_detection(df)
     bursts = result["burst_timeline"]
     if bursts.empty:
-        st.info("No sustained burst was detected in this cut.")
+        st.info("No sustained burst was detected under the current filters.")
         return
     metric_row(
         [
@@ -150,6 +150,46 @@ def _series_forecast(source: str | None) -> ForecastResult:
     layer, so it never changes between reruns.
     """
     return loaders.volume_forecast(source)
+
+
+def _horizon_backtest_table(result) -> None:
+    """Score the chosen model separately at every horizon it is asked to predict.
+
+    Every fold used to be one step ahead, so the second forecast year appeared
+    on the chart with no validation behind it at all. A two-year claim has to
+    be backtested two years out or labelled as unvalidated.
+    """
+    backtests = getattr(result, "horizon_backtests", None)
+    if not backtests or len(backtests) < 2:
+        return
+
+    rows = []
+    for step, year in enumerate(result.forecast_years, start=1):
+        stats = backtests.get(step) or {}
+        mase = stats.get("mase")
+        rows.append(
+            {
+                "Horizon": f"{step}-year ({year})",
+                "CV MAE": ("n/a" if stats.get("cv_mae") is None else f"{stats['cv_mae']:.1f}"),
+                "MASE": "n/a" if mase is None else f"{mase:.2f}",
+                "Beats naive": "—" if mase is None else ("yes" if mase < 1 else "no"),
+                "Interval coverage": (
+                    "not testable" if stats.get("coverage") is None else f"{stats['coverage']:.0%}"
+                ),
+            }
+        )
+
+    with st.expander("Backtest by forecast horizon", expanded=False):
+        st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+        st.caption(
+            "Each horizon is scored on folds whose training window ends that many years "
+            "before the target, so a two-year number never borrows one-year information. "
+            "MASE divides the error by the average one-step change in the series, which is "
+            "what makes it comparable across series of different size: below 1 beats a "
+            'naive carry-forward, above 1 loses to it. "Not testable" means the series '
+            "is too short to hold folds back at that horizon — an unknown coverage is "
+            "reported as unknown rather than filled in from the shorter horizon."
+        )
 
 
 def _baseline_skill_label(skill: float | None) -> str:
@@ -221,13 +261,15 @@ def _render_series_forecast(label: str, color: str, result: ForecastResult) -> N
         ]
     )
 
+    _horizon_backtest_table(result)
+
     fig = go.Figure()
 
     # Observed history (bars) -- includes the partial holdout year.
     fig.add_bar(
         x=result.history.index,
         y=result.history.values,
-        name=f"{label} (observado)",
+        name=f"{label} (observed)",
         marker_color=color,
         opacity=0.85,
     )
@@ -410,32 +452,36 @@ def _keyword_growth_ranking() -> None:
     ranking["model"] = ranking["model"].map(lambda value: _MODEL_LABELS.get(value, value))
     top = ranking.head(min(TOP_KEYWORDS_FORECAST, len(ranking))).sort_values("variation")
 
-    sub_trend, sub_rank = st.tabs(["📈 Trajectories", "🏆 Growth ranking"])
-    with sub_trend:
-        _keyword_trend_lines(
-            ranking.head(TOP_KEYWORD_TRENDS)["keyword"].tolist(), results_by_keyword
-        )
-    with sub_rank:
-        fig = go.Figure()
-        fig.add_bar(
-            x=top["variation"],
-            y=top["keyword"],
-            orientation="h",
-            marker_color=[
-                TOTAL_COLOR if v >= 0 else SOURCE_COLORS["ieee"] for v in top["variation"]
-            ],
-            hovertemplate=f"<b>%{{y}}</b><br>Projected change through {final_forecast_year}: %{{x:+.1f}} articles/year<extra></extra>",
-        )
-        fig.update_layout(
-            xaxis_title=f"Projected change ({TRAIN_END_YEAR} → {final_forecast_year}, articles/year)",
-            yaxis_title="Keyword",
-        )
-        render_chart(
-            fig,
-            caption=f"The same forecasting engine used for publication volume, applied to each keyword with at "
-            f"least {MIN_KEYWORD_OCCURRENCES} occurrences in the corpus. The same caveat applies: {HOLDOUT_YEAR} is a "
-            "Partial year and corpus is incomplete — read as a directional sign, not as an exact number.",
-        )
+    sub_trend, sub_rank = st.tabs(
+        ["📈 Trajectories", "🏆 Growth ranking"], on_change="rerun", key="forecast_keyword_tab"
+    )
+    if sub_trend.open:
+        with sub_trend:
+            _keyword_trend_lines(
+                ranking.head(TOP_KEYWORD_TRENDS)["keyword"].tolist(), results_by_keyword
+            )
+    if sub_rank.open:
+        with sub_rank:
+            fig = go.Figure()
+            fig.add_bar(
+                x=top["variation"],
+                y=top["keyword"],
+                orientation="h",
+                marker_color=[
+                    TOTAL_COLOR if v >= 0 else SOURCE_COLORS["ieee"] for v in top["variation"]
+                ],
+                hovertemplate=f"<b>%{{y}}</b><br>Projected change through {final_forecast_year}: %{{x:+.1f}} articles/year<extra></extra>",
+            )
+            fig.update_layout(
+                xaxis_title=f"Projected change ({TRAIN_END_YEAR} → {final_forecast_year}, articles/year)",
+                yaxis_title="Keyword",
+            )
+            render_chart(
+                fig,
+                caption=f"The same forecasting engine used for publication volume, applied to each keyword with at "
+                f"least {MIN_KEYWORD_OCCURRENCES} occurrences in the corpus. The same caveat applies: {HOLDOUT_YEAR} is a "
+                "Partial year and corpus is incomplete — read as a directional sign, not as an exact number.",
+            )
 
     with st.expander("📋 Complete table of topics evaluated"):
         st.dataframe(ranking.reset_index(drop=True), hide_index=True, width="stretch")

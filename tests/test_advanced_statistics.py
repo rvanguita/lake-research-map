@@ -5,6 +5,7 @@ from __future__ import annotations
 import networkx as nx
 import numpy as np
 import pandas as pd
+import pytest
 
 from lake_research_map.dashboard.analytics import (
     age_normalized_citations,
@@ -148,7 +149,12 @@ def test_citation_determinants_glm():
     )
     res = citation_determinants_glm(df)
     assert res["valid"] is True
-    assert res["family"] in {"poisson", "negative_binomial"}
+    assert res["family"] in {
+        "poisson",
+        "negative_binomial",
+        "zero_inflated_poisson",
+        "zero_inflated_negative_binomial",
+    }
     assert res["n_used"] == n
     assert res["coverage"] == 1.0
     assert len(res["features"]) == len(res["coefficients"]) == len(res["irr"])
@@ -158,6 +164,31 @@ def test_citation_determinants_glm():
     assert set(res["candidate_aic"]) >= {"poisson"}
     assert 0 <= res["observed_zero_fraction"] <= 1
     assert res["influential_count"] >= 0
+
+    # WP-15: the family is chosen by AIC over every candidate that converged,
+    # not by the old dispersion > 1.5 rule.
+    assert res["family_selection"] == "aic"
+    assert res["family"] == min(res["candidate_aic"], key=res["candidate_aic"].get)
+    assert res["zero_inflated_status"] in {"fitted", "did_not_converge"}
+
+    # A selected family must be able to state its own uncertainty: a fit whose
+    # Hessian could not be inverted returns NaN intervals and is not eligible.
+    assert all(np.isfinite(value) for value in res["p_values"])
+    assert all(np.isfinite(value) for value in res["irr_lower"])
+    assert all(np.isfinite(value) for value in res["irr_upper"])
+
+    # WP-15: log(age + 1) as a fixed offset is an assumption, so the exposure
+    # choice is reported rather than hidden.
+    assert len(res["age_specifications"]) >= 2
+    assert {spec["specification"] for spec in res["age_specifications"]} <= {
+        "offset_log_age",
+        "covariate_log_age",
+        "covariate_linear_age",
+    }
+    for spec in res["age_specifications"]:
+        assert set(spec["coefficients"]) == set(res["features"])
+        assert np.isfinite(spec["aic"])
+    assert isinstance(res["age_specification_signs_agree"], bool)
 
     with_missing = df.copy()
     with_missing.loc[:4, "reference_count"] = np.nan
@@ -219,8 +250,38 @@ def test_detect_structural_breaks():
     assert res["has_break"] is True
     assert res["break_year"] == 2010
     assert res["f_stat"] > 10.0
-    assert res["p_value"] < 0.001
     assert res["post_mean"] > res["pre_mean"]
+
+    # WP-16: the breakpoint is searched, so the reported p-value is empirical.
+    # It cannot resolve below 1/(draws+1), and asserting otherwise would be
+    # asking a permutation test for precision it does not have.
+    assert res["p_value"] < 0.05
+    assert res["p_value"] >= res["p_value_resolution"]
+    assert res["p_value_naive"] < 0.001  # the F-table value this replaces
+    assert res["bootstrap_samples"] == 200
+
+
+def test_searched_breakpoint_p_value_controls_false_positives():
+    """The F table is the wrong null for a maximum taken over every split.
+
+    Read against it, pure noise looks like a regime change about a third of
+    the time. The permutation p-value is what brings that back near nominal,
+    and that gap is the whole reason this statistic is bootstrapped.
+    """
+    from lake_research_map.dashboard.analytics import detect_structural_breaks
+
+    rng = np.random.default_rng(3)
+    trials = 60
+    naive_hits = 0
+    bootstrap_hits = 0
+    for seed in range(trials):
+        res = detect_structural_breaks(rng.normal(0, 1, 20), n_bootstrap=100, seed=seed)
+        naive_hits += res["p_value_naive"] < 0.05
+        bootstrap_hits += res["p_value"] < 0.05
+
+    assert naive_hits / trials > 0.20  # the defect: far above the nominal 5%
+    assert bootstrap_hits / trials < 0.15  # near nominal, allowing for 60 trials
+    assert bootstrap_hits < naive_hits
 
 
 def test_conceptual_atypicality_analysis():
@@ -245,3 +306,114 @@ def test_conceptual_atypicality_analysis():
     assert not res["articles_df"].empty
     assert "median_z" in res["articles_df"].columns
     assert "is_atypical" in res["articles_df"].columns
+
+
+def test_citation_determinants_glm_reports_when_no_zero_inflated_fit_converges():
+    """A corpus with no zeros gives the zero-inflation part nothing to explain.
+
+    The panel must still be able to say which families were on the table, so
+    `zero_inflated_status` is always populated and the selected family always
+    carries finite uncertainty -- never a NaN interval from a fit whose Hessian
+    could not be inverted.
+    """
+    rng = np.random.default_rng(11)
+    n = 60
+    df = pd.DataFrame(
+        {
+            "year": rng.integers(2015, 2024, size=n),
+            # Strictly positive: there is no zero mass to inflate.
+            "citation_count": rng.integers(5, 40, size=n),
+            "reference_count": rng.integers(5, 50, size=n),
+            "authors": [["A", "B"], ["A", "B", "C"]] * (n // 2),
+            "source": ["ieee"] * (n // 2) + ["elsevier"] * (n // 2),
+        }
+    )
+    res = citation_determinants_glm(df)
+
+    assert res["valid"] is True
+    assert res["observed_zero_fraction"] == 0.0
+    assert res["zero_inflated_status"] in {"fitted", "did_not_converge"}
+    assert "poisson" in res["candidate_aic"]
+    assert res["family"] == min(res["candidate_aic"], key=res["candidate_aic"].get)
+    assert all(np.isfinite(value) for value in res["irr_lower"])
+    assert all(np.isfinite(value) for value in res["irr_upper"])
+    # Influence always names the fit it was measured on, because a zero-inflated
+    # fit has no hat matrix and falls back to the Poisson GLM.
+    assert res["influence_basis"] in {
+        "poisson",
+        "negative_binomial",
+        "unavailable",
+    }
+
+
+def test_citation_determinants_glm_rejects_undersized_sample():
+    df = pd.DataFrame(
+        {
+            "year": [2020] * 10,
+            "citation_count": list(range(10)),
+            "reference_count": list(range(10, 20)),
+            "authors": [["A"]] * 10,
+            "source": ["ieee"] * 10,
+        }
+    )
+    res = citation_determinants_glm(df)
+    assert res["valid"] is False
+    assert res["n_used"] == 10
+    assert "20" in res["warning"]
+    # Nothing was fitted, so the panel must not find diagnostics to display.
+    assert "age_specifications" not in res
+    assert "candidate_aic" not in res
+    assert res["coefficients"] == []
+
+
+def test_mann_kendall_serial_correction_deflates_a_random_walk():
+    """A random walk has no trend, but Mann-Kendall reads one anyway.
+
+    That is the whole point of the Hamed-Rao correction: the independence
+    assumption manufactures significance out of autocorrelation. White noise
+    and a genuine trend must both come through it untouched.
+    """
+    rng = np.random.default_rng(5)
+
+    walk = np.cumsum(rng.normal(0, 1, 40))
+    res = mann_kendall_trend(walk)
+    assert res["serial_correction_factor"] > 1.5
+    assert res["p_value_serial_corrected"] > res["p_value_independent"]
+    # `p_value` stays the independent test unless the caller opts in.
+    assert res["p_value"] == res["p_value_independent"]
+    assert mann_kendall_trend(walk, serial_correction=True)["p_value"] == pytest.approx(
+        res["p_value_serial_corrected"]
+    )
+
+    noise = rng.normal(0, 1, 40)
+    assert mann_kendall_trend(noise)["serial_correction_factor"] == pytest.approx(1.0)
+
+    real_trend = np.arange(40) + rng.normal(0, 1, 40)
+    corrected = mann_kendall_trend(real_trend, serial_correction=True)
+    assert corrected["trend"] == "growing"
+    assert corrected["p_value"] < 0.01
+
+
+def test_mann_kendall_short_series_reports_a_neutral_correction():
+    # Below ten points the lag correlations are too noisy to correct with, so
+    # the factor must be exactly neutral rather than a guess.
+    res = mann_kendall_trend(np.array([1.0, 3.0, 2.0, 5.0, 4.0]))
+    assert res["serial_correction_factor"] == 1.0
+    assert res["p_value_serial_corrected"] == pytest.approx(res["p_value_independent"])
+
+
+def test_linear_slope_with_ci_reports_the_spread_a_ranking_hides():
+    from lake_research_map.dashboard.analytics import linear_slope_with_ci
+
+    clean = linear_slope_with_ci(np.arange(10), 2.0 * np.arange(10))
+    assert clean["slope"] == pytest.approx(2.0)
+    assert clean["ci_low"] <= clean["slope"] <= clean["ci_high"]
+
+    # Three noisy points have a slope but no usable precision: the interval
+    # has to straddle zero, which is exactly what the chart now shows.
+    noisy = linear_slope_with_ci([1, 2, 3], [5, 1, 6])
+    assert noisy["ci_low"] < 0 < noisy["ci_high"]
+    assert noisy["p_value"] > 0.05
+
+    degenerate = linear_slope_with_ci([1, 2], [1, 2])
+    assert np.isnan(degenerate["slope"])  # fewer than three points

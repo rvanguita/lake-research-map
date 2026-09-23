@@ -716,15 +716,61 @@ def _projection_stability(plot_df: pd.DataFrame) -> None:
                 ),
             ]
         )
+        neighbors = result.get("neighbors")
+        overlap = result.get("knn_overlap")
+        continuity = result.get("projection_continuity")
+        metric_row(
+            [
+                (
+                    "\U0001f9f2 Projection continuity",
+                    "n/a" if continuity is None else f"{continuity:.2f}",
+                    "Share of clustering-space neighbours the map keeps",
+                ),
+                (
+                    "\U0001f517 kNN overlap",
+                    "n/a" if overlap is None or not np.isfinite(overlap) else f"{overlap:.2f}",
+                    f"Of each point's {neighbors} nearest neighbours",
+                ),
+            ]
+        )
         st.caption(
             "ARI near 1 means the same articles group together when the sample and the seed "
             "change; a low value means the theme boundaries are a property of this particular "
             "run. Trustworthiness below roughly 0.9 means the map places points next to each "
             "other that are far apart in the space the themes were built in \u2014 read clusters, "
-            "not distances. Both are measured in that shared PCA space rather than the raw "
+            "not distances. Trustworthiness alone only penalises neighbours the map invents, so "
+            "continuity (neighbours it loses) and the plain kNN overlap are shown beside it: a "
+            "projection that tears one real cluster in two scores well on trustworthiness and "
+            "badly on continuity. All are measured in that shared PCA space rather than the raw "
             "384-dimensional one, because that is where the clustering actually happened. "
             "Theme numbering is not stable across runs and carries no ontological claim."
         )
+
+        sweep = result.get("k_sweep") or []
+        if len(sweep) > 1:
+            sweep_df = pd.DataFrame(sweep)
+            chosen = result.get("clusters")
+            best = sweep_df["silhouette"].max()
+            spread = best - sweep_df["silhouette"].min()
+            sweep_df = sweep_df.rename(
+                columns={
+                    "k": "Themes (k)",
+                    "silhouette": "Silhouette",
+                    "smallest_cluster_share": "Smallest cluster",
+                    "rejected_small_cluster": "Rejected (<2%)",
+                }
+            )
+            sweep_df["Silhouette"] = sweep_df["Silhouette"].round(4)
+            sweep_df["Smallest cluster"] = (sweep_df["Smallest cluster"] * 100).round(1)
+            st.markdown("**How decisive was the choice of k?**")
+            st.dataframe(sweep_df, hide_index=True, width="stretch")
+            st.caption(
+                f"Every candidate the search considered. Silhouette spans only {spread:.3f} "
+                f"across the range, so k={chosen} is chosen by the near-tie rule that prefers "
+                "the smaller solution rather than by a clear maximum \u2014 which is why the "
+                "theme boundaries deserve the stability caveat above, and why a neighbouring "
+                "k would be nearly as defensible."
+            )
 
 
 def _add_theme_labels(fig, plot_df: pd.DataFrame) -> None:

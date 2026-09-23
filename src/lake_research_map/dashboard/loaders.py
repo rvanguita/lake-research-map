@@ -435,7 +435,7 @@ def require_articles() -> pd.DataFrame:
     if all_articles.empty:
         st.warning(
             "No data found in the `lit_bronze`, `lit_silver`, or `lit_gold` layers yet.\n\n"
-            "Perform the pipeline (handbar or sidebar buttons) "
+            "Run the pipeline (from the sidebar, or with "
             "`uv run lake-research-map --stage all`) and reload this page."
         )
         st.stop()
@@ -558,7 +558,14 @@ def semantic_stability(points: tuple[tuple[str, str, float, float], ...]) -> dic
     reduced = reduced_space(matrix[rows])
     if reduced.ndim != 2 or reduced.shape[1] < 2:
         return None
-    return semantic_stability_diagnostics(reduced, labels, projection)
+    result = semantic_stability_diagnostics(reduced, labels, projection)
+    if result.get("valid"):
+        # The sweep runs on the same reduced space the themes were found in,
+        # so the numbers on the page describe the search that actually chose k.
+        from lake_research_map.transform.semantics import theme_sweep
+
+        result["k_sweep"] = theme_sweep(reduced)
+    return result
 
 
 @st.cache_data(ttl=300)
