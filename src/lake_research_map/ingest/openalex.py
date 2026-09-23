@@ -365,6 +365,62 @@ def fetch_openalex_batch(
     raise AssertionError("retry loop must return")
 
 
+# A DOI's registrant prefix is its publisher, so walking DOIs in sorted order
+# walks publishers in blocks. That looks like neutral iteration and is not: the
+# first live crawl stopped at its quota having observed 989 Elsevier works
+# (10.1016) and **zero** IEEE ones (10.1109, 1,340 articles), because `10.1016`
+# sorts entirely before `10.1109`. Every coverage figure measured on that
+# subset described one publisher while reading as though it described the
+# corpus.
+REGISTRANT_LABELS = {
+    "10.1016": "Elsevier",
+    "10.1109": "IEEE",
+    "10.1049": "IET",
+    "10.1002": "Wiley",
+    "10.3390": "MDPI",
+    "10.1007": "Springer",
+}
+
+
+def registrant_prefix(doi: str) -> str:
+    """The DOI registrant, which identifies the publisher."""
+    return str(doi).split("/", 1)[0]
+
+
+def registrant_label(doi_or_prefix: str) -> str:
+    """A human name for a registrant, falling back to the prefix itself."""
+    prefix = registrant_prefix(doi_or_prefix)
+    return REGISTRANT_LABELS.get(prefix, prefix)
+
+
+def interleave_by_registrant(dois: list[str]) -> list[str]:
+    """Order DOIs so that *any* prefix of the result is proportional by publisher.
+
+    Each DOI is positioned at `(index + 0.5) / group_size` within its own
+    registrant, and the whole list is sorted by that fraction. Stopping after
+    the first N therefore yields roughly N * (group_size / total) from every
+    group instead of exhausting one publisher before reaching the next -- which
+    is what makes a partial crawl a usable sample rather than a biased one.
+
+    Deterministic, with no random seed: the same corpus always produces the
+    same order, which is the reproducibility `NFR-01` requires of anything a
+    published figure rests on.
+    """
+    groups: dict[str, list[str]] = {}
+    for doi in dois:
+        groups.setdefault(registrant_prefix(doi), []).append(doi)
+
+    positioned: list[tuple[float, str, str]] = []
+    for prefix, items in groups.items():
+        size = len(items)
+        for index, doi in enumerate(sorted(items)):
+            positioned.append(((index + 0.5) / size, prefix, doi))
+    # The prefix and DOI join the sort key only to break ties deterministically
+    # when two groups land on the same fraction.
+    positioned.sort()
+    return [doi for _, _, doi in positioned]
+
+
 def refresh_openalex_observations(
     session: Session,
     dois: list[str],
@@ -397,7 +453,9 @@ def refresh_openalex_observations(
     crawl this long is the likely outcome rather than the unlucky one.
     """
     batch_time = (observed_at or datetime.now(UTC)).replace(tzinfo=None)
-    normalized = sorted({_normalize_doi(doi) for doi in dois if _normalize_doi(doi)})
+    normalized = interleave_by_registrant(
+        sorted({_normalize_doi(doi) for doi in dois if _normalize_doi(doi)})
+    )
 
     already: set[str] = set()
     if not refresh_all:

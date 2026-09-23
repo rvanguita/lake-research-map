@@ -4,7 +4,7 @@
 
 **Evidence cutoff:** 2026-09-21
 
-**Implementation baseline:** the active 2026-09-21 Gold version `2974743a…` contains 3,115 articles and 7,552 chunks, all carrying complete embedding metadata; the application has 10 registered dashboard pages and 361 passing automated tests (plus two opt-in MySQL tests skipped by the default run) as measured on 2026-09-22.
+**Implementation baseline:** the active 2026-09-21 Gold version `2974743a…` contains 3,115 articles and 7,552 chunks, all carrying complete embedding metadata; the application has 10 registered dashboard pages and 369 passing automated tests (plus two opt-in MySQL tests skipped by the default run) as measured on 2026-09-22.
 
 **Related documents:** [SDD.md](SDD.md), [ROADMAP.md](ROADMAP.md), [METHODOLOGY.md](METHODOLOGY.md)
 
@@ -115,6 +115,17 @@ The target screening protocol is:
 
 Missing values remain missing unless a transformation is explicitly defined. Each analysis must disclose `n_total`, `n_eligible`, `n_used`, exclusion reasons, and coverage by source/time segment. IEEE-only fields (`countries`, `online_date`, `document_type`, `license`) are never generalized to the full corpus. PDF-based analyses must compare records with and without PDFs to expose availability bias.
 
+**The denominator rule.** Every published figure names the population it was
+computed over, and a figure derived from partially collected external data also
+reports its coverage per source. An aggregate percentage over a partial
+collection silently inherits whatever ordered the collection: on 2026-09-22 the
+OpenAlex crawl had observed 989 Elsevier works and zero IEEE ones, purely
+because `10.1016` sorts before `10.1109`, and "81.9% annual-count coverage" read
+as a statement about the corpus when it described one publisher. A share of an
+observed subset and a share of the corpus are different quantities and must be
+labelled as such.
+
+
 ### 5.6 Temporal validity and leakage prevention
 
 - Citation/reference counts are point-in-time observations and require an observation timestamp.
@@ -158,6 +169,41 @@ Every inferential or predictive result must report effect size, uncertainty, sam
 | `NFR-06` | Security | Only `lit_*` tables are addressed; secrets are not committed or sent to the browser. A shared or multi-user deployment must restore database-enforced least privilege. |
 | `NFR-07` | Accessibility | UI labels are non-empty, English, legible in the fixed dark theme, and usable without color alone. |
 | `NFR-08` | Testability | Mathematical logic remains Streamlit-free; UI behavior has headless smoke coverage. |
+
+### 6.3 How each requirement is measured
+
+An acceptance signal states what success looks like; it does not say what to run
+to see it. Without that, a reviewer cannot distinguish a requirement that is
+verified from one that is merely asserted, and the difference is the whole point
+of an evidence-managing system. Each row below names the artifact that proves
+its requirement, or says plainly that none exists.
+
+| ID | Proof | Where |
+|---|---|---|
+| `FR-01` | `raw` contract: non-empty manifest, snapshot coverage, child-source references | `quality.raw_contract`; `audit reference-corpus` |
+| `FR-02` | Golden-corpus mutation test (add, edit, rename, remove, reactivate) | `ingest/snapshots.py::diff_manifests`; `tests/test_versioning_contracts.py` |
+| `FR-03` | `silver.doi_unique`, `silver.doi_normalized`, `silver.bronze_partition` | `quality.silver_contract`; `tests/test_silver_articles.py` |
+| `FR-04` | Idempotent merge/keep/undo with rationale and timestamps | `transform/duplicate_resolution.py`; `tests/test_duplicate_resolution.py` |
+| `FR-05` | Reused vs. invalidated chunk counts on an unchanged rebuild | `transform/versioned_gold.py`; `tests/test_gold_articles.py` |
+| `FR-06` | Dimension, model, revision, finiteness and coverage gates before publication | `quality.embed_contract`, `quality.publication_contract` |
+| `FR-07` | Parent execution and stage rows sharing one version | `tests/test_versioning_contracts.py` |
+| `FR-08` | Article reader bound to the publication pointer | `dashboard/data.py::load_articles`; `tests/test_dashboard_pages.py` |
+| `FR-09` | Durable labels joined to calibration, with both approval digests | `reviews calibrate`; `tests/test_review_label_reader.py` |
+| `FR-10` | Component ranks and scores exposed per mode | `dashboard/search.py`; `tests/test_search.py` |
+| `FR-11` | No write call anywhere under `dashboard/` | `tests/test_theme.py` |
+| `FR-12` | Every page rendered headless in populated and empty states | `tests/test_dashboard_pages.py` |
+| `NFR-01` | Source/config/code/curation fingerprints; per-page dataset-version caption | `ingest/snapshots.py::build_fingerprint`; `tests/test_population_provenance.py` |
+| `NFR-02` | Unchanged re-run produces no new logical rows | `tests/test_gold_articles.py`, `tests/test_raw_bib.py` |
+| `NFR-03` | Contract violation blocks publication and keeps the prior version active | `quality.assert_contract`; `tests/test_mysql_contracts.py` |
+| `NFR-04` | Rejections, overrides, quality results and run errors persisted | `lit_rejected`, `lit_quality_results`, `lit_pipeline_runs` |
+| `NFR-05` | **Not measured.** Latency and memory were benchmarked once by hand (2026-09-21); no performance test guards them | see `docs/evidence/2026-09-21-search-benchmark.md` |
+| `NFR-06` | Secret hygiene only. The per-table privilege boundary was traded away on 2026-09-22 and is **not** enforced | `.gitignore`; `WP-08` evidence |
+| `NFR-07` | Portuguese-shaped copy, empty headings and empty metric labels all fail the build | `tests/test_dashboard_language.py` |
+| `NFR-08` | `analytics.py` and `forecasting.py` import no Streamlit; every page has `AppTest` coverage | `tests/test_theme.py`, `tests/test_dashboard_pages.py` |
+
+Two rows say "not measured" on purpose. `NFR-05` and the roles half of `NFR-06`
+are currently aspirations, and writing them as though they were verified is the
+failure mode this table exists to prevent.
 
 ## 7. Analytical ownership and visualization contract
 
@@ -225,6 +271,7 @@ Visualization selection follows the question: bars for discrete comparisons, lin
 | `RISK-06` | Screening anchors lack independent gold-standard validation. | Threshold performance may be overstated. | Persist dual-review labels and validate out of sample. |
 | `RISK-07` | Many analytical panels invite multiple testing. | False discoveries become likely. | Define test families, effect-size thresholds, and FDR control. |
 | `RISK-08` | Dynamic tabs are not used consistently. | Hidden expensive analyses execute and slow reruns. | Gate heavy tab bodies and add performance acceptance tests. |
+| `RISK-09` | External enrichment is collected under a request quota and may stay partial indefinitely. | A partial collection ordered by any key correlated with source produces a biased sample, and coverage reported in aggregate hides it. | Collect in publisher-proportional order so any prefix is representative; report coverage per registrant against the corpus denominator; treat an unfinished crawl as a stated limitation, never as missing data at the provider. |
 
 ## 10. Success criteria
 
@@ -251,4 +298,5 @@ The product is successful when all of the following are evidenced, not merely as
 | Treat contract-valid Gold as the canonical analytical population. | Gold is where approved merges and curated chunks exist; invalid or absent Gold falls back visibly to Silver/Bronze. | Versioned publication implemented; selector-to-pointer binding remains in `WP-04` |
 | Keep uploaded screening calibration non-persistent and non-operative. | The current phase can validate the method without allowing a dashboard session to mutate corpus decisions. | Implemented; governed persistence pending |
 | Version corpus, enrichment, models, anchors, and labels. | Necessary for reproducible statistical and semantic results. | Approved; implementation pending |
+| Trust `data/enrichment_cache.json` as a citation source. | Validated against OpenAlex on 2026-09-22 over 1,875 comparable rows: reference counts agree 99.7%, citation counts 90.0% with a median error of 0. Every divergence is one-directional -- the cache is never higher than OpenAlex, only older -- which is the signature of staleness rather than error. | Validated; refresh before longitudinal claims |
 | Add new methods only when they answer a distinct decision question and meet data prerequisites. | Prevents dashboard breadth from exceeding evidential validity. | Active governance rule |

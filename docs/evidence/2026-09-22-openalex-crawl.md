@@ -35,6 +35,12 @@ Forward crawled:     0 (0.0%), of which 0 truncated
 Usable for CD:       0 (0.0%) -- both directions, not truncated
 ```
 
+> **Correction (same day).** The figures below are shares of the *observed*
+> population, which later analysis showed to be 98.9% Elsevier and 0% IEEE --
+> the crawl walked DOIs in sorted order and never reached `10.1109`. They are
+> accurate as stated and they do **not** describe the corpus. See
+> `2026-09-22-sampling-and-cache-validation.md`.
+
 **Both denominators matter.** 81.9% and 91.7% are shares of the *observed*
 population, which is itself 32.1% of the corpus. Against the corpus the figures
 are 26.3% and 29.4%. `WP-23`'s 80% gate passes on observed works and fails on the
