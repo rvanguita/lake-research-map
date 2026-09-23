@@ -258,7 +258,7 @@ coverage becomes visible.
 |---|---|---|
 | `audit reference-corpus` | Active version, article/chunk/semantic counts, blocking quality failures | The active dataset version |
 | `audit citation-graph` | Coverage per direction and the population usable for a disruption index (their **intersection**, never the larger side); **graph integrity** -- self-loops, dangling `cites:` edges, and agreement between OpenAlex's `referenced_works` and `cites:` indexes over corpus-internal pairs (gate 95%); **access validation** -- OpenAlex open-access status against the IEEE CSV licence, an independent source (gate 90%) | Observed works, plus a per-registrant table against the corpus |
-| `audit citation-years` | Annual trajectories known (an empty series from a never-cited work is a known zero), left-censored works published before the provider's series begins, the population complete from publication, and the share of cited references carrying a publication year (gate 80% each) | Observed works and reference pairs, plus a per-registrant table against the corpus |
+| `audit citation-years` | Annual trajectories known (an empty series from a never-cited work is a known zero), left-censored works published before the provider's series begins, the population complete from publication, the share of cited references carrying a publication year over one list per work -- the Crossref deposit when one exists, else OpenAlex -- and a validation verdict (provider year vs corpus year, reference not newer than its citer) (gate 80% coverage each) | Observed works and reference pairs, plus a per-registrant table against the corpus |
 
 Every audit that reports a share of externally collected data also reports it
 per registrant against the corpus, because an aggregate over a partial
@@ -266,7 +266,9 @@ collection inherits whatever ordered that collection — see `ADR-07`. A
 publisher that the crawl has not reached prints as `0 / N  <- not reached`
 rather than being averaged into a reassuring total.
 
-A share of zero rows is not a share of zero evidence. Two of the first
+A share of zero rows is not a share of zero evidence. Nor is every zero an answer: a provider's
+zero counts as known only when no other source contradicts it, because
+OpenAlex's `reference_count` is empty whenever it lacks the list. Two of the first
 full-corpus figures were wrong for that reason alone -- backward coverage read
 89.5% because 324 works reporting zero references produced no edge, and
 trajectory coverage read 76.7% because 677 never-cited works produced no
@@ -311,7 +313,7 @@ population every coverage audit divides by.
 
 ### 9.1 Current baseline
 
-The repository has 387 passing pytest tests plus two opt-in MySQL tests skipped in the default run. They run with isolated in-memory SQLite sessions and additionally cover deterministic fingerprints, content-addressed retention, rename detection, Bronze deletion propagation, isolated Gold candidates, embedding contract failures, atomic materialization, exact Gold reactivation, an end-to-end correlated pipeline fixture, Airflow parent correlation, temporal enrichment observations, persistent human-review evidence, retrieval metrics, provenance coverage, persisted semantic diagnostics, the durable-label-to-calibration join with its approval digests, the injected-fixture citation-graph crawl, automatic abandoned-run recovery, and the plausible-year bound that keeps in-press records dated to next year inside every trend. The MySQL acceptance tests cover JSON/NULL/BLOB round trips, rollback, advisory locks, and the idempotent `lit_config` uniqueness migration. Ruff lint and format checks are required.
+The repository has 406 passing pytest tests plus two opt-in MySQL tests skipped in the default run. They run with isolated in-memory SQLite sessions and additionally cover deterministic fingerprints, content-addressed retention, rename detection, Bronze deletion propagation, isolated Gold candidates, embedding contract failures, atomic materialization, exact Gold reactivation, an end-to-end correlated pipeline fixture, Airflow parent correlation, temporal enrichment observations, persistent human-review evidence, retrieval metrics, provenance coverage, persisted semantic diagnostics, the durable-label-to-calibration join with its approval digests, the injected-fixture citation-graph crawl, automatic abandoned-run recovery, and the plausible-year bound that keeps in-press records dated to next year inside every trend. The MySQL acceptance tests cover JSON/NULL/BLOB round trips, rollback, advisory locks, and the idempotent `lit_config` uniqueness migration. Ruff lint and format checks are required.
 
 SQLite remains the default fast suite. MySQL-specific acceptance is recorded separately against MySQL 8.4 and must be rerun for changes to JSON/NULL behavior, BLOBs, DDL, transactions, or advisory locks.
 
