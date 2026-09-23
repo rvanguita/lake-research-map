@@ -214,6 +214,9 @@ def _ensure_execution(
         execution.dataset_version_id = version_id
     execution.status = "running"
     execution.error_message = None
+    # A resumed execution is not finished; a stale timestamp left by an earlier
+    # recovery would otherwise show a live run as having ended.
+    execution.finished_at = None
     execution.heartbeat_at = datetime.now(UTC).replace(tzinfo=None)
     session.flush()
     return execution
@@ -392,6 +395,23 @@ def _append_effective_sources(raw_session, scanned: list[ScannedSource]) -> list
     return sorted(effective.values(), key=lambda source: source.path)
 
 
+def _enrichment_records() -> list[list]:
+    """The observation state bronze will read, as a stable fingerprint input."""
+    from lake_research_map.ingest.enrichment import load_enrichment_observations
+
+    session = get_session("bronze")
+    try:
+        observed = load_enrichment_observations(session)
+    except Exception:  # pragma: no cover - a pre-enrichment database
+        return []
+    finally:
+        session.close()
+    return [
+        [doi, values.get("citation_count"), values.get("reference_count")]
+        for doi, values in sorted(observed.items())
+    ]
+
+
 def _prepare_raw_version(execution_id: str, workflow: str, trigger: str, source_policy: str):
     from lake_research_map.db.gold_models import DatasetVersion, PublicationState
 
@@ -404,7 +424,11 @@ def _prepare_raw_version(execution_id: str, workflow: str, trigger: str, source_
         raw_session.close()
     gold_session = get_session("gold")
     try:
-        fingerprint = build_fingerprint(sources, curation_records=_curation_records(gold_session))
+        fingerprint = build_fingerprint(
+            sources,
+            curation_records=_curation_records(gold_session),
+            enrichment_records=_enrichment_records(),
+        )
         state = gold_session.get(PublicationState, 1)
         if state is None:
             state = PublicationState(id=1)
@@ -1266,6 +1290,11 @@ def _configure_enrichment_commands(subparsers) -> None:
         default=50,
         help="Works OR-joined into one cites: query (1 = one query per work)",
     )
+    crossref = actions.add_parser(
+        "crossref-references",
+        help="Collect Crossref reference deposits and date their references (no OpenAlex quota)",
+    )
+    crossref.add_argument("--delay", type=float, default=0.1)
     references = actions.add_parser(
         "resolve-references",
         help="Record the publication year of every work the corpus cites (Price, reference age)",
@@ -1295,10 +1324,47 @@ def _require_openalex_identity() -> str:
     return email
 
 
+def _run_crossref_references(args: argparse.Namespace) -> None:
+    """Collect Crossref reference lists and date their references (WP-23).
+
+    Kept out of the OpenAlex gate on purpose: Crossref reads its own
+    `CROSSREF_EMAIL`, because consent to send a contact address is per service.
+    Without one the public pool is used, at a lower rate, rather than failing.
+    """
+    from lake_research_map.db.gold_models import DatasetArticle, PublicationState
+    from lake_research_map.ingest.crossref import collect_crossref_references
+
+    bootstrap()
+    gold = get_session("gold")
+    bronze = get_session("bronze")
+    try:
+        state = gold.get(PublicationState, 1)
+        if state is None or not state.active_version_id:
+            raise ValueError("no active dataset version")
+        dois = gold.scalars(
+            select(DatasetArticle.doi).where(
+                DatasetArticle.dataset_version_id == state.active_version_id
+            )
+        ).all()
+        stats = collect_crossref_references(bronze, list(dois), delay=args.delay)
+        print(stats)
+        if stats.get("stopped_early"):
+            print(
+                f"Stopped early ({stats['stopped_early']}). Everything fetched is committed; "
+                "re-run to continue from where this run stopped."
+            )
+    finally:
+        bronze.close()
+        gold.close()
+
+
 def _run_enrichment_command(args: argparse.Namespace) -> None:
     from lake_research_map.db.gold_models import DatasetArticle, PublicationState
     from lake_research_map.ingest.openalex import refresh_openalex_observations
 
+    if args.enrichment_action == "crossref-references":
+        _run_crossref_references(args)
+        return
     _require_openalex_identity()
     bootstrap()
     gold_session = get_session("gold")
@@ -1864,12 +1930,21 @@ def _audit_citation_years() -> None:
                 "Sleeping Beauty may use"
             )
 
+        from lake_research_map.ingest.crossref import reference_year_coverage
+
+        refs = reference_year_coverage(session, corpus_years)
         print("\nCited-reference publication years (Price's index, reference age)")
-        print(f"  Reference pairs:       {cov['reference_pairs']}")
         print(
-            f"  Dated:                 {cov['dated_reference_pairs']} "
-            f"({cov['reference_year_coverage']:.1%}); distinct cited works dated "
-            f"{cov['distinct_cited_dated']}/{cov['distinct_cited']}"
+            f"  Reference lists:       {refs['works_by_source']['crossref']} from Crossref deposits, "
+            f"{refs['works_by_source']['openalex']} from OpenAlex (one list per work, never spliced)"
+        )
+        print(
+            f"  Known empty:           {refs['known_empty']}; unenumerated (no list from either "
+            f"provider): {refs['unenumerated']}"
+        )
+        print(
+            f"  Dated references:      {refs['dated']} / {refs['references']} "
+            f"({refs['coverage']:.1%})"
         )
 
         print("\nValidation of the years themselves")
@@ -1879,20 +1954,25 @@ def _audit_citation_years() -> None:
                 f"over {cov['year_agreement_pairs']} works (gate {YEAR_AGREEMENT_GATE:.0%}; a one-"
                 "year gap is online-first versus issue year)"
             )
-        if cov["temporal_consistency"] is not None:
+        if refs["temporal_consistency"] is not None:
             print(
                 f"  Reference not newer than its citer (+1 in-press): "
-                f"{cov['temporal_consistency']:.2%} over {cov['temporal_checked']} dated pairs, "
-                f"{cov['temporal_inconsistent']} inconsistent (gate {TEMPORAL_GATE:.0%})"
+                f"{refs['temporal_consistency']:.2%} over {refs['temporal_checked']} dated "
+                f"references, {refs['temporal_inconsistent']} inconsistent (gate {TEMPORAL_GATE:.0%})"
+            )
+        if refs["count_agreement"] is not None:
+            print(
+                f"  Crossref vs OpenAlex reference count, within 10% or 2: "
+                f"{refs['count_agreement']:.1%} of {refs['count_pairs']} works (reported, not gated)"
             )
 
         trajectories_ok = cov["known_coverage"] >= COVERAGE_GATE
-        references_ok = cov["reference_year_coverage"] >= COVERAGE_GATE
+        references_ok = refs["coverage"] >= COVERAGE_GATE
         validation_ok = (
             None
-            if cov["year_agreement"] is None or cov["temporal_consistency"] is None
+            if cov["year_agreement"] is None or refs["temporal_consistency"] is None
             else cov["year_agreement"] >= YEAR_AGREEMENT_GATE
-            and cov["temporal_consistency"] >= TEMPORAL_GATE
+            and refs["temporal_consistency"] >= TEMPORAL_GATE
         )
         print(
             f"\nVerdict: trajectories {_verdict(trajectories_ok)}, reference years "
@@ -1903,8 +1983,8 @@ def _audit_citation_years() -> None:
             print("  WP-23 gates met: Price, longevity and Sleeping Beauty may enter WP-21 review.")
         if not references_ok:
             print(
-                "  Price's index stays unavailable until reference years are resolved: run "
-                "`enrichment resolve-references`."
+                "  Price's index stays unavailable until reference years are dated: run "
+                "`enrichment crossref-references`, then `enrichment resolve-references`."
             )
 
         dois = cov["work_dois"]
@@ -1912,6 +1992,7 @@ def _audit_citation_years() -> None:
             {
                 "trajectory known": {dois[w] for w in cov["known_ids"] if dois.get(w)},
                 "complete history": {dois[w] for w in cov["complete_history_ids"] if dois.get(w)},
+                "refs >=80% dated": refs["mostly_dated_dois"],
             },
             "Annual-trajectory coverage",
         )
@@ -1986,6 +2067,7 @@ def recover_abandoned_executions(
     *,
     cutoff: datetime | None = None,
     reason: str = "recovered after stale heartbeat",
+    exclude: set[str] | None = None,
 ) -> list[str]:
     """Fail every execution still marked `running` that nothing is driving.
 
@@ -2010,6 +2092,13 @@ def recover_abandoned_executions(
     query = select(PipelineExecution).where(PipelineExecution.status == "running")
     if cutoff is not None:
         query = query.where(last_signal < cutoff)
+    if exclude:
+        # Airflow's full-pipeline DAG runs each stage as its own process under
+        # one execution id, and every stage but the last leaves that execution
+        # `running` on purpose. Holding the lock proves no *other* writer is
+        # alive; it says nothing about the execution this process is about to
+        # continue, which the sweep used to mark as crashed between every task.
+        query = query.where(PipelineExecution.execution_id.not_in(sorted(exclude)))
     executions = session.scalars(query).all()
     for execution in executions:
         execution.status = "error"
@@ -2044,7 +2133,9 @@ def _recover_before_run(execution_id: str) -> None:
     session = get_session("gold")
     try:
         recovered = recover_abandoned_executions(
-            session, reason="recovered automatically at the start of a later run"
+            session,
+            reason="recovered automatically at the start of a later run",
+            exclude={execution_id},
         )
         if recovered:
             logger.warning(
@@ -2180,8 +2271,17 @@ def _run_version_command(args: argparse.Namespace) -> None:
         version = session.get(DatasetVersion, args.version_id)
         if version is None:
             raise ValueError(f"unknown dataset version {args.version_id}")
-        is_legacy = bool(version.stats and version.stats.get("kind") == "legacy_import")
-        if not is_legacy and not _version_ready(session, version.version_id):
+        if version.stats and version.stats.get("kind") == "legacy_import":
+            # This used to skip the readiness check for legacy snapshots, but
+            # `materialize_version` re-asserts the publication contract anyway,
+            # and a legacy import cannot pass it: its chunks carry no embedding
+            # revision or text hash and it has no semantic run. The bypass could
+            # only ever end in a contract violation, so say so up front.
+            raise ValueError(
+                "a legacy_import version cannot be re-activated: it predates the embedding "
+                "and semantic contracts every publication must pass"
+            )
+        if not _version_ready(session, version.version_id):
             raise ValueError("the requested version has not passed every required quality gate")
         execution_id = str(uuid.uuid4())
         session.add(
@@ -2203,6 +2303,26 @@ def _run_version_command(args: argparse.Namespace) -> None:
         raise
     finally:
         session.close()
+
+
+def _mutates_published_inputs(args: argparse.Namespace) -> bool:
+    """Whether a CLI command changes what the next publication would contain.
+
+    These take the same advisory lock as a stage run. Without it a duplicate
+    merge recorded while bronze and silver were running was folded in by the
+    gold stage of a version whose id had hashed the decisions *before* it,
+    and `versions activate` could race `materialize_version` over the live
+    tables. The citation-edge, reference-year and Crossref crawls feed only
+    audits, not any stage, so they stay unlocked rather than blocking the
+    pipeline for the hours a crawl can take.
+    """
+    if args.command == "duplicates":
+        return args.duplicate_action != "list"
+    if args.command == "versions":
+        return args.version_action == "activate"
+    if args.command == "enrichment":
+        return args.enrichment_action == "refresh-openalex"
+    return False
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -2232,6 +2352,18 @@ def main(argv: list[str] | None = None) -> None:
     _configure_audit_commands(subparsers)
     _configure_maintenance_commands(subparsers)
     args = parser.parse_args(argv if argv is not None else sys.argv[1:])
+    lock = (
+        _pipeline_lock(f"cli-{args.command}-{uuid.uuid4()}")
+        if _mutates_published_inputs(args)
+        else contextlib.nullcontext()
+    )
+    try:
+        lock.__enter__()
+    except PipelineBusyError as exc:
+        logger.error("command not started: %s", exc)
+        if invoked_as_cli:
+            raise SystemExit(2) from exc
+        raise
     try:
         if args.command == "duplicates":
             from lake_research_map.transform.duplicate_resolution import DuplicateResolutionError
@@ -2294,6 +2426,8 @@ def main(argv: list[str] | None = None) -> None:
         if invoked_as_cli:
             raise SystemExit(1) from exc
         raise
+    finally:
+        lock.__exit__(None, None, None)
 
 
 if __name__ == "__main__":

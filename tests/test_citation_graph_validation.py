@@ -427,3 +427,41 @@ def test_validation_is_unavailable_rather_than_passing_when_nothing_is_comparabl
 
     assert cov["year_agreement"] is None
     assert cov["temporal_consistency"] is None
+
+
+# -- a zero is only an answer when no source disputes it ---------------------
+
+
+def test_an_observation_never_lowers_a_curated_count_to_zero():
+    from lake_research_map.ingest.enrichment import merge_enrichment
+
+    merged = merge_enrichment(
+        {"10.1/a": {"citation_count": 5, "reference_count": 42}},
+        {
+            "10.1/a": {"citation_count": 7, "reference_count": 0},
+            "10.1/b": {"citation_count": None, "reference_count": 3},
+        },
+    )
+
+    # A later citation count replaces the snapshot; an empty OpenAlex list
+    # does not erase a curated reference count.
+    assert merged["10.1/a"] == {"citation_count": 7, "reference_count": 42}
+    assert merged["10.1/b"] == {"citation_count": None, "reference_count": 3}
+
+
+def test_a_zero_contradicted_by_a_crossref_deposit_is_not_known_empty(bronze_session):
+    from lake_research_map.db.bronze_models import CrossrefReferenceList
+
+    _work(bronze_session, "W1", "10.1/a")
+    _work(bronze_session, "W2", "10.1/b")
+    _observation(bronze_session, "W1", "10.1/a", references=0)
+    _observation(bronze_session, "W2", "10.1/b", references=0)
+    # OpenAlex says W1 cites nothing; its publisher deposited 12 references.
+    bronze_session.add(
+        CrossrefReferenceList(doi="10.1/a", observed_at=NOW, status="success", deposited=12)
+    )
+    bronze_session.commit()
+
+    coverage = openalex.citation_graph_coverage(bronze_session, [URL + "W1", URL + "W2"])
+
+    assert coverage["backward_ids"] == {URL + "W2"}

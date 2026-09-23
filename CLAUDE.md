@@ -187,6 +187,18 @@ reports `stopped_early` is not a bug; re-run it after the window resets. The pol
 100,000/day and we are being given 1,000, so whether the `mailto` is actually registering is an open question
 -- the client now logs the throttle headers once per run, which is what makes that checkable.
 
+### An OpenAlex zero is not always an answer
+
+`reference_count` from OpenAlex is `len(referenced_works)`, which is empty when OpenAlex has no reference list, not
+only when the work cites nothing: of 324 works it reported at zero, 81 have references deposited in Crossref.
+Treat a provider's zero as known only when no other source contradicts it (`openalex.contradicted_zeros`), and never
+let an observed zero overwrite a positive curated count (`enrichment.merge_enrichment`).
+
+Cited-reference years come from **Crossref** where the publisher deposited a reference list (2,815 of 3,115 works) and
+from OpenAlex otherwise -- one list per work, never spliced, because the two enumerate references differently
+(Crossref keeps books and reports OpenAlex does not resolve). Crossref reads its own `CROSSREF_EMAIL`; consent to
+send a contact address is per service. IET deposits almost no references.
+
 ### The two sources are not interchangeable
 
 Anything that merges IEEE and Elsevier records has to normalize these differences:

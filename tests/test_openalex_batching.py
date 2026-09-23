@@ -127,11 +127,8 @@ def test_the_refresh_persists_everything_a_batch_returned(bronze_session, monkey
     assert len(bronze_session.scalars(openalex.select(EnrichmentObservation.id)).all()) == 4
 
 
-def test_a_throttled_batch_trips_the_breaker_on_its_first_chunk(bronze_session, monkeypatch):
-    dois = [f"10.1000/{index}" for index in range(50)]
-    calls: list[int] = []
-
-    def _all_throttled(chunk, **kwargs):
+def _failing_batches(calls, **extra):
+    def _batch(chunk, **kwargs):
         calls.append(len(chunk))
         return {
             doi: {
@@ -140,19 +137,38 @@ def test_a_throttled_batch_trips_the_breaker_on_its_first_chunk(bronze_session, 
                 "http_status": 429,
                 "retry_count": 3,
                 "error_message": "OpenAlex returned HTTP 429",
+                **extra,
             }
             for doi in chunk
         }
 
-    monkeypatch.setattr(openalex, "fetch_openalex_batch", _all_throttled)
+    return _batch
+
+
+def test_an_exhausted_quota_stops_on_its_first_request(bronze_session, monkeypatch):
+    """A Retry-After beyond the cap means no retry in this run can succeed."""
+    calls: list[int] = []
+    monkeypatch.setattr(openalex, "fetch_openalex_batch", _failing_batches(calls, futile=True))
+
     stats = openalex.refresh_openalex_observations(
-        bronze_session, dois, max_fetch=50, delay=0, batch_size=10
+        bronze_session, [f"10.1000/{i}" for i in range(50)], max_fetch=50, delay=0, batch_size=10
     )
 
-    # One request was spent discovering the block, not five.
     assert calls == [10]
     assert stats["stopped_early"] == "rate_limited"
-    assert stats["success"] == 0
+
+
+def test_one_failed_batch_is_one_failure_not_fifty(bronze_session, monkeypatch):
+    """The breaker counts requests. Counting DOIs stopped a crawl on one 500."""
+    calls: list[int] = []
+    monkeypatch.setattr(openalex, "fetch_openalex_batch", _failing_batches(calls))
+
+    stats = openalex.refresh_openalex_observations(
+        bronze_session, [f"10.1000/{i}" for i in range(100)], max_fetch=100, delay=0, batch_size=10
+    )
+
+    assert calls == [10] * openalex.CONSECUTIVE_FAILURE_LIMIT
+    assert stats["stopped_early"] == "rate_limited"
 
 
 def test_the_default_batch_size_is_the_documented_filter_limit():
