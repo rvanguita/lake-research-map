@@ -336,3 +336,94 @@ def test_an_open_licence_must_be_open_in_openalex(bronze_session):
     assert result["open_confirmed"] == 1
     assert result["contradictions"] == ["10.1109/b"]
     assert result["licence_pairs"] == 1 and result["licence_agreement"] == 1.0
+
+
+# -- WP-23 closure: batch width and year validation --------------------------
+
+
+def test_a_rejected_wide_filter_falls_back_to_the_proven_width(bronze_session):
+    """100 values halve the requests; if the provider refuses, 50 must still finish."""
+    _work(bronze_session, "W1", "10.1/a")
+    refs = [f"R{index:03d}" for index in range(120)]
+    for ref in refs:
+        _edge(bronze_session, "W1", ref, "referenced_works")
+    bronze_session.commit()
+    widths = []
+
+    class _Bad(_Page):
+        status_code = 400
+
+    def _get(url, params=None, headers=None, timeout=None):
+        ids = params["filter"].split(":", 1)[1].split("|")
+        widths.append(len(ids))
+        if len(ids) > 50:
+            return _Bad([])
+        return _Page([{"id": URL + short, "publication_year": 2000} for short in ids])
+
+    stats = openalex.resolve_reference_years(
+        bronze_session, delay=0, batch_size=100, session_factory=_get
+    )
+
+    assert widths[0] == 100, "the wide filter is tried first"
+    assert widths[1:] == [50, 50, 20]
+    assert stats["resolved"] == 120 and stats["remaining"] == 0
+    assert stats["stopped_early"] is None and stats["batch_size"] == 50
+
+
+def test_the_wide_filter_is_kept_when_the_provider_accepts_it(bronze_session):
+    _work(bronze_session, "W1", "10.1/a")
+    for index in range(150):
+        _edge(bronze_session, "W1", f"R{index:03d}", "referenced_works")
+    bronze_session.commit()
+    widths = []
+
+    def _get(url, params=None, headers=None, timeout=None):
+        ids = params["filter"].split(":", 1)[1].split("|")
+        widths.append(len(ids))
+        return _Page([{"id": URL + short, "publication_year": 2000} for short in ids])
+
+    stats = openalex.resolve_reference_years(
+        bronze_session, delay=0, batch_size=100, session_factory=_get
+    )
+
+    assert widths == [100, 50]
+    assert stats["requests"] == 2
+
+
+def test_provider_years_are_validated_against_corpus_metadata(bronze_session):
+    _work(bronze_session, "W1", "10.1/a", year=2020)  # agrees
+    _work(bronze_session, "W2", "10.1/b", year=2021)  # online-first gap: tolerated
+    _work(bronze_session, "W3", "10.1/c", year=2010)  # wrong by a decade
+    bronze_session.commit()
+
+    cov = openalex.citation_year_coverage(
+        bronze_session, {"10.1/a": 2020, "10.1/B": 2020, "10.1/c": 2020}
+    )
+
+    assert cov["year_agreement_pairs"] == 3
+    assert cov["year_agreement"] == 2 / 3
+
+
+def test_a_reference_newer_than_its_citer_is_counted_as_inconsistent(bronze_session):
+    _work(bronze_session, "W1", "10.1/a", year=2015)
+    _work(bronze_session, "W2", "10.1/b", year=2016)  # in press: allowed
+    _work(bronze_session, "W3", "10.1/c", year=2019)  # impossible
+    _work(bronze_session, "W4", "10.1/d", year=2001)
+    for cited in ("W2", "W3", "W4"):
+        _edge(bronze_session, "W1", cited, "referenced_works")
+    bronze_session.commit()
+
+    cov = openalex.citation_year_coverage(bronze_session)
+
+    assert cov["temporal_checked"] == 3
+    assert cov["temporal_inconsistent"] == 1
+
+
+def test_validation_is_unavailable_rather_than_passing_when_nothing_is_comparable(bronze_session):
+    _work(bronze_session, "W1", "10.1/a", year=2020)
+    bronze_session.commit()
+
+    cov = openalex.citation_year_coverage(bronze_session)
+
+    assert cov["year_agreement"] is None
+    assert cov["temporal_consistency"] is None

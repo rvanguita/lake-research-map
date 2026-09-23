@@ -75,6 +75,34 @@ Two findings the old audit could not have produced:
   in hash order — sorted OpenAlex ids track ingestion era, which tracks
   publication year, the very property being measured.
 
+### Validating the years, not just counting them
+
+Coverage says a year exists; it does not say the year is right, and Price's
+index is only as good as the years it averages. Two checks need no further
+collection and pass today:
+
+| Check | Result | Gate |
+|---|---|---|
+| Provider year vs corpus metadata, within one year | **98.9%** of 3,099 works | 95% |
+| Reference not newer than its citer (+1 year for in-press) | **99.97%** of 5,780 dated pairs — 2 inconsistent | 99% |
+
+Exact agreement is 84.4%; almost all of the gap is the one-year difference
+between online-first and issue year, which is why the check tolerates it. 34
+works differ by more than a year. Both checks are now part of
+`audit citation-years`, printed as a third verdict, and report "n/a" rather
+than "PASS" when nothing is comparable.
+
+### Fitting the rest into one window
+
+At 50 ids per request the 56,330 unresolved references cost ~1,130 requests —
+more than a window on their own, and two windows once the ~233 forward-crawl
+requests go first. OpenAlex documents OR filters of up to 100 values; at 100
+the resolution costs ~564, and the two passes together ~797, inside one
+window. The 100-value width has not been exercised live, so the resolver
+falls back to the proven 50 on the first rejected request and retries the same
+chunk rather than stopping. Either way the result is the same data; only the
+number of windows differs.
+
 ## WP-24 — both gates pass
 
 ```
