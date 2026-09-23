@@ -4,7 +4,7 @@
 
 **Evidence cutoff:** 2026-09-21
 
-**Implementation baseline:** the active 2026-09-21 Gold version `2974743a…` contains 3,115 articles and 7,552 chunks, all carrying complete embedding metadata; the application has 10 registered dashboard pages and 406 passing automated tests (plus two opt-in MySQL tests skipped by the default run) as measured on 2026-09-22.
+**Implementation baseline:** the active 2026-09-21 Gold version `2974743a…` contains 3,115 articles and 7,552 chunks, all carrying complete embedding metadata; the application has 10 registered dashboard pages and 447 passing automated tests (plus two opt-in MySQL tests skipped by the default run) as measured on 2026-09-23.
 
 **Related documents:** [SDD.md](SDD.md), [ROADMAP.md](ROADMAP.md), [METHODOLOGY.md](METHODOLOGY.md)
 
@@ -60,7 +60,7 @@ The primary user is the researcher who collects exports, operates the pipeline, 
 - Fully autonomous inclusion/exclusion decisions.
 - Full-career author metrics or authoritative author identity resolution.
 - Production multi-tenancy or arbitrary research topics in the current version.
-- Price's index, Sleeping Beauty, CD disruption, Open Access Citation Advantage, or citation longevity before their required longitudinal/reference data exists.
+- CD disruption or Open Access Citation Advantage before their required data exists: usable forward-graph coverage for the first, a confounder-controlled model for the second. Price's index, citation longevity and the Sleeping Beauty coefficient left this list on 2026-09-23, when `WP-23` passed its coverage and validation gates.
 
 ## 4. Research questions and evidence decisions
 
@@ -186,8 +186,8 @@ its requirement, or says plainly that none exists.
 | `FR-04` | Idempotent merge/keep/undo with rationale and timestamps | `transform/duplicate_resolution.py`; `tests/test_duplicate_resolution.py` |
 | `FR-05` | Reused vs. invalidated chunk counts on an unchanged rebuild | `transform/versioned_gold.py`; `tests/test_gold_articles.py` |
 | `FR-06` | Dimension, model, revision, finiteness and coverage gates before publication | `quality.embed_contract`, `quality.publication_contract` |
-| `FR-07` | Parent execution and stage rows sharing one version | `tests/test_versioning_contracts.py` |
-| `FR-08` | Article reader bound to the publication pointer | `dashboard/data.py::load_articles`; `tests/test_dashboard_pages.py` |
+| `FR-07` | Parent execution and stage rows sharing one version; each stage row records the candidate's parent as its input version and the candidate as its output | `tests/test_versioning_contracts.py` |
+| `FR-08` | Article reader bound to the publication pointer; a recorded blocking-check failure for the active version refuses canonical mode | `dashboard/data.py::select_articles_layer`; `tests/test_quality_methodology.py` |
 | `FR-09` | Durable labels joined to calibration, with both approval digests | `reviews calibrate`; `tests/test_review_label_reader.py` |
 | `FR-10` | Component ranks and scores exposed per mode | `dashboard/search.py`; `tests/test_search.py` |
 | `FR-11` | No write call anywhere under `dashboard/` | `tests/test_theme.py` |
@@ -198,7 +198,7 @@ its requirement, or says plainly that none exists.
 | `NFR-04` | Rejections, overrides, quality results and run errors persisted | `lit_rejected`, `lit_quality_results`, `lit_pipeline_runs` |
 | `NFR-05` | **Not measured.** Latency and memory were benchmarked once by hand (2026-09-21); no performance test guards them | see `docs/evidence/2026-09-21-search-benchmark.md` |
 | `NFR-06` | Secret hygiene only. The per-table privilege boundary was traded away on 2026-09-22 and is **not** enforced | `.gitignore`; `WP-08` evidence |
-| `NFR-07` | Portuguese-shaped copy, empty headings and empty metric labels all fail the build | `tests/test_dashboard_language.py` |
+| `NFR-07` | Portuguese-shaped copy, empty headings and empty metric labels all fail the build; so do two legend series on any page that differ only by color | `tests/test_dashboard_language.py`; `tests/test_dashboard_pages.py::test_every_rendered_series_is_distinguishable_without_color` |
 | `NFR-08` | `analytics.py` and `forecasting.py` import no Streamlit; every page has `AppTest` coverage | `tests/test_theme.py`, `tests/test_dashboard_pages.py` |
 
 Two rows say "not measured" on purpose. `NFR-05` and the roles half of `NFR-06`
@@ -209,18 +209,18 @@ failure mode this table exists to prevent.
 
 Each analytical question has exactly one canonical page. Overview may link to a deep dive but must not reproduce its chart.
 
-| Page | Exclusive decision/question | Canonical evidence | Planned hardening |
+| Page | Exclusive decision/question | Canonical evidence | Open hardening (as of 2026-09-23) |
 |---|---|---|---|
-| **Overview** | What is the corpus state now? | Counts, recency, source composition, readiness | Deep correlation/concentration/temporal views removed; add snapshot/as-of status |
-| **Production and venues** | How did output and qualified venue composition change? | Annual and cumulative series, Qualis evolution | Explicit complete/partial-year status; no generic venue ranking duplication |
-| **Topics and scientific structure** | What concepts and venues structure the field? | Keyword prevalence, Bradford/Zipf, c-TF-IDF, semantic venue groups | FDR now covers the full keyword family; the growth ranking, slope chart, and searched-breakpoint test still report no adjustment |
-| **Impact and citations** | How is impact distributed and conditionally associated? | Citation distributions, age normalization, count models, specification diagnostics | Delivered: AIC family comparison, bootstrap tail p-value, VIF/condition number, influence, zero-inflation gap. Open: a fitted zero-inflated model and alternative age specifications |
-| **Researchers and collaboration** | How are corpus authors and ties organized over time? | Productivity, Lotka's law, corpus indices, network structure vs. a degree-preserving null | Identity ambiguity audit; assortativity; temporal formation/repetition of ties |
-| **Engineering evidence** | Which methods, objectives, uncertainties, networks, and tools occur? | Multi-label engineering taxonomy | Labeled audit set, precision/recall, unknown/ambiguous coverage |
-| **Trends and fronts** | What can be projected, with what historical error? | Persistence-baseline skill, rolling-origin forecast, held-out interval coverage, Bass/burst diagnostics | Skill and coverage by horizon (every fold is currently one-step), MASE, Bass parameter stability |
-| **Screening and discovery** | What should be reviewed, included, or reconciled? | Margin, themes, projections with bootstrap ARI and trustworthiness, isolation, duplicate queue, persistent review protocols/labels | Collect independent labels; persist stability; sweep cluster count |
-| **Quality and RAG** | Are metadata, text, embeddings, and retrieval fit for use? | Coverage matrix, PDF selection bias, chunk diagnostics, anomaly audit, inspectable dense/BM25/RRF search | Apply the implemented Recall@k/MRR/nDCG/latency harness to labeled technical queries |
-| **Pipeline and provenance** | Can results be traced and trusted operationally? | Funnel, runs, rejections, source configuration, quality gates | Snapshot, freshness, removal reconciliation |
+| **Overview** | What is the corpus state now? | Counts, recency, source composition, readiness | None; the dataset version and as-of time are captioned on every page (`WP-21`) |
+| **Production and venues** | How did output and qualified venue composition change? | Annual and cumulative series, Qualis evolution | Explicit complete/partial-year status on the annual series |
+| **Topics and scientific structure** | What concepts and venues structure the field? | Keyword prevalence, Bradford/Zipf, c-TF-IDF, semantic venue groups | None; the growth ranking is FDR-adjusted over the full keyword family with a serial-dependence sensitivity, and the searched breakpoint is scored against a permutation null (`WP-16`) |
+| **Impact and citations** | How is impact distributed and conditionally associated? | Citation distributions, age normalization, count models (Poisson, NB, ZIP, ZINB by AIC) with age-specification sensitivity, Price's index, citation half-life, Sleeping Beauty coefficient | CD disruption (waits on forward-graph coverage, `WP-24`); OACA (waits on a confounder-controlled model) |
+| **Researchers and collaboration** | How are corpus authors and ties organized over time? | Productivity, Lotka's law, corpus indices, network structure vs. a degree-preserving null, assortativity, periodized tie dynamics | Identity ambiguity audit, blocked on human labels (`WP-11`) |
+| **Engineering evidence** | Which methods, objectives, uncertainties, networks, and tools occur? | Multi-label engineering taxonomy | Labeled audit set, precision/recall, unknown/ambiguous coverage; blocked on human labels (`WP-12`) |
+| **Trends and fronts** | What can be projected, with what historical error? | Persistence-baseline skill and MASE per horizon, rolling-origin forecast, held-out interval coverage, Bass peak interval, burst diagnostics | None (`WP-18`) |
+| **Screening and discovery** | What should be reviewed, included, or reconciled? | Margin, themes from a k sweep, projections with persisted bootstrap ARI and trustworthiness, isolation, duplicate queue, persistent review protocols/labels | Independent human screening labels (`WP-10`) |
+| **Quality and RAG** | Are metadata, text, embeddings, and retrieval fit for use? | Coverage matrix, PDF selection bias, chunk diagnostics, anomaly audit, inspectable dense/BM25/RRF search, retrieval benchmark (shown as not approved) | Human relevance labels for the query set (`WP-13`) |
+| **Pipeline and provenance** | Can results be traced and trusted operationally? | Funnel, runs, rejections, source configuration, quality gates, source-change reconciliation, active version and freshness | None |
 
 Visualization selection follows the question: bars for discrete comparisons, lines for ordered time, ECDF/CCDF for distributions, scatterplots for associations with uncertainty, heatmaps for dense matrices, and tables when exact values or audit context dominate. Multiple chart types for the same knowledge are alternatives behind one selector, not separate claims.
 
@@ -261,17 +261,18 @@ Visualization selection follows the question: bars for discrete comparisons, lin
 
 ## 9. Current evidence boundaries and risks
 
-| ID | Risk | Consequence | Required mitigation |
-|---|---|---|---|
-| `RISK-01` | Search coverage is limited and manually exported. | Results may omit relevant literature. | Preserve full search provenance and report the sampling frame. |
-| `RISK-02` | No-DOI records are excluded. | Systematic selection bias is possible. | Audit rejected records and evaluate alternative stable identifiers. |
-| `RISK-03` | PDFs cover a small, non-random subset. | Full-text analyses may be biased. | Compare PDF/non-PDF groups and label abstract-only conclusions. |
-| `RISK-04` | Citation counts are unversioned snapshots. | Results drift and cannot be reproduced precisely. | Persist source and observation time before longitudinal claims. |
-| `RISK-05` | Author names are heuristic identities. | Homonyms merge and variants split. | Add identity audit/overrides before person-level conclusions. |
-| `RISK-06` | Screening anchors lack independent gold-standard validation. | Threshold performance may be overstated. | Persist dual-review labels and validate out of sample. |
-| `RISK-07` | Many analytical panels invite multiple testing. | False discoveries become likely. | Define test families, effect-size thresholds, and FDR control. |
-| `RISK-08` | Dynamic tabs are not used consistently. | Hidden expensive analyses execute and slow reruns. | Gate heavy tab bodies and add performance acceptance tests. |
-| `RISK-09` | External enrichment is collected under a request quota and may stay partial indefinitely. | A partial collection ordered by any key correlated with source produces a biased sample, and coverage reported in aggregate hides it. | Collect in publisher-proportional order so any prefix is representative; report coverage per registrant against the corpus denominator; treat an unfinished crawl as a stated limitation, never as missing data at the provider. |
+| ID | Risk | Consequence | Required mitigation | Status |
+|---|---|---|---|---|
+| `RISK-01` | Search coverage is limited and manually exported. | Results may omit relevant literature. | Preserve full search provenance and report the sampling frame. | Open; inherent to a hand-exported corpus |
+| `RISK-02` | No-DOI records are excluded. | Systematic selection bias is possible. | Audit rejected records and evaluate alternative stable identifiers. | Open; rejections are audited, no alternative identifier yet |
+| `RISK-03` | PDFs cover a small, non-random subset. | Full-text analyses may be biased. | Compare PDF/non-PDF groups and label abstract-only conclusions. | Mitigated in reporting: PDF selection bias is measured and shown |
+| `RISK-04` | Citation counts are unversioned snapshots. | Results drift and cannot be reproduced precisely. | Persist source and observation time before longitudinal claims. | Mitigated on 2026-09-23: observations are append-only with `observed_at` and enter the version fingerprint (`WP-07`) |
+| `RISK-05` | Author names are heuristic identities. | Homonyms merge and variants split. | Add identity audit/overrides before person-level conclusions. | Open; blocked on identity labels (`WP-11`) |
+| `RISK-06` | Screening anchors lack independent gold-standard validation. | Threshold performance may be overstated. | Persist dual-review labels and validate out of sample. | Open; blocked on independent labels (`WP-10`) |
+| `RISK-07` | Many analytical panels invite multiple testing. | False discoveries become likely. | Define test families, effect-size thresholds, and FDR control. | Mitigated: test families and FDR control (`WP-16`) |
+| `RISK-08` | Dynamic tabs are not used consistently. | Hidden expensive analyses execute and slow reruns. | Gate heavy tab bodies and add performance acceptance tests. | Half mitigated: every tab group renders only its open tab (`WP-22`); the performance acceptance test was withdrawn, so `NFR-05` stays unmeasured |
+| `RISK-09` | External enrichment is collected under a request quota and may stay partial indefinitely. | A partial collection ordered by any key correlated with source produces a biased sample, and coverage reported in aggregate hides it. | Collect in publisher-proportional order so any prefix is representative; report coverage per registrant against the corpus denominator; treat an unfinished crawl as a stated limitation, never as missing data at the provider. | Mitigated: publisher-proportional crawl order and per-registrant coverage (`ADR-07`) |
+
 
 ## 10. Success criteria
 
@@ -295,8 +296,8 @@ The product is successful when all of the following are evidenced, not merely as
 | Keep cross-DOI semantic duplicates human-reviewed. | Similar abstracts can represent versions or genuinely distinct publications. | Implemented |
 | Use local BGE embeddings and binary float32 storage. | Appropriate for corpus scale and offline operation; performance claims require benchmarks. | Implemented |
 | Keep dashboard pages read-only. | Separates analytical presentation from controlled pipeline mutations. | Implemented |
-| Treat contract-valid Gold as the canonical analytical population. | Gold is where approved merges and curated chunks exist; invalid or absent Gold falls back visibly to Silver/Bronze. | Versioned publication implemented; selector-to-pointer binding remains in `WP-04` |
-| Keep uploaded screening calibration non-persistent and non-operative. | The current phase can validate the method without allowing a dashboard session to mutate corpus decisions. | Implemented; governed persistence pending |
-| Version corpus, enrichment, models, anchors, and labels. | Necessary for reproducible statistical and semantic results. | Approved; implementation pending |
+| Treat contract-valid Gold as the canonical analytical population. | Gold is where approved merges and curated chunks exist; invalid or absent Gold falls back visibly to Silver/Bronze. | Implemented (`WP-04`); readiness also refuses a version with a recorded blocking-check failure |
+| Keep screening calibration non-operative in the dashboard. | The current phase can validate the method without allowing a dashboard session to mutate corpus decisions. | Implemented; calibration is persisted through the governed `reviews calibrate` CLI (`FR-09`), never from a page |
+| Version corpus, enrichment, models, anchors, and labels. | Necessary for reproducible statistical and semantic results. | Implemented: the version fingerprint covers sources, configuration, code, curation and enrichment observations; embeddings carry model and revision; labels carry protocol version and digests |
 | Trust `data/enrichment_cache.json` as a citation source. | Validated against OpenAlex on 2026-09-22 over 1,875 comparable rows: reference counts agree 99.7%, citation counts 90.0% with a median error of 0. Every divergence is one-directional -- the cache is never higher than OpenAlex, only older -- which is the signature of staleness rather than error. | Validated; refresh before longitudinal claims |
 | Add new methods only when they answer a distinct decision question and meet data prerequisites. | Prevents dashboard breadth from exceeding evidential validity. | Active governance rule |

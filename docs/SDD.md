@@ -155,11 +155,11 @@ Screening labels remain target governed data rather than dashboard session state
 | Stage | Current behavior | Gap |
 |---|---|---|
 | Raw | Content-addressed scan, immutable manifest/revisions, transactional active reconciliation | Archive garbage collection is not automated |
-| Bronze | Transactional rebuild with file-qualified natural keys and dataset lineage; append-only provider observations | The active corpus has no live provider observations yet |
+| Bronze | Transactional rebuild with file-qualified natural keys and dataset lineage; append-only provider observations | None open; 3,099 OpenAlex observations and 2,815 Crossref reference lists are persisted (`WP-07`, `WP-23`) |
 | Silver | Transactional DOI rebuild/rejection audit with dataset lineage | PDF matcher validation remains in `WP-05` |
 | Gold | Build immutable candidate article/chunk snapshot; reuse compatible unchanged vectors | Database uniqueness for legacy live chunk keys remains application-enforced |
-| Embed | Fill candidate binary/JSON vectors and block incompatible/non-finite output | Immutable model revision/text hash remain in `WP-06` |
-| Semantic | Build candidate signals only at complete embedding coverage; publish all Gold outputs atomically | Full semantic-run parameter manifest remains in `WP-06` |
+| Embed | Fill candidate binary vectors and block incompatible/non-finite output; model, revision and text hash are recorded per vector | None open (`WP-06`); the JSON fallback is retired |
+| Semantic | Build candidate signals only at complete embedding coverage; publish all Gold outputs atomically | None open; each run persists its model, revision, dimension, parameters and stability in `lit_semantic_runs` |
 
 ### 4.2 Current versioned run protocol
 
@@ -313,7 +313,7 @@ population every coverage audit divides by.
 
 ### 9.1 Current baseline
 
-The repository has 406 passing pytest tests plus two opt-in MySQL tests skipped in the default run. They run with isolated in-memory SQLite sessions and additionally cover deterministic fingerprints, content-addressed retention, rename detection, Bronze deletion propagation, isolated Gold candidates, embedding contract failures, atomic materialization, exact Gold reactivation, an end-to-end correlated pipeline fixture, Airflow parent correlation, temporal enrichment observations, persistent human-review evidence, retrieval metrics, provenance coverage, persisted semantic diagnostics, the durable-label-to-calibration join with its approval digests, the injected-fixture citation-graph crawl, automatic abandoned-run recovery, and the plausible-year bound that keeps in-press records dated to next year inside every trend. The MySQL acceptance tests cover JSON/NULL/BLOB round trips, rollback, advisory locks, and the idempotent `lit_config` uniqueness migration. Ruff lint and format checks are required.
+The repository has 447 passing pytest tests plus two opt-in MySQL tests skipped in the default run. They run with isolated in-memory SQLite sessions and additionally cover deterministic fingerprints, content-addressed retention, rename detection, Bronze deletion propagation, isolated Gold candidates, embedding contract failures, atomic materialization, exact Gold reactivation, an end-to-end correlated pipeline fixture, Airflow parent correlation, temporal enrichment observations, persistent human-review evidence, retrieval metrics, provenance coverage, persisted semantic diagnostics, the durable-label-to-calibration join with its approval digests, the injected-fixture citation-graph crawl, automatic abandoned-run recovery, the plausible-year bound that keeps in-press records dated to next year inside every trend, the non-color series encoding checked on every rendered chart, and the literature-age measures with their shared populations. The MySQL acceptance tests cover JSON/NULL/BLOB round trips, rollback, advisory locks, and the idempotent `lit_config` uniqueness migration. Ruff lint and format checks are required.
 
 SQLite remains the default fast suite. MySQL-specific acceptance is recorded separately against MySQL 8.4 and must be rerun for changes to JSON/NULL behavior, BLOBs, DDL, transactions, or advisory locks.
 
@@ -334,10 +334,10 @@ Current in-process computation remains the default while measured refresh time, 
 
 Planned data extensions have explicit prerequisites:
 
-- Citation histories before Sleeping Beauty or longevity analysis.
-- Forward/backward citation graph before CD disruption.
-- Reference publication years before Price's index.
-- Verified access observations and confounders before OACA.
+- Citation histories before Sleeping Beauty or longevity analysis -- met 2026-09-23 (`WP-23`); both panels ship on the Impact page over the 2,514 works with a complete history.
+- Reference publication years before Price's index -- met 2026-09-23 (`WP-23`); shipped.
+- Forward/backward citation graph before CD disruption -- backward met, forward at 28.2% (`WP-24`).
+- Verified access observations and confounders before OACA -- access verified (`WP-24`), confounder model absent.
 - Persistent author identifiers/overrides before person-level longitudinal claims.
 
 ## 11. Architecture decisions
@@ -421,13 +421,12 @@ whose order correlates with a property under analysis, not just to DOIs.
 
 ## 12. Known technical debt
 
-- Analytical reads are already bound to the publication pointer: `dashboard/data.py::load_articles` routes Gold through `load_active_dataset_table`, which scopes every query by `active_dataset_version()`. The residual is narrower than previously recorded -- `assess_gold_articles` is still a structural check (non-empty, unique DOI, expected columns) rather than a read of the persisted `lit_quality_results` for that version.
+- The live materialized tables (`lit_chunks`, `lit_duplicate_pairs`) still rely on the application for logical-key uniqueness; their versioned counterparts are constrained in the database (`uq_dataset_chunk`, `uq_dataset_duplicate_pair`).
+- Raw archive garbage collection is not automated: content-addressed blobs of sources no longer active are retained until removed by hand.
+- `NFR-05` is not measured by any automated test. Latency and memory were benchmarked once by hand, and the suite-time target was withdrawn rather than met (`WP-22`).
+- `NFR-06`'s database-enforced least privilege was traded away on 2026-09-22; a shared or multi-user deployment must restore it before going live.
+- The optional vector index (`build_vector_index` / `search_vector_index`) has no page caller by design: it is the measured `WP-25` scale-up path, not the serving path.
+- Resolved on 2026-09-23: Gold readiness reads the persisted `lit_quality_results` of the active version, and the latest run of any failed error-severity check refuses canonical mode; stage rows record the candidate's parent as `input_version_id` (`FR-07`); the per-work OpenAlex fetchers superseded by the batched crawl were removed; every chart gains a non-color channel per series at `components.render_chart` (`NFR-07`).
 - Resolved on 2026-09-21: the legacy direct embedding transform and the dashboard action that called it were removed. It wrote the live `lit_chunks` table, which `materialize_version` rebuilds from the candidate on every publish, so vectors generated from the Quality page were discarded at the next publication and never passed `embed_contract`. Embedding now has exactly one writer, `versioned_gold.py::build_dataset_embeddings`, operating on the immutable candidate.
-- Parent correlation, dataset versions, cross-process advisory locking, heartbeats, stale-run recovery, and stage-specific Airflow retry/timeout policies are implemented.
-- OpenAlex responses are append-only observations with observation time, response state, HTTP status, response hash, retry count, longitudinal counts, outgoing edges, and access metadata. A real refresh still requires local API credentials.
-- Chunk and duplicate-candidate logical keys are not fully constrained in the database.
-- Several retired analytical functions and inactive page helpers remain in source/tests.
-- Expensive tabs are only conditionally rendered on some pages.
-- Statistical functions need the validation improvements defined in `PRD.md` before confirmatory interpretation.
 
 The ordered resolution of this debt is defined in `ROADMAP.md`.
