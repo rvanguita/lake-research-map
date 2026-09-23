@@ -1266,6 +1266,11 @@ def _configure_enrichment_commands(subparsers) -> None:
         default=50,
         help="Works OR-joined into one cites: query (1 = one query per work)",
     )
+    crossref = actions.add_parser(
+        "crossref-references",
+        help="Collect Crossref reference deposits and date their references (no OpenAlex quota)",
+    )
+    crossref.add_argument("--delay", type=float, default=0.1)
     references = actions.add_parser(
         "resolve-references",
         help="Record the publication year of every work the corpus cites (Price, reference age)",
@@ -1295,10 +1300,47 @@ def _require_openalex_identity() -> str:
     return email
 
 
+def _run_crossref_references(args: argparse.Namespace) -> None:
+    """Collect Crossref reference lists and date their references (WP-23).
+
+    Kept out of the OpenAlex gate on purpose: Crossref reads its own
+    `CROSSREF_EMAIL`, because consent to send a contact address is per service.
+    Without one the public pool is used, at a lower rate, rather than failing.
+    """
+    from lake_research_map.db.gold_models import DatasetArticle, PublicationState
+    from lake_research_map.ingest.crossref import collect_crossref_references
+
+    bootstrap()
+    gold = get_session("gold")
+    bronze = get_session("bronze")
+    try:
+        state = gold.get(PublicationState, 1)
+        if state is None or not state.active_version_id:
+            raise ValueError("no active dataset version")
+        dois = gold.scalars(
+            select(DatasetArticle.doi).where(
+                DatasetArticle.dataset_version_id == state.active_version_id
+            )
+        ).all()
+        stats = collect_crossref_references(bronze, list(dois), delay=args.delay)
+        print(stats)
+        if stats.get("stopped_early"):
+            print(
+                f"Stopped early ({stats['stopped_early']}). Everything fetched is committed; "
+                "re-run to continue from where this run stopped."
+            )
+    finally:
+        bronze.close()
+        gold.close()
+
+
 def _run_enrichment_command(args: argparse.Namespace) -> None:
     from lake_research_map.db.gold_models import DatasetArticle, PublicationState
     from lake_research_map.ingest.openalex import refresh_openalex_observations
 
+    if args.enrichment_action == "crossref-references":
+        _run_crossref_references(args)
+        return
     _require_openalex_identity()
     bootstrap()
     gold_session = get_session("gold")
@@ -1864,12 +1906,21 @@ def _audit_citation_years() -> None:
                 "Sleeping Beauty may use"
             )
 
+        from lake_research_map.ingest.crossref import reference_year_coverage
+
+        refs = reference_year_coverage(session, corpus_years)
         print("\nCited-reference publication years (Price's index, reference age)")
-        print(f"  Reference pairs:       {cov['reference_pairs']}")
         print(
-            f"  Dated:                 {cov['dated_reference_pairs']} "
-            f"({cov['reference_year_coverage']:.1%}); distinct cited works dated "
-            f"{cov['distinct_cited_dated']}/{cov['distinct_cited']}"
+            f"  Reference lists:       {refs['works_by_source']['crossref']} from Crossref deposits, "
+            f"{refs['works_by_source']['openalex']} from OpenAlex (one list per work, never spliced)"
+        )
+        print(
+            f"  Known empty:           {refs['known_empty']}; unenumerated (no list from either "
+            f"provider): {refs['unenumerated']}"
+        )
+        print(
+            f"  Dated references:      {refs['dated']} / {refs['references']} "
+            f"({refs['coverage']:.1%})"
         )
 
         print("\nValidation of the years themselves")
@@ -1879,20 +1930,25 @@ def _audit_citation_years() -> None:
                 f"over {cov['year_agreement_pairs']} works (gate {YEAR_AGREEMENT_GATE:.0%}; a one-"
                 "year gap is online-first versus issue year)"
             )
-        if cov["temporal_consistency"] is not None:
+        if refs["temporal_consistency"] is not None:
             print(
                 f"  Reference not newer than its citer (+1 in-press): "
-                f"{cov['temporal_consistency']:.2%} over {cov['temporal_checked']} dated pairs, "
-                f"{cov['temporal_inconsistent']} inconsistent (gate {TEMPORAL_GATE:.0%})"
+                f"{refs['temporal_consistency']:.2%} over {refs['temporal_checked']} dated "
+                f"references, {refs['temporal_inconsistent']} inconsistent (gate {TEMPORAL_GATE:.0%})"
+            )
+        if refs["count_agreement"] is not None:
+            print(
+                f"  Crossref vs OpenAlex reference count, within 10% or 2: "
+                f"{refs['count_agreement']:.1%} of {refs['count_pairs']} works (reported, not gated)"
             )
 
         trajectories_ok = cov["known_coverage"] >= COVERAGE_GATE
-        references_ok = cov["reference_year_coverage"] >= COVERAGE_GATE
+        references_ok = refs["coverage"] >= COVERAGE_GATE
         validation_ok = (
             None
-            if cov["year_agreement"] is None or cov["temporal_consistency"] is None
+            if cov["year_agreement"] is None or refs["temporal_consistency"] is None
             else cov["year_agreement"] >= YEAR_AGREEMENT_GATE
-            and cov["temporal_consistency"] >= TEMPORAL_GATE
+            and refs["temporal_consistency"] >= TEMPORAL_GATE
         )
         print(
             f"\nVerdict: trajectories {_verdict(trajectories_ok)}, reference years "
@@ -1903,8 +1959,8 @@ def _audit_citation_years() -> None:
             print("  WP-23 gates met: Price, longevity and Sleeping Beauty may enter WP-21 review.")
         if not references_ok:
             print(
-                "  Price's index stays unavailable until reference years are resolved: run "
-                "`enrichment resolve-references`."
+                "  Price's index stays unavailable until reference years are dated: run "
+                "`enrichment crossref-references`, then `enrichment resolve-references`."
             )
 
         dois = cov["work_dois"]
@@ -1912,6 +1968,7 @@ def _audit_citation_years() -> None:
             {
                 "trajectory known": {dois[w] for w in cov["known_ids"] if dois.get(w)},
                 "complete history": {dois[w] for w in cov["complete_history_ids"] if dois.get(w)},
+                "refs >=80% dated": refs["mostly_dated_dois"],
             },
             "Annual-trajectory coverage",
         )
