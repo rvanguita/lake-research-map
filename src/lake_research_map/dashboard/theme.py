@@ -326,3 +326,106 @@ def polish_figure_layout(fig, height: int | None = None, margin: dict | None = N
                 ),
             )
         )
+
+
+# NFR-07: a chart must stay readable without relying on color alone. Only 5 of
+# ~96 charts set a second channel by hand, so the reinforcement lives here, on
+# the path every figure takes through `components.render_chart`, rather than in
+# each builder. The first series keeps the plain encoding (circle, solid line,
+# solid bar), so a single-series chart looks exactly as it did before.
+_SERIES_SYMBOLS = (
+    "circle",
+    "square",
+    "diamond",
+    "triangle-up",
+    "x",
+    "cross",
+    "star",
+    "pentagon",
+    "triangle-down",
+    "hexagon",
+)
+_SERIES_DASHES = ("solid", "dash", "dot", "dashdot", "longdash", "longdashdot")
+_SERIES_PATTERNS = ("", "/", "\\", "x", ".", "+", "-", "|")
+_PATTERNED_TYPES = frozenset({"bar", "histogram"})
+_MARKED_TYPES = frozenset({"scatter", "scattergl"})
+
+
+def _series_key(trace) -> str | None:
+    """The legend entry a trace belongs to, or None when it is not a series.
+
+    Traces hidden from the legend without a group are annotations of another
+    series -- confidence bands, reference lines, fitted curves -- and must not
+    consume a symbol or be restyled.
+    """
+    group = getattr(trace, "legendgroup", None)
+    if group:
+        return str(group)
+    if trace.showlegend is False or not trace.name:
+        return None
+    return str(trace.name)
+
+
+def _is_per_point_color(trace) -> bool:
+    # A continuous scale or per-point color array means the chart encodes a
+    # value, not a category; symbols would suggest groups that do not exist.
+    color = getattr(getattr(trace, "marker", None), "color", None)
+    return color is not None and not isinstance(color, str)
+
+
+def add_redundant_encodings(fig) -> None:
+    """Give each categorical series a non-color channel, in place.
+
+    Deterministic by legend order, so the same series gets the same symbol on
+    every rerun. A channel is left alone when the author already made it tell
+    the series apart; Plotly Express writes `symbol="circle"` on every trace,
+    so "already set" is judged across series, not per trace.
+    """
+    keys: list[str] = []
+    series = []
+    for trace in fig.data:
+        key = _series_key(trace)
+        if key is None or _is_per_point_color(trace):
+            continue
+        if trace.type not in _PATTERNED_TYPES and trace.type not in _MARKED_TYPES:
+            continue
+        if key not in keys:
+            keys.append(key)
+        series.append((keys.index(key), trace))
+    if len(keys) < 2:
+        return
+
+    def _distinct(members, read) -> bool:
+        first_by_key: dict[int, object] = {}
+        for position, trace in members:
+            first_by_key.setdefault(position, read(trace))
+        values = list(first_by_key.values())
+        return None not in values and "" not in values[1:] and len(set(values)) == len(values)
+
+    bars = [(p, t) for p, t in series if t.type in _PATTERNED_TYPES]
+    marked = [(p, t) for p, t in series if t.type in _MARKED_TYPES]
+    keep_symbols = _distinct(marked, lambda t: t.marker.symbol)
+    keep_dashes = _distinct(marked, lambda t: t.line.dash)
+    keep_patterns = _distinct(bars, lambda t: t.marker.pattern.shape)
+    for position, trace in bars:
+        if not keep_patterns:
+            trace.marker.pattern.update(
+                shape=_SERIES_PATTERNS[position % len(_SERIES_PATTERNS)],
+                fillmode="overlay",
+                fgopacity=0.45,
+                solidity=0.3,
+            )
+    for position, trace in marked:
+        mode = trace.mode or "lines+markers"
+        if "markers" in mode and not keep_symbols:
+            trace.marker.symbol = _SERIES_SYMBOLS[position % len(_SERIES_SYMBOLS)]
+        if "lines" in mode and not keep_dashes:
+            trace.line.dash = _SERIES_DASHES[position % len(_SERIES_DASHES)]
+        # A stacked area is read by its fill, not its outline.
+        if trace.fill not in (None, "none") and not trace.fillpattern.shape:
+            trace.fillpattern.update(
+                shape=_SERIES_PATTERNS[position % len(_SERIES_PATTERNS)],
+                fillmode="overlay",
+                fgopacity=0.35,
+                solidity=0.3,
+            )

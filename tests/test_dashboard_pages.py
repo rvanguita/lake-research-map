@@ -200,3 +200,42 @@ def test_every_page_survives_an_empty_corpus(url_path):
     """
     app = AppTest.from_string(_script(_EMPTY_FIXTURE, url_path)).run(timeout=60)
     assert not app.exception, f"{url_path}: {app.exception}"
+
+
+def _non_color_channels(trace: dict) -> tuple:
+    marker = trace.get("marker") or {}
+    return (
+        marker.get("symbol") if "markers" in (trace.get("mode") or "lines+markers") else None,
+        (trace.get("line") or {}).get("dash") if trace.get("type") != "bar" else None,
+        (marker.get("pattern") or {}).get("shape") or None,
+        (trace.get("fillpattern") or {}).get("shape") or None,
+    )
+
+
+@pytest.mark.parametrize("url_path", PAGE_IDS)
+def test_every_rendered_series_is_distinguishable_without_color(url_path):
+    """NFR-07, checked on what the page actually sends to the browser.
+
+    Two legend series whose every non-color channel matches are told apart by
+    hue alone, which fails for color-blind readers and on a grayscale print.
+    """
+    import json
+
+    app = AppTest.from_string(_script(_FIXTURE, url_path)).run(timeout=60)
+    failures = []
+    for chart in app.get("plotly_chart"):
+        series: dict[str, tuple] = {}
+        for trace in json.loads(chart.proto.spec).get("data", []):
+            if trace.get("type") not in {"bar", "histogram", "scatter", "scattergl"}:
+                continue
+            color = (trace.get("marker") or {}).get("color")
+            if color is not None and not isinstance(color, str):
+                continue
+            key = trace.get("legendgroup") or (
+                trace.get("name") if trace.get("showlegend") is not False else None
+            )
+            if key:
+                series.setdefault(key, _non_color_channels(trace))
+        if len(series) > 1 and len(set(series.values())) < len(series):
+            failures.append(sorted(series))
+    assert not failures, f"{url_path}: series differ only by color: {failures}"

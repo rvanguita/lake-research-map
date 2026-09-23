@@ -20,6 +20,7 @@ from lake_research_map.dashboard.pipeline_control import (
 from lake_research_map.dashboard.theme import (
     PUBLICATION_CATEGORY_LABELS,
     SOURCE_LABELS,
+    add_redundant_encodings,
     polish_figure_layout,
 )
 
@@ -472,6 +473,7 @@ def render_chart(
     -- so charts rendered near-black against the navy page background.
     """
     polish_figure_layout(fig, height=height, margin=margin)
+    add_redundant_encodings(fig)
     _warn_unnamed_axes(fig)
     st.plotly_chart(fig, theme=None, width="stretch", key=key)
     if caption:
