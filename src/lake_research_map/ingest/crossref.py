@@ -315,14 +315,19 @@ def collect_crossref_references(
     return stats
 
 
-def reference_year_coverage(session: Session, corpus_years: dict[str, int | None]) -> dict:
-    """Cited-reference years over one reference list per corpus work.
+def reference_years_by_work(session: Session, corpus_years: dict[str, int | None]) -> dict:
+    """The one reference list each corpus work is measured on, with its years.
 
     Each work uses its Crossref deposit when one exists, and its OpenAlex
-    `referenced_works` otherwise. A work both providers report as citing
-    nothing has a known empty list and leaves the denominator; a work with no
-    list from either is counted separately as unenumerated, because its
-    references cannot be counted at all -- neither as dated nor as missing.
+    `referenced_works` otherwise -- never both, because the two enumerate
+    references differently and splicing them would double count. A work both
+    providers report as citing nothing has a known empty list; a work with no
+    list from either is unenumerated. The WP-23 audit and the dashboard's
+    Price's index both read this, so the population cannot drift between them.
+
+    Returns `works` ({doi: (source, [year or None, ...])}), the corpus with
+    normalized DOIs, the `known_empty` and `unenumerated` DOI sets, and the
+    Crossref/OpenAlex count pairs used to validate the choice.
     """
     corpus = {
         _normalize_doi(doi): year for doi, year in corpus_years.items() if _normalize_doi(doi)
@@ -393,57 +398,76 @@ def reference_year_coverage(session: Session, corpus_years: dict[str, int | None
     from lake_research_map.ingest.openalex import contradicted_zeros
 
     disputed = contradicted_zeros(session)["references"]
-    source_of: dict[str, str] = {}
-    references = dated = checked = consistent = 0
-    known_empty = unenumerated = 0
-    listed: set[str] = set()
-    mostly_dated: set[str] = set()
+    works: dict[str, tuple[str, list[int | None]]] = {}
+    known_empty: set[str] = set()
+    unenumerated: set[str] = set()
     count_pairs = count_agree = 0
-    for doi, citing_year in corpus.items():
+    for doi in corpus:
         work_id = work_of.get(doi)
         entry = latest.get(doi)
-        years: list[int | None]
         if entry and entry[1] == "success" and entry[2] > 0:
-            source_of[doi] = "crossref"
-            years = [
-                year
-                if year is not None
-                else looked_up.get(ref_doi) or (corpus.get(ref_doi) if ref_doi else None)
-                for ref_doi, year in crossref_refs.get(doi, [])
-            ]
+            works[doi] = (
+                "crossref",
+                [
+                    year
+                    if year is not None
+                    else looked_up.get(ref_doi) or (corpus.get(ref_doi) if ref_doi else None)
+                    for ref_doi, year in crossref_refs.get(doi, [])
+                ],
+            )
             if work_id in openalex_count and openalex_count[work_id] > 0:
                 count_pairs += 1
                 oa = openalex_count[work_id]
                 count_agree += int(abs(entry[2] - oa) <= max(2, 0.1 * oa))
         elif work_id and openalex_refs.get(work_id):
-            source_of[doi] = "openalex"
-            years = [year_of.get(cited) for cited in openalex_refs[work_id]]
+            works[doi] = ("openalex", [year_of.get(cited) for cited in openalex_refs[work_id]])
         elif work_id and openalex_count.get(work_id) == 0 and work_id not in disputed:
-            known_empty += 1
-            continue
+            known_empty.add(doi)
         else:
-            unenumerated += 1
-            continue
-        listed.add(doi)
+            unenumerated.add(doi)
+    return {
+        "corpus": corpus,
+        "works": works,
+        "known_empty": known_empty,
+        "unenumerated": unenumerated,
+        "count_pairs": count_pairs,
+        "count_agree": count_agree,
+    }
+
+
+def reference_year_coverage(session: Session, corpus_years: dict[str, int | None]) -> dict:
+    """Cited-reference years over one reference list per corpus work.
+
+    A work with a known empty list leaves the denominator; an unenumerated work
+    is counted separately, because its references cannot be counted at all --
+    neither as dated nor as missing. See `reference_years_by_work` for which
+    list each work is measured on.
+    """
+    selection = reference_years_by_work(session, corpus_years)
+    corpus = selection["corpus"]
+    by_source = {"crossref": 0, "openalex": 0}
+    references = dated = checked = consistent = 0
+    mostly_dated: set[str] = set()
+    for doi, (source, years) in selection["works"].items():
+        by_source[source] += 1
         references += len(years)
         work_dated = sum(1 for year in years if year is not None)
         dated += work_dated
         if years and work_dated / len(years) >= 0.8:
             mostly_dated.add(doi)
+        citing_year = corpus.get(doi)
         if citing_year is not None:
             for year in years:
                 if year is not None:
                     checked += 1
                     consistent += int(year <= citing_year + 1)
 
-    by_source = {"crossref": 0, "openalex": 0}
-    for source in source_of.values():
-        by_source[source] += 1
+    count_pairs = selection["count_pairs"]
     return {
         "corpus": len(corpus),
         "works_by_source": by_source,
-        "known_empty": known_empty,
-        "unenumerated": unenumerated,
+        "known_empty": len(selection["known_empty"]),
+        "unenumerated": len(selection["unenumerated"]),
         "references": references,
         "dated": dated,
         "coverage": dated / references if references else 0.0,
@@ -451,8 +475,8 @@ def reference_year_coverage(session: Session, corpus_years: dict[str, int | None
         "temporal_inconsistent": checked - consistent,
         "temporal_consistency": consistent / checked if checked else None,
         "count_pairs": count_pairs,
-        "count_agreement": count_agree / count_pairs if count_pairs else None,
-        "listed_dois": listed,
+        "count_agreement": selection["count_agree"] / count_pairs if count_pairs else None,
+        "listed_dois": set(selection["works"]),
         "mostly_dated_dois": mostly_dated,
         "registrant": {doi: registrant_prefix(doi) for doi in corpus},
     }

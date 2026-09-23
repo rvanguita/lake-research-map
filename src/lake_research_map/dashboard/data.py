@@ -533,3 +533,107 @@ def load_review_labels(workflow: str) -> pd.DataFrame:
     except SQLAlchemyError as exc:
         logger.warning("load_review_labels(%r): %s", workflow, exc)
         return pd.DataFrame()
+
+
+def load_reference_years(
+    corpus_years: tuple[tuple[str, int | None], ...],
+) -> tuple[pd.DataFrame, dict[str, int]]:
+    """One row per cited reference of each corpus work, with its year if known.
+
+    The list each work is measured on is chosen by
+    `crossref.reference_years_by_work` -- the same selection the WP-23 audit
+    reports on -- so the dashboard's Price's index and the audit cannot be
+    computed over different populations.
+    """
+    columns = ["doi", "reference_source", "reference_year"]
+    empty = (pd.DataFrame(columns=columns), {"known_empty": 0, "unenumerated": 0})
+    if not table_exists("bronze", "lit_crossref_reference_lists"):
+        return empty
+    from sqlalchemy.orm import Session
+
+    from lake_research_map.ingest.crossref import reference_years_by_work
+
+    try:
+        with Session(get_engine("bronze")) as session:
+            selection = reference_years_by_work(session, dict(corpus_years))
+    except SQLAlchemyError as exc:
+        logger.warning("load_reference_years: %s", exc)
+        return empty
+    frame = pd.DataFrame(
+        [
+            (doi, source, year)
+            for doi, (source, years) in selection["works"].items()
+            for year in years
+        ],
+        columns=columns,
+    )
+    frame["reference_year"] = pd.to_numeric(frame["reference_year"], errors="coerce")
+    return frame, {
+        "known_empty": len(selection["known_empty"]),
+        "unenumerated": len(selection["unenumerated"]),
+    }
+
+
+def load_citation_trajectories() -> tuple[pd.DataFrame, dict[str, int | None]]:
+    """Annual citations of the works whose history is complete from publication.
+
+    The population comes from `openalex.trajectory_population`, the same one
+    the citation-years audit counts. Never-cited works in it carry a single
+    zero row, so they stay in the denominator instead of vanishing from it.
+    Only the latest observation of each work's series is used: an earlier
+    crawl is a snapshot of the same counts, not additional citations.
+    """
+    columns = ["doi", "publication_year", "year", "citations"]
+    empty = (
+        pd.DataFrame(columns=columns),
+        {"population": 0, "complete_history": 0, "left_censored": 0, "series_start": None},
+    )
+    if not table_exists("bronze", "lit_citation_year_counts"):
+        return empty
+    from sqlalchemy.orm import Session
+
+    from lake_research_map.db.bronze_models import CitationYearCount
+    from lake_research_map.ingest.openalex import trajectory_population
+
+    try:
+        with Session(get_engine("bronze")) as session:
+            population = trajectory_population(session)
+            counts = pd.DataFrame(
+                session.execute(
+                    select(
+                        CitationYearCount.provider_work_id,
+                        CitationYearCount.year,
+                        CitationYearCount.citation_count,
+                        CitationYearCount.observed_at,
+                    ).where(CitationYearCount.provider == "openalex")
+                ).all(),
+                columns=["work_id", "year", "citations", "observed_at"],
+            )
+    except SQLAlchemyError as exc:
+        logger.warning("load_citation_trajectories: %s", exc)
+        return empty
+
+    complete = population["complete_history"]
+    works = population["works"]
+    if not counts.empty:
+        latest = counts.groupby("work_id")["observed_at"].transform("max")
+        counts = counts[(counts["observed_at"] == latest) & counts["work_id"].isin(complete)]
+    rows = [
+        (works[work_id][0], works[work_id][1], year, citations)
+        for work_id, year, citations in counts[["work_id", "year", "citations"]].itertuples(
+            index=False
+        )
+    ]
+    with_rows = set(counts["work_id"]) if not counts.empty else set()
+    rows.extend(
+        (works[work_id][0], works[work_id][1], works[work_id][1], 0)
+        for work_id in complete - with_rows
+    )
+    frame = pd.DataFrame(rows, columns=columns).dropna(subset=["doi", "publication_year"])
+    frame["doi"] = frame["doi"].astype(str).str.casefold()
+    return frame, {
+        "population": len(works),
+        "complete_history": len(complete),
+        "left_censored": len(population["left_censored"]),
+        "series_start": population["series_start"],
+    }

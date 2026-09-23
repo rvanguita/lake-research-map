@@ -26,6 +26,7 @@ from lake_research_map.dashboard.data import (
     load_articles_all_layers,
     load_chunk_search_data,
     load_chunks,
+    load_citation_trajectories,
     load_dataset_versions,
     load_duplicate_overrides,
     load_duplicate_pairs,
@@ -34,6 +35,7 @@ from lake_research_map.dashboard.data import (
     load_pipeline_runs,
     load_publication_state,
     load_quality_results,
+    load_reference_years,
     load_rejected_records,
     load_search_configs,
     load_semantics,
@@ -274,6 +276,27 @@ def layer_funnel() -> pd.DataFrame:
             }
         )
     return pd.DataFrame(rows)
+
+
+@st.cache_data(ttl=300)
+def reference_years() -> tuple[pd.DataFrame, dict[str, int]]:
+    """Cited-reference years for the canonical population, with each citing year."""
+    _, df = articles()
+    if df.empty or "doi" not in df.columns:
+        return load_reference_years(())
+    corpus = tuple(
+        (str(doi), None if pd.isna(year) else int(year))
+        for doi, year in df[["doi", "year"]].itertuples(index=False)
+        if isinstance(doi, str) and doi
+    )
+    refs, stats = load_reference_years(corpus)
+    years = df[["doi", "year"]].assign(doi=df["doi"].astype(str).str.casefold())
+    return refs.merge(years, on="doi", how="inner"), stats
+
+
+@st.cache_data(ttl=300)
+def citation_trajectories() -> tuple[pd.DataFrame, dict[str, int | None]]:
+    return load_citation_trajectories()
 
 
 @st.cache_data(ttl=60)

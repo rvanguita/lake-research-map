@@ -239,3 +239,64 @@ def test_every_rendered_series_is_distinguishable_without_color(url_path):
         if len(series) > 1 and len(set(series.values())) < len(series):
             failures.append(sorted(series))
     assert not failures, f"{url_path}: series differ only by color: {failures}"
+
+
+# The literature-age tab reads bronze through two loaders of its own. Its
+# panels only render once the tab is opened, which the registry walk above
+# never does, so they are driven here through the tab's session-state key.
+_LITERATURE_AGE_STUB = """
+_refs = pd.DataFrame({
+    "doi": [f"10.1000/{i}" for i in range(n) for _ in range(5)],
+    "reference_source": "crossref",
+    "reference_year": [2020 - k for _ in range(n) for k in range(0, 10, 2)],
+    "year": 2020,
+})
+loaders.reference_years = lambda: (_refs, {"known_empty": 1, "unenumerated": 2})
+_traj = pd.DataFrame({
+    "doi": [f"10.1000/{i}" for i in range(n) for _ in range(8)],
+    "publication_year": 2012,
+    "year": [2012 + t for _ in range(n) for t in range(8)],
+    "citations": [(t * t) if i % 2 else (8 - t) for i in range(n) for t in range(8)],
+})
+_stats = {"population": 50, "complete_history": 40, "left_censored": 10, "series_start": 2012}
+loaders.citation_trajectories = lambda: (_traj, _stats)
+"""
+
+_LITERATURE_AGE_EMPTY_STUB = """
+loaders.reference_years = lambda: (
+    pd.DataFrame(columns=["doi", "reference_source", "reference_year", "year"]),
+    {"known_empty": 0, "unenumerated": 0},
+)
+loaders.citation_trajectories = lambda: (
+    pd.DataFrame(columns=["doi", "publication_year", "year", "citations"]),
+    {"population": 0, "complete_history": 0, "left_censored": 0, "series_start": None},
+)
+"""
+
+_AGE_VIEWS = ["Price's index", "Citation half-life", "Delayed recognition"]
+
+
+def _literature_age_app(fixture: str, view: str) -> AppTest:
+    app = AppTest.from_string(_script(fixture, "highlights"))
+    app.session_state["highlights_primary_tab"] = "Literature age and delayed recognition"
+    app.session_state["literature_age_view"] = view
+    return app.run(timeout=60)
+
+
+@pytest.mark.parametrize("view", _AGE_VIEWS)
+def test_literature_age_panels_render_with_data(view):
+    app = _literature_age_app(_FIXTURE + _LITERATURE_AGE_STUB, view)
+
+    assert not app.exception, f"{view}: {app.exception}"
+    assert not app.info, f"{view} degraded on populated data: {[i.value for i in app.info]}"
+    # Every panel states its population; a number without one is not evidence.
+    captions = " ".join(c.value for c in app.caption)
+    assert "Population" in captions or "measurable reference list" in captions
+
+
+@pytest.mark.parametrize("view", _AGE_VIEWS)
+def test_literature_age_panels_explain_missing_data(view):
+    app = _literature_age_app(_FIXTURE + _LITERATURE_AGE_EMPTY_STUB, view)
+
+    assert not app.exception, f"{view}: {app.exception}"
+    assert app.info, f"{view} rendered nothing and said nothing on empty data"

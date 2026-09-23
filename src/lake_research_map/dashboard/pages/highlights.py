@@ -5,10 +5,15 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
 from lake_research_map.dashboard import loaders
 from lake_research_map.dashboard.analytics import (
+    PRICE_WINDOW_YEARS,
+    citation_half_lives,
+    price_index_by_year,
+    sleeping_beauty_scores,
     source_counts_by,
     source_means,
     valid_years,
@@ -35,8 +40,12 @@ def render() -> None:
 
     articles_df = loaders.require_articles()
 
-    tab_refs, tab_citations = st.tabs(
-        ["Theoretical background", "Citation dynamics and econometrics"],
+    tab_refs, tab_citations, tab_age = st.tabs(
+        [
+            "Theoretical background",
+            "Citation dynamics and econometrics",
+            "Literature age and delayed recognition",
+        ],
         on_change="rerun",
         key="highlights_primary_tab",
     )
@@ -94,6 +103,20 @@ def render() -> None:
                 _age_normalized_rankings(articles_df)
             else:
                 _citation_determinants_glm_view(articles_df)
+    elif tab_age.open:
+        with tab_age:
+            age_view = st.segmented_control(
+                "Literature age analysis",
+                options=["Price's index", "Citation half-life", "Delayed recognition"],
+                default="Price's index",
+                key="literature_age_view",
+            )
+            if age_view == "Price's index":
+                _price_index_view(articles_df)
+            elif age_view == "Citation half-life":
+                _half_life_view(articles_df)
+            elif age_view == "Delayed recognition":
+                _delayed_recognition_view(articles_df)
 
 
 def _reference_distribution_intro(articles_df: pd.DataFrame) -> pd.DataFrame | None:
@@ -723,3 +746,252 @@ def _glm_specification_diagnostics(glm_res: dict) -> None:
                 "zero citations. No zero-inflated candidate converged under the current filters, "
                 "gap marks these estimates as exploratory rather than being corrected for."
             )
+
+
+# -- Literature age and delayed recognition (WP-21) ---------------------------
+
+# IET deposits almost no reference lists in Crossref, so its works fall back to
+# OpenAlex's list or have none; naming it keeps a per-publisher gap from
+# reading as a property of the literature.
+_IET_PREFIX = "10.1049/"
+
+
+def _casefolded_dois(articles_df: pd.DataFrame) -> pd.Series:
+    return articles_df["doi"].dropna().astype(str).str.casefold()
+
+
+def _reference_coverage_caption(articles_df: pd.DataFrame, refs: pd.DataFrame) -> str:
+    """Per-publisher share of works whose reference list could be measured."""
+    listed = set(refs["doi"])
+    frame = articles_df.dropna(subset=["doi"]).assign(
+        doi=lambda df: df["doi"].astype(str).str.casefold()
+    )
+    parts = []
+    if "source" in frame.columns:
+        for source, group in frame.groupby("source"):
+            share = group["doi"].isin(listed).mean()
+            parts.append(f"{str(source).upper()} {share:.0%} of {len(group):,}")
+    iet = frame[frame["doi"].str.startswith(_IET_PREFIX)]
+    iet_sources = (
+        refs[refs["doi"].str.startswith(_IET_PREFIX)]
+        .drop_duplicates("doi")["reference_source"]
+        .value_counts()
+    )
+    iet_note = (
+        f" IET ({_IET_PREFIX}…) deposits almost no references in Crossref: "
+        f"{iet['doi'].isin(listed).sum()} of {len(iet)} IET works have a list "
+        f"({iet_sources.get('crossref', 0)} from Crossref, "
+        f"{iet_sources.get('openalex', 0)} from OpenAlex)."
+        if len(iet)
+        else ""
+    )
+    return "Works with a measurable reference list: " + "; ".join(parts) + "." + iet_note
+
+
+def _price_index_view(articles_df: pd.DataFrame) -> None:
+    st.subheader("Price's index by year of publication")
+    if not require_columns(articles_df, ["doi", "year"]):
+        return
+    refs, stats = loaders.reference_years()
+    dois = set(_casefolded_dois(articles_df))
+    refs = refs[refs["doi"].isin(dois)]
+    if refs.empty:
+        st.info(
+            "No cited-reference years are available yet. They come from the Crossref "
+            "reference crawl (`crossref-references`) and the OpenAlex reference "
+            "resolution (`resolve-references`)."
+        )
+        return
+    index = price_index_by_year(refs)
+    if index.empty:
+        st.info("No publication year has enough works with a mostly dated reference list.")
+        return
+
+    pooled = index["price_index"].mul(index["references"]).sum() / index["references"].sum()
+    metric_row(
+        [
+            ("Works measured", f"{int(index['works'].sum()):,}"),
+            ("Dated references", f"{int(index['references'].sum()):,}"),
+            (f"Pooled share ≤ {PRICE_WINDOW_YEARS} years old", f"{pooled:.1%}"),
+        ]
+    )
+    fig = go.Figure()
+    fig.add_scatter(
+        x=index["year"],
+        y=index["ci_high"],
+        mode="lines",
+        line_width=0,
+        showlegend=False,
+        hoverinfo="skip",
+    )
+    fig.add_scatter(
+        x=index["year"],
+        y=index["ci_low"],
+        mode="lines",
+        line_width=0,
+        fill="tonexty",
+        fillcolor="rgba(42, 120, 214, 0.2)",
+        showlegend=False,
+        hoverinfo="skip",
+    )
+    fig.add_scatter(
+        x=index["year"],
+        y=index["price_index"],
+        mode="lines+markers",
+        name="Price's index",
+        line_color=SOURCE_COLORS["ieee"],
+        customdata=index[["works", "references"]],
+        hovertemplate="%{x}: %{y:.1%} (%{customdata[0]} works, %{customdata[1]} references)"
+        "<extra></extra>",
+    )
+    fig.update_layout(
+        xaxis_title="Year of publication of the citing work",
+        yaxis_title=f"Share of references ≤ {PRICE_WINDOW_YEARS} years old",
+        yaxis_tickformat=".0%",
+        showlegend=False,
+    )
+    render_chart(
+        fig,
+        caption=(
+            f"Price's index: the share of each work's dated references published at most "
+            f"{PRICE_WINDOW_YEARS} years before it, pooled per year, with a 95% bootstrap "
+            "interval that resamples works. Only works whose list is at least 80% dated "
+            "are scored, because undated references are mostly older books and reports; "
+            "references dated more than a year after the citing work are treated as "
+            "metadata errors. Years with fewer than 10 works are not shown. "
+            f"{stats['known_empty']} works cite nothing and "
+            f"{stats['unenumerated']} have no list from either provider. "
+            + _reference_coverage_caption(articles_df, refs)
+        ),
+    )
+
+
+def _trajectory_population_caption(stats: dict) -> str:
+    unknown = stats["population"] - stats["complete_history"] - stats["left_censored"]
+    return (
+        f"Population: the {stats['complete_history']:,} of {stats['population']:,} "
+        f"OpenAlex-resolved works whose citation history is complete from publication; "
+        f"the {stats['left_censored']:,} published before OpenAlex's yearly series starts "
+        f"({stats['series_start']}) are left out, because their early years are missing"
+        + (
+            f", and {unknown:,} more {'has' if unknown == 1 else 'have'} no known trajectory."
+            if unknown > 0
+            else "."
+        )
+    )
+
+
+def _observed_trajectories(articles_df: pd.DataFrame) -> tuple[pd.DataFrame, dict, int] | None:
+    trajectories, stats = loaders.citation_trajectories()
+    if require_columns(articles_df, ["doi"]):
+        trajectories = trajectories[trajectories["doi"].isin(set(_casefolded_dois(articles_df)))]
+    if trajectories.empty:
+        st.info(
+            "No yearly citation trajectories are available yet. They come from the "
+            "OpenAlex refresh (`refresh-openalex`)."
+        )
+        return None
+    observation_year, _ = loaders.citation_observation_context()
+    # The observation year itself is still being counted.
+    return trajectories, stats, observation_year - 1
+
+
+def _half_life_view(articles_df: pd.DataFrame) -> None:
+    st.subheader("Citation half-life by publication cohort")
+    observed = _observed_trajectories(articles_df)
+    if observed is None:
+        return
+    trajectories, stats, last_year = observed
+    half_lives = citation_half_lives(trajectories, last_complete_year=last_year)
+    if half_lives.empty:
+        st.info("No work is old enough and cited enough to have a meaningful half-life.")
+        return
+    metric_row(
+        [
+            ("Works with a half-life", f"{len(half_lives):,}"),
+            ("Median half-life", f"{half_lives['half_life'].median():.0f} years"),
+            ("Cohorts", f"{half_lives['publication_year'].nunique()}"),
+        ]
+    )
+    fig = px.box(
+        half_lives,
+        x="publication_year",
+        y="half_life",
+        points="outliers",
+        color_discrete_sequence=[SOURCE_COLORS["ieee"]],
+    )
+    fig.update_layout(
+        xaxis_title="Year of publication",
+        yaxis_title="Years until half the citations so far",
+    )
+    render_chart(
+        fig,
+        caption=(
+            "Half-life: the years after publication until a work had received half of the "
+            f"citations it has through {last_year}. It cannot exceed a work's age, so the "
+            "decline toward recent cohorts is partly mechanical — compare cohorts of "
+            "similar age, not the trend. Only works at least 5 years old with at least 10 "
+            "citations are shown. " + _trajectory_population_caption(stats)
+        ),
+    )
+
+
+def _delayed_recognition_view(articles_df: pd.DataFrame) -> None:
+    st.subheader("Delayed recognition (Sleeping Beauty coefficient)")
+    observed = _observed_trajectories(articles_df)
+    if observed is None:
+        return
+    trajectories, stats, last_year = observed
+    scores = sleeping_beauty_scores(trajectories, last_complete_year=last_year)
+    if scores.empty:
+        st.info("No work has enough citations for a delayed-recognition score.")
+        return
+    top = scores.nlargest(10, "beauty")
+    if "title" in articles_df.columns:
+        titles = articles_df[["doi", "title"]].assign(
+            doi=lambda df: df["doi"].astype(str).str.casefold()
+        )
+        top = top.merge(titles.drop_duplicates("doi"), on="doi", how="left")
+    top = top.rename(
+        columns={
+            "publication_year": "year",
+            "beauty": "Beauty coefficient B",
+            "peak_year": "Peak year",
+            "peak_citations": "Citations at peak",
+            "awakening_year": "Awakening year",
+            "total_citations": "citation_count",
+        }
+    )
+    metric_row(
+        [
+            ("Works scored", f"{len(scores):,}"),
+            ("Median B", f"{scores['beauty'].median():.1f}"),
+            ("Peak in the last year", f"{int((scores['peak_year'] == last_year).sum()):,}"),
+        ]
+    )
+    article_table(
+        top,
+        [
+            "title",
+            "year",
+            "Beauty coefficient B",
+            "Awakening year",
+            "Peak year",
+            "Citations at peak",
+            "citation_count",
+            "doi",
+        ],
+        download_key="sleeping_beauties",
+    )
+    st.caption(
+        "Beauty coefficient B (Ke et al., 2015, PNAS 112:7426): how far a work's yearly "
+        "citations stayed below the straight line from publication to its citation peak, "
+        "summed over the years before the peak. B = 0 for a work that peaks at once or "
+        "grows steadily. The awakening year is when citations were furthest below that "
+        "line. With histories of at most "
+        f"{last_year - (stats['series_start'] or last_year)} years, these are works "
+        "recognized late within that window, not the decades-long sleepers of the "
+        "original study; a peak in the last observed year may still be rising. Works "
+        "with fewer "
+        "than 10 citations are not scored. " + _trajectory_population_caption(stats)
+    )

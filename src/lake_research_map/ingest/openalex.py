@@ -1224,27 +1224,16 @@ def access_validation(session: Session, ieee_licenses: dict[str, str]) -> dict:
     }
 
 
-def citation_year_coverage(session: Session, corpus_years: dict[str, int] | None = None) -> dict:
-    """WP-23's two measurements: annual trajectories, and cited-reference years.
+def trajectory_population(session: Session) -> dict:
+    """Which OpenAlex works have a citation trajectory, and which a whole one.
 
-    **Trajectories.** OpenAlex's `counts_by_year` lists only years with at
-    least one citation, so a never-cited work arrives with an empty series. Its
-    trajectory is known -- zero every year -- and counting it as uncovered is
-    what reported 76.7% on a corpus whose true figure was 98.6%: 677 of the 721
-    "missing" series belonged to works with no citations at all.
-
-    The series also starts in a fixed year (2012 for this provider), so a work
-    published earlier has a *left-censored* history even when its series is
-    present. Longevity and Sleeping Beauty need the whole history from
-    publication, so those works are reported separately rather than folded
-    into coverage.
-
-    **Reference years.** Price's index needs the publication year of each
-    cited reference. A reference is dated when the cited work is in the corpus
-    (`lit_external_works`) or has been resolved (`lit_reference_works`).
+    A never-cited work's trajectory is known (zero every year) even though its
+    `counts_by_year` is empty. A work published before the provider's series
+    starts is *left-censored*: present, but missing its first years, so any
+    measure that needs the history from publication -- longevity, Sleeping
+    Beauty -- must leave it out. `citation_year_coverage` and the dashboard's
+    longevity panel share this so their populations cannot disagree.
     """
-    from lake_research_map.db.bronze_models import ReferenceWork
-
     works = {
         work_id: (doi, year)
         for work_id, doi, year in session.execute(
@@ -1281,7 +1270,46 @@ def citation_year_coverage(session: Session, corpus_years: dict[str, int] | None
         if series_start is not None
         else set()
     )
-    complete_history = known - left_censored
+    return {
+        "works": works,
+        "with_series": with_series,
+        "never_cited": never_cited,
+        "known": known,
+        "series_start": series_start,
+        "left_censored": left_censored,
+        "complete_history": known - left_censored,
+    }
+
+
+def citation_year_coverage(session: Session, corpus_years: dict[str, int] | None = None) -> dict:
+    """WP-23's two measurements: annual trajectories, and cited-reference years.
+
+    **Trajectories.** OpenAlex's `counts_by_year` lists only years with at
+    least one citation, so a never-cited work arrives with an empty series. Its
+    trajectory is known -- zero every year -- and counting it as uncovered is
+    what reported 76.7% on a corpus whose true figure was 98.6%: 677 of the 721
+    "missing" series belonged to works with no citations at all.
+
+    The series also starts in a fixed year (2012 for this provider), so a work
+    published earlier has a *left-censored* history even when its series is
+    present. Longevity and Sleeping Beauty need the whole history from
+    publication, so those works are reported separately rather than folded
+    into coverage.
+
+    **Reference years.** Price's index needs the publication year of each
+    cited reference. A reference is dated when the cited work is in the corpus
+    (`lit_external_works`) or has been resolved (`lit_reference_works`).
+    """
+    from lake_research_map.db.bronze_models import ReferenceWork
+
+    trajectories = trajectory_population(session)
+    works = trajectories["works"]
+    with_series = trajectories["with_series"]
+    never_cited = trajectories["never_cited"]
+    known = trajectories["known"]
+    series_start = trajectories["series_start"]
+    left_censored = trajectories["left_censored"]
+    complete_history = trajectories["complete_history"]
 
     year_of = {w: year for w, (_, year) in works.items() if year is not None}
     for work_id, year, status in session.execute(
