@@ -105,6 +105,30 @@ class ExternalWork(Base):
     citing_truncated: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 
 
+class ReferenceWork(Base):
+    """Publication year of a work the corpus *cites* but does not contain.
+
+    Price's index and reference-age analyses need the year of every cited
+    reference, and 56,330 of the 57,454 distinct works the corpus cites are
+    outside it, so `lit_external_works` -- which holds corpus works only --
+    cannot answer. Kept in its own table because putting cited works into
+    `lit_external_works` would silently change the population every coverage
+    audit divides by.
+    """
+
+    __tablename__ = "lit_reference_works"
+    __table_args__ = (UniqueConstraint("provider", "provider_work_id", name="uq_reference_work"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    provider_work_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    publication_year: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    # 'success' or 'not_found'. Throttled attempts are not stored: they say
+    # nothing about the work and must be retried.
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    observed_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False)
+
+
 class CitationYearCount(Base):
     __tablename__ = "lit_citation_year_counts"
     __table_args__ = (

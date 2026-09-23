@@ -88,8 +88,10 @@ def test_the_citation_crawl_persists_edges_and_counts_truncation(bronze_session,
         "W2": {"citing_work_ids": ["W7"], "truncated": True, "pages": 5},
     }
     monkeypatch.setattr(
-        "lake_research_map.ingest.openalex.fetch_openalex_citing_works",
-        lambda work_id, **kwargs: crawled[work_id],
+        "lake_research_map.ingest.openalex.fetch_openalex_citing_batch",
+        lambda work_ids, **kwargs: {
+            work_id: {"throttled": False, "error": None, **crawled[work_id]} for work_id in work_ids
+        },
     )
 
     args = argparse.Namespace(

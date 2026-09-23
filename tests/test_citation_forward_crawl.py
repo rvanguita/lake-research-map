@@ -47,11 +47,17 @@ def _args(**overrides):
 
 
 def _patch_crawl(monkeypatch, results, calls):
-    def _fetch(work_id, **_kwargs):
-        calls.append(work_id)
-        return results.get(work_id, {"citing_work_ids": [], "truncated": False, "pages": 1})
+    """Answer the batched entry point one work at a time, recording the order."""
 
-    monkeypatch.setattr("lake_research_map.ingest.openalex.fetch_openalex_citing_works", _fetch)
+    def _batch(work_ids, **_kwargs):
+        answered = {}
+        for work_id in work_ids:
+            calls.append(work_id)
+            result = results.get(work_id, {"citing_work_ids": [], "truncated": False})
+            answered[work_id] = {"throttled": False, "error": None, **result}
+        return answered
+
+    monkeypatch.setattr("lake_research_map.ingest.openalex.fetch_openalex_citing_batch", _batch)
 
 
 def test_a_second_run_advances_instead_of_recrawling(bronze_session, monkeypatch):

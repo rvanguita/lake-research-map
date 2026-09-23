@@ -172,8 +172,9 @@ snapshot mode is the operation that propagates removals.
 
 Measured 2026-09-22: `X-RateLimit-Limit: 1000`, `Retry-After: 19587` (5.4 h). The crawl stopped at exactly
 1,000 successful observations because that is the whole quota, so `--delay` buys nothing -- pacing cannot
-purchase requests the quota does not grant. Covering 3,115 DOIs needs roughly four windows, and the forward
-(`cites:`) crawl another ~1,100 requests on top.
+purchase requests the quota does not grant. With batching (below) the DOI pass fit in one window (3,099 of 3,115 resolved on
+2026-09-23; the other 16 are absent from OpenAlex), the batched `cites:` crawl costs ~233 requests, and resolving
+the 56,330 cited references' years costs ~1,130.
 
 Because the limit counts *requests*, the DOI refresh asks in batches: OpenAlex OR-joins up to 50 values in one
 filter, so the corpus costs 63 requests instead of 3,115. Pacing cannot buy quota; asking less often can. A DOI
