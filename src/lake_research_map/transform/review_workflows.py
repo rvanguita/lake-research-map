@@ -116,7 +116,23 @@ def export_assignments(
     dataset_version_id: str,
     reviewer_id: str,
     output_path: Path,
+    gold_session: Session | None = None,
+    silver_session: Session | None = None,
+    bronze_session: Session | None = None,
+    raw_session: Session | None = None,
 ) -> int:
+    """Write one reviewer's queue, with the evidence needed to judge it.
+
+    The extra sessions are optional and the export works without them, but a
+    queue exported without any of them is the one this function used to
+    produce: `assignment_id` plus an opaque `subject_id`, which asks a human
+    to decide whether `reject::ieee::bib:03f7a342cbc9:6761637` belonged in the
+    corpus. Four packages sat blocked on human labels that nobody could
+    physically supply.
+
+    `label` and `rationale` stay last so the columns a reviewer types into are
+    the rightmost ones in a spreadsheet, after everything they must read.
+    """
     assignments = session.scalars(
         select(ReviewAssignment)
         .where(
@@ -126,18 +142,34 @@ def export_assignments(
         )
         .order_by(ReviewAssignment.subject_id)
     ).all()
+
+    from lake_research_map.transform.evidence_samples import SUBJECT_COLUMNS, describe_subjects
+
+    context_columns = SUBJECT_COLUMNS.get(workflow, ())
+    context = describe_subjects(
+        workflow,
+        [assignment.subject_id for assignment in assignments],
+        dataset_version_id=dataset_version_id,
+        gold_session=gold_session if gold_session is not None else session,
+        silver_session=silver_session,
+        bronze_session=bronze_session,
+        raw_session=raw_session,
+    )
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(
             handle,
-            fieldnames=("assignment_id", "subject_id", "label", "rationale"),
+            fieldnames=("assignment_id", "subject_id", *context_columns, "label", "rationale"),
         )
         writer.writeheader()
         for assignment in assignments:
+            described = context.get(assignment.subject_id, {})
             writer.writerow(
                 {
                     "assignment_id": assignment.id,
                     "subject_id": assignment.subject_id,
+                    **{column: described.get(column, "") for column in context_columns},
                     "label": "",
                     "rationale": "",
                 }
