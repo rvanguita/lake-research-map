@@ -563,24 +563,13 @@ def all_venue_qualis_map() -> pd.DataFrame:
 
 @st.cache_data(ttl=120)
 def abstract_embeddings() -> tuple[list[str], np.ndarray] | None:
-    """Load abstract chunk embeddings matrix and DOIs for vector projections and novelty."""
+    """Abstract vectors and their DOIs, for vector projections and novelty."""
     import numpy as np
-
-    from lake_research_map.dashboard.search import _parse_embedding
 
     df = load_abstract_embeddings_data()
     if df.empty:
         return None
-    dois = []
-    vecs = []
-    for _, r in df.iterrows():
-        vec = _parse_embedding(r.get("embedding_bin"))
-        if vec is not None:
-            dois.append(r["doi"])
-            vecs.append(vec)
-    if not vecs:
-        return None
-    return dois, np.stack(vecs)
+    return df["doi"].tolist(), np.stack(df["vector"].tolist()).astype(np.float32)
 
 
 @st.cache_data(ttl=300)

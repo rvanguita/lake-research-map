@@ -404,13 +404,12 @@ def unresolved_duplicate_pairs(
 
 
 def _embed_anchors(texts: list[str]) -> np.ndarray:
-    # Imported lazily, like transform/embeddings.py does, so stages that never
-    # touch the model don't pay fastembed's import cost. Both anchors go
-    # through one model load -- it is the expensive part, not the two vectors.
-    from fastembed import TextEmbedding
+    # `embedding_model()` loads fastembed lazily and once per process, and it
+    # enforces the pinned revision: anchors embedded by another snapshot than
+    # the stored vectors would score every article against a different space.
+    from lake_research_map.transform.embeddings import embedding_model
 
-    model = TextEmbedding(model_name=EMBED_MODEL_NAME)
-    return np.array(list(model.embed(texts)), dtype="float32")
+    return np.array(list(embedding_model().embed(texts)), dtype="float32")
 
 
 def build_semantics(

@@ -1,9 +1,11 @@
 """Data-loading helpers for the Streamlit dashboard.
 
 Reads directly from the medallion MySQL databases (via the same per-layer
-engines the pipeline uses) and returns plain pandas DataFrames. Every
-function tolerates a layer/table that doesn't exist yet -- the dashboard is
-meant to be usable even before the pipeline has been run end to end.
+engines the pipeline uses) and, for chunk vectors, from the version's Qdrant
+collection (ADR-08), and returns plain pandas DataFrames. Every function
+tolerates a layer/table that doesn't exist yet, and a vector store that does
+not answer -- the dashboard is meant to be usable even before the pipeline has
+been run end to end.
 """
 
 from __future__ import annotations
@@ -15,6 +17,11 @@ from sqlalchemy import MetaData, Table, and_, exists, inspect, or_, select, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from lake_research_map.db.engines import get_engine
+from lake_research_map.db.vector_store import (
+    VectorStoreUnavailable,
+    get_vector_store,
+    point_id,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -234,7 +241,12 @@ def load_chunks() -> pd.DataFrame:
     engine = get_engine("gold")
     table = Table("lit_dataset_chunks", MetaData(), autoload_with=engine)
     columns = [table.c[name] for name in _CHUNK_LIGHT_COLUMNS if name in table.c]
-    columns.append(table.c.embedding_bin.is_not(None).label("has_embedding"))
+    # Readiness comes from the provenance the embed stage records in Gold, not
+    # from Qdrant: every page renders this frame, and a page render must not
+    # depend on the vector store answering. The publication contract is what
+    # guarantees the provenance matches the stored vectors.
+    marker = table.c.embed_revision if "embed_revision" in table.c else table.c.embedding_bin
+    columns.append(marker.is_not(None).label("has_embedding"))
     return pd.read_sql_query(
         select(*columns).where(table.c.dataset_version_id == version_id), engine
     )
@@ -378,11 +390,46 @@ def load_chunk_search_data() -> pd.DataFrame:
         return pd.DataFrame()
     engine = get_engine("gold")
     table = Table("lit_dataset_chunks", MetaData(), autoload_with=engine)
-    names = ("id", "doi", "seq", "chunk_type", "text", "embedding_bin", "embed_model")
+    names = ("id", "doi", "seq", "chunk_type", "text", "embed_model")
     columns = [table.c[name] for name in names if name in table.c]
-    return pd.read_sql_query(
+    frame = pd.read_sql_query(
         select(*columns).where(table.c.dataset_version_id == version_id), engine
     )
+    return attach_chunk_vectors(frame, version_id)
+
+
+def attach_chunk_vectors(frame: pd.DataFrame, version_id: str) -> pd.DataFrame:
+    """Add each chunk's vector from the version's Qdrant collection.
+
+    The vector is exposed as `embedding_bin` (float32 bytes), the shape the
+    search functions consume. When the store does not answer, every vector is
+    missing and dense search degrades to lexical; the warning says why.
+    """
+    frame = frame.copy()
+    frame["embedding_bin"] = None
+    if frame.empty:
+        return frame
+    keys = [
+        point_id(doi, chunk_type, seq)
+        for doi, chunk_type, seq in zip(
+            frame["doi"], frame["chunk_type"], frame["seq"], strict=True
+        )
+    ]
+    try:
+        store = get_vector_store()
+        points = (
+            store.fetch(version_id, keys, with_vectors=True, payload_fields=False)
+            if store.has_collection(version_id)
+            else {}
+        )
+    except VectorStoreUnavailable as exc:
+        logger.warning("chunk vectors unavailable: %s", exc)
+        return frame
+    frame["embedding_bin"] = [
+        points[key].vector.tobytes() if key in points and points[key].vector is not None else None
+        for key in keys
+    ]
+    return frame
 
 
 def raw_funnel_counts() -> dict[str, dict[str, int]]:
@@ -439,24 +486,23 @@ def bronze_doi_dropped_counts() -> dict[str, int]:
 
 
 def load_abstract_embeddings_data() -> pd.DataFrame:
-    """Load abstract chunk vectors (doi, embedding_bin) for projections and novelty."""
-    version_id = active_dataset_version()
-    if version_id is None or not table_exists("gold", "lit_dataset_chunks"):
-        return pd.DataFrame()
-    engine = get_engine("gold")
-    table = Table("lit_dataset_chunks", MetaData(), autoload_with=engine)
-    if "embedding_bin" not in table.c:
-        return pd.DataFrame()
+    """Abstract vectors (`doi`, `vector`) of the active version, for projections and novelty.
 
-    # Binary only. Selecting the JSON mirror alongside it was what made this
-    # read cost 11.6s instead of 2.3s on the reference corpus, and the mirror
-    # is no longer written for new versions.
-    query = select(table.c.doi, table.c.embedding_bin).where(
-        table.c.dataset_version_id == version_id,
-        table.c.chunk_type == "abstract",
-        table.c.embedding_bin.is_not(None),
-    )
-    return pd.read_sql_query(query, engine)
+    Read from the version's Qdrant collection. An unreachable store yields an
+    empty frame, which every caller already treats as "no vectors yet".
+    """
+    version_id = active_dataset_version()
+    if version_id is None:
+        return pd.DataFrame()
+    try:
+        store = get_vector_store()
+        if not store.has_collection(version_id):
+            return pd.DataFrame()
+        dois, matrix = store.abstract_vectors(version_id)
+    except VectorStoreUnavailable as exc:
+        logger.warning("abstract vectors unavailable: %s", exc)
+        return pd.DataFrame()
+    return pd.DataFrame({"doi": dois, "vector": list(matrix)})
 
 
 def load_review_labels(workflow: str) -> pd.DataFrame:

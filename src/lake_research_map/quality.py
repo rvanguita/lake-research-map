@@ -30,11 +30,20 @@ from lake_research_map.db.raw_models import (
 )
 from lake_research_map.db.silver_models import Article as SilverArticle
 from lake_research_map.db.silver_models import RejectedArticle
+from lake_research_map.db.vector_store import (
+    BATCH_SIZE,
+    QdrantVectorStore,
+    VectorStoreUnavailable,
+    collection_name,
+    point_id,
+)
 from lake_research_map.transform.bronze_articles import normalize_doi
-from lake_research_map.transform.embeddings import EMBED_MODEL_NAME, EMBED_MODEL_REVISION
+from lake_research_map.transform.embeddings import (
+    EMBED_DIMENSION,
+    EMBED_MODEL_NAME,
+    EMBED_MODEL_REVISION,
+)
 from lake_research_map.transform.publication_categories import PUBLICATION_CATEGORIES
-
-EMBED_DIMENSION = 384
 
 
 @dataclass(frozen=True, slots=True)
@@ -286,37 +295,115 @@ def gold_contract(session: Session, version_id: str) -> list[CheckResult]:
     ]
 
 
-def embed_contract(session: Session, version_id: str) -> list[CheckResult]:
-    chunks = session.scalars(
-        select(DatasetChunk).where(DatasetChunk.dataset_version_id == version_id)
+def embed_contract(
+    session: Session, version_id: str, store: QdrantVectorStore
+) -> list[CheckResult]:
+    """Every Gold chunk has exactly one valid vector in the version's collection.
+
+    The vectors live in Qdrant (ADR-08) but the evidence of what they should be
+    lives in Gold: each point is checked against its chunk row -- the pinned
+    model and revision on both sides, the dimension, a finite unit-norm vector,
+    and a text hash that matches the row's current text. Points with no chunk
+    behind them fail too: a search must never return a chunk the version lacks.
+    """
+    rows = session.execute(
+        select(
+            DatasetChunk.id,
+            DatasetChunk.doi,
+            DatasetChunk.chunk_type,
+            DatasetChunk.seq,
+            DatasetChunk.text,
+            DatasetChunk.text_sha256,
+            DatasetChunk.embed_model,
+            DatasetChunk.embed_revision,
+            DatasetChunk.embedding_dim,
+            DatasetChunk.embedding_dtype,
+            DatasetChunk.embedding_normalized,
+        )
+        .where(DatasetChunk.dataset_version_id == version_id)
+        .order_by(DatasetChunk.id)
     ).all()
-    missing = []
-    incompatible = []
-    stale = []
-    non_finite = []
-    for row in chunks:
-        if row.embedding_bin is None:
-            missing.append(row.id)
-            continue
-        if (
-            len(row.embedding_bin) != EMBED_DIMENSION * 4
-            or row.embed_model != EMBED_MODEL_NAME
-            or row.embed_revision != EMBED_MODEL_REVISION
-            or row.embedding_dim != EMBED_DIMENSION
-            or row.embedding_dtype != "float32"
-            or row.embedding_normalized is not True
-        ):
-            incompatible.append(row.id)
-            continue
-        expected_hash = hashlib.sha256(row.text.encode("utf-8")).hexdigest()
-        if row.text_sha256 != expected_hash:
-            stale.append(row.id)
-            continue
-        if not np.isfinite(np.frombuffer(row.embedding_bin, dtype=np.float32)).all():
-            non_finite.append(row.id)
+    collection = collection_name(version_id)
+    try:
+        exists = store.has_collection(version_id)
+    except VectorStoreUnavailable as exc:
+        return [
+            _result(
+                "embed.store_reachable",
+                False,
+                str(exc),
+                "reachable",
+                details={"collection": collection},
+            )
+        ]
+    missing: list[int] = []
+    incompatible: list[int] = []
+    stale: list[int] = []
+    non_finite: list[int] = []
+    orphans = 0
+    if exists:
+        for start in range(0, len(rows), BATCH_SIZE):
+            batch = {
+                point_id(row.doi, row.chunk_type, row.seq): row
+                for row in rows[start : start + BATCH_SIZE]
+            }
+            points = store.fetch(
+                version_id,
+                list(batch),
+                with_vectors=True,
+                payload_fields=["text_sha256", "embed_model", "embed_revision"],
+            )
+            for key, row in batch.items():
+                point = points.get(key)
+                if point is None or point.vector is None:
+                    missing.append(row.id)
+                    continue
+                vector = point.vector
+                if (
+                    vector.size != EMBED_DIMENSION
+                    or point.payload.get("embed_model") != EMBED_MODEL_NAME
+                    or point.payload.get("embed_revision") != EMBED_MODEL_REVISION
+                    or row.embed_model != EMBED_MODEL_NAME
+                    or row.embed_revision != EMBED_MODEL_REVISION
+                    or row.embedding_dim != EMBED_DIMENSION
+                    or row.embedding_dtype != "float32"
+                    or row.embedding_normalized is not True
+                ):
+                    incompatible.append(row.id)
+                    continue
+                expected_hash = hashlib.sha256(row.text.encode("utf-8")).hexdigest()
+                if row.text_sha256 != expected_hash or point.payload.get("text_sha256") != (
+                    expected_hash
+                ):
+                    stale.append(row.id)
+                    continue
+                if not np.isfinite(vector).all():
+                    non_finite.append(row.id)
+                    continue
+                if not np.isclose(np.linalg.norm(vector), 1.0, atol=1e-3):
+                    incompatible.append(row.id)
+        orphans = max(store.count(version_id) - (len(rows) - len(missing)), 0)
+    else:
+        missing = [row.id for row in rows]
+    repair = (
+        {"hint": f"run `lake-research-map vectors rebuild --version {version_id}`"}
+        if missing or stale
+        else {}
+    )
     return [
         _result(
-            "embed.complete", not missing, len(missing), 0, details={"chunk_ids": missing[:20]}
+            "embed.store_reachable",
+            True,
+            "reachable",
+            "reachable",
+            details={"collection": collection},
+        ),
+        _result(
+            "embed.complete",
+            not missing,
+            len(missing),
+            0,
+            details={"chunk_ids": missing[:20], "collection": collection, **repair},
         ),
         _result(
             "embed.compatible",
@@ -337,8 +424,9 @@ def embed_contract(session: Session, version_id: str) -> list[CheckResult]:
             not stale,
             len(stale),
             0,
-            details={"chunk_ids": stale[:20]},
+            details={"chunk_ids": stale[:20], **repair},
         ),
+        _result("embed.orphans", orphans == 0, orphans, 0, details={"collection": collection}),
     ]
 
 
@@ -392,7 +480,9 @@ def semantic_contract(session: Session, version_id: str) -> list[CheckResult]:
     ]
 
 
-def publication_contract(session: Session, version_id: str) -> list[CheckResult]:
+def publication_contract(
+    session: Session, version_id: str, store: QdrantVectorStore
+) -> list[CheckResult]:
     """Return the blocking contracts required before Gold materialization.
 
     The pipeline records stage-specific results before calling the publisher,
@@ -403,7 +493,7 @@ def publication_contract(session: Session, version_id: str) -> list[CheckResult]
     """
     return [
         *gold_contract(session, version_id),
-        *embed_contract(session, version_id),
+        *embed_contract(session, version_id, store),
         *semantic_contract(session, version_id),
     ]
 

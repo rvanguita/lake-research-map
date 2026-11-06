@@ -9,8 +9,21 @@ services:
       # inside the compose network the airflow service is reachable by name;
       # .env's own AIRFLOW_BASE_URL covers running streamlit on the host instead
       AIRFLOW_BASE_URL: http://airflow:8080
+      # same for the vector store (ADR-08); .env's QDRANT_URL is the host's
+      QDRANT_URL: http://qdrant:6333
+      # fastembed's default cache is under /tmp: a fresh container would
+      # re-download the models on every start
+      FASTEMBED_CACHE_PATH: /opt/model-cache
+    volumes:
+      - model_cache:/opt/model-cache
     depends_on:
-      - airflow
+      airflow:
+        condition: service_started
+      # `required: false` keeps `docker compose up -d` working without the
+      # `qdrant` profile; dense search then degrades to lexical with a caption
+      qdrant:
+        condition: service_healthy
+        required: false
     restart: unless-stopped
     cpus: 2.0
     mem_limit: 2g
@@ -39,8 +52,16 @@ services:
       # keep this container's uv-managed venv separate from the host's .venv
       # (its own activation scripts embed host-specific absolute paths)
       UV_PROJECT_ENVIRONMENT: /opt/venv-airflow
+      # the embed and semantic stages read and write vectors here (ADR-08)
+      QDRANT_URL: http://qdrant:6333
+      FASTEMBED_CACHE_PATH: /opt/model-cache
+    depends_on:
+      qdrant:
+        condition: service_healthy
+        required: false
     volumes:
       - airflow_home:/opt/airflow
+      - model_cache:/opt/model-cache
       - airflow_venv:/opt/venv-airflow
       - ./src:/opt/airflow/project/src
       - ./main.py:/opt/airflow/project/main.py
@@ -53,6 +74,36 @@ services:
     cpus: 2.0
     mem_limit: 3g
 
+  # The vector store (ADR-08): one immutable collection per Gold dataset
+  # version plus the `lit_chunks_active` alias external RAG clients query.
+  # Opt-in profile: `docker compose --profile qdrant up -d` (or
+  # COMPOSE_PROFILES=qdrant in .env). The embed and semantic stages and dense
+  # search need it running.
+  qdrant:
+    # Pinned to the qdrant-client minor in uv.lock (1.20); move both together.
+    image: qdrant/qdrant:v1.20.0
+    profiles: ["qdrant"]
+    ports:
+      # loopback only: payloads carry chunk text, including PDF full text
+      - "127.0.0.1:6333:6333"
+    environment:
+      QDRANT__TELEMETRY_DISABLED: "true"
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    healthcheck:
+      # the image ships no curl/wget; bash's /dev/tcp is enough to see the
+      # REST port accept connections
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
+    restart: unless-stopped
+    cpus: 1.0
+    mem_limit: 1g
+
 volumes:
   airflow_home:
   airflow_venv:
+  model_cache:
+  qdrant_storage:

@@ -1,4 +1,4 @@
-"""Shared fixtures: one in-memory SQLite session per medallion layer.
+"""Shared fixtures: one in-memory SQLite session per medallion layer, plus Qdrant.
 
 Each layer is already an independent SQLAlchemy `Base`/database in the real
 system (see `src/lake_research_map/db/*_models.py`), and nothing in the
@@ -47,3 +47,20 @@ def gold_session():
     session = _sqlite_session(gold_models.Base)
     yield session
     session.close()
+
+
+@pytest.fixture
+def vector_store():
+    """In-process Qdrant (local mode): real filter, alias and payload semantics.
+
+    The role in-memory SQLite plays for MySQL. Server-only behaviour (payload
+    indexes, the exact-search parameter) is covered by the opt-in `qdrant`
+    marker in `tests/test_qdrant_server.py` instead.
+    """
+    from qdrant_client import QdrantClient
+
+    from lake_research_map.db.vector_store import QdrantVectorStore
+
+    client = QdrantClient(":memory:")
+    yield QdrantVectorStore(client)
+    client.close()

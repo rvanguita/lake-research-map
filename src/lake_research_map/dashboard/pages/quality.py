@@ -285,12 +285,15 @@ def _embedding_readiness(chunks_df: pd.DataFrame) -> None:
         model_used = chunks_df["embed_model"].dropna().mode()
         model_caption = (
             f"Generated with `{model_used.iat[0]}` — the pipeline's `embed` stage runs "
-            "fully locally through `fastembed`, with no API key."
+            "fully locally through `fastembed`, with no API key, and stores each version's "
+            "vectors in its own Qdrant collection (the readiness shown here is the provenance "
+            "Gold records for them)."
         )
     else:
         model_caption = (
-            "The vector column exists on `gold_models.DatasetChunk` but no chunk has been embedded "
-            "yet — this is the blocker for using the corpus as a RAG source."
+            "No chunk of this version has been embedded yet — this is the blocker for using "
+            "the corpus as a RAG source. Vectors are stored in Qdrant, one collection per "
+            "dataset version."
         )
     render_chart(
         fig,
@@ -324,9 +327,9 @@ def _embedding_readiness(chunks_df: pd.DataFrame) -> None:
         st.info(
             f"{pending:,} chunks are waiting for a vector. Run the `embed` stage through the "
             "pipeline \u2014 `uv run lake-research-map --stage embed`, or the Airflow trigger on "
-            "the Pipeline and provenance page. Embedding from here would write to the live table "
-            "that the next publication rebuilds, so the work would be lost and would never pass "
-            "the embedding contract."
+            "the Pipeline and provenance page \u2014 with Qdrant running "
+            "(`docker compose --profile qdrant up -d qdrant`). Embedding from here would bypass "
+            "the embedding contract that every published version must pass."
         )
 
 

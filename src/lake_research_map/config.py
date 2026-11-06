@@ -126,6 +126,34 @@ def get_settings() -> MySQLSettings:
     return MySQLSettings.from_env()
 
 
+@dataclass(frozen=True)
+class QdrantSettings:
+    """Where the chunk vectors live (ADR-08).
+
+    `url` has no default on purpose. Every stage and reader that touches vectors
+    needs it, and a missing setting should fail naming the variable rather than
+    quietly connect to whatever happens to answer on localhost. On the host it
+    is `http://127.0.0.1:6333`; inside docker compose the services override it to
+    `http://qdrant:6333`, the same way they override `AIRFLOW_BASE_URL`.
+    """
+
+    url: str
+    api_key: str | None
+    timeout: int
+
+    @classmethod
+    def from_env(cls) -> QdrantSettings:
+        return cls(
+            url=os.environ.get("QDRANT_URL", "").strip(),
+            api_key=os.environ.get("QDRANT_API_KEY", "").strip() or None,
+            timeout=int(os.environ.get("QDRANT_TIMEOUT", "60")),
+        )
+
+
+def get_qdrant_settings() -> QdrantSettings:
+    return QdrantSettings.from_env()
+
+
 def get_airflow_base_url() -> str:
     """Base URL of the Airflow webserver the dashboard triggers DAG runs on.
 

@@ -28,6 +28,7 @@ from lake_research_map.db.gold_models import (
 )
 from lake_research_map.db.raw_models import BibEntry, IeeeCsvRow
 from lake_research_map.db.silver_models import Article as SilverArticle
+from lake_research_map.db.vector_store import VectorPoint, point_id
 from lake_research_map.ingest.snapshots import (
     ScannedSource,
     VersionFingerprint,
@@ -43,12 +44,57 @@ from lake_research_map.quality import (
 )
 from lake_research_map.transform.bronze_articles import build_bronze_articles
 from lake_research_map.transform.embeddings import EMBED_MODEL_NAME, EMBED_MODEL_REVISION
+from lake_research_map.transform.vector_payloads import chunk_payload
 from lake_research_map.transform.versioned_gold import (
     build_dataset_embeddings,
     build_dataset_gold,
     build_dataset_semantics,
     materialize_version,
 )
+
+
+def _embed_into_store(store, session, version_id, vector_for=None) -> int:
+    """What a successful embed stage leaves behind: vectors in the version's
+    collection and their provenance on the Gold rows (never a MySQL vector)."""
+    rows = session.scalars(
+        select(DatasetChunk)
+        .where(DatasetChunk.dataset_version_id == version_id)
+        .order_by(DatasetChunk.id)
+    ).all()
+    store.ensure_collection(version_id, 384)
+    now = datetime.now(UTC).replace(tzinfo=None)
+    points = []
+    for index, row in enumerate(rows, start=1):
+        vector = (
+            vector_for(index, row) if vector_for else np.full(384, 0.1, dtype=np.float32)
+        ).astype(np.float32)
+        vector = vector / np.linalg.norm(vector)
+        digest = hashlib.sha256(row.text.encode("utf-8")).hexdigest()
+        row.text_sha256 = digest
+        row.embed_model = EMBED_MODEL_NAME
+        row.embed_revision = EMBED_MODEL_REVISION
+        row.embedding_dim = 384
+        row.embedding_dtype = "float32"
+        row.embedding_normalized = True
+        row.embedded_at = now
+        points.append(
+            VectorPoint(
+                point_id(row.doi, row.chunk_type, row.seq),
+                vector,
+                chunk_payload(
+                    version_id=version_id,
+                    doi=row.doi,
+                    chunk_type=row.chunk_type,
+                    seq=row.seq,
+                    text=row.text,
+                    text_sha256=digest,
+                    embedded_at=now,
+                ),
+            )
+        )
+    store.upsert(version_id, points)
+    session.flush()
+    return len(rows)
 
 
 def _write_source_tree(root):
@@ -198,7 +244,9 @@ def test_bronze_rebuild_uses_file_qualified_keys_and_propagates_removal(
     assert remaining[0].dataset_version_id == "v2"
 
 
-def test_versioned_gold_build_does_not_mutate_live_publication(silver_session, gold_session):
+def test_versioned_gold_build_does_not_mutate_live_publication(
+    silver_session, gold_session, vector_store
+):
     silver_session.add(
         SilverArticle(
             dataset_version_id="v1",
@@ -239,14 +287,16 @@ def test_versioned_gold_build_does_not_mutate_live_publication(silver_session, g
     gold_session.commit()
     for rebuild in (
         lambda: build_dataset_gold(silver_session, gold_session, "v1"),
-        lambda: build_dataset_embeddings(gold_session, "v1"),
-        lambda: build_dataset_semantics(gold_session, "v1"),
+        lambda: build_dataset_embeddings(gold_session, "v1", store=vector_store),
+        lambda: build_dataset_semantics(gold_session, "v1", store=vector_store),
     ):
         with pytest.raises(ValueError, match="already published"):
             rebuild()
 
 
-def test_semantic_run_persists_the_diagnostics_that_produced_its_map(gold_session, monkeypatch):
+def test_semantic_run_persists_the_diagnostics_that_produced_its_map(
+    gold_session, monkeypatch, vector_store
+):
     from lake_research_map.dashboard import analytics
     from lake_research_map.transform import semantics, versioned_gold
 
@@ -255,7 +305,7 @@ def test_semantic_run_persists_the_diagnostics_that_produced_its_map(gold_sessio
         np.array([1.0, 0.0], dtype=np.float32),
         np.array([0.0, 1.0], dtype=np.float32),
     ]
-    for index, vector in enumerate(vectors):
+    for index in range(len(vectors)):
         gold_session.add(
             DatasetChunk(
                 dataset_version_id="v1",
@@ -264,10 +314,17 @@ def test_semantic_run_persists_the_diagnostics_that_produced_its_map(gold_sessio
                 chunk_type="abstract",
                 text=f"Article {index}",
                 char_len=9,
-                embedding_bin=vector.tobytes(),
             )
         )
     gold_session.commit()
+    vector_store.ensure_collection("v1", 2)
+    vector_store.upsert(
+        "v1",
+        [
+            VectorPoint(point_id(f"10.1/{index}", "abstract", 0), vector, {"doi": f"10.1/{index}"})
+            for index, vector in enumerate(vectors)
+        ],
+    )
 
     reduced = np.array([[0.0, 0.0], [1.0, 1.0]])
     monkeypatch.setattr(versioned_gold, "reduced_space", lambda _matrix: reduced)
@@ -292,7 +349,16 @@ def test_semantic_run_persists_the_diagnostics_that_produced_its_map(gold_sessio
     versioned_gold.build_dataset_semantics(
         gold_session,
         "v1",
+        store=vector_store,
         anchor_vectors=(vectors[0], vectors[1]),
+    )
+
+    # The screening signals travel to Qdrant as payload, margin included.
+    stored = vector_store.fetch("v1", [point_id("10.1/0", "abstract", 0)])
+    payload = next(iter(stored.values())).payload
+    assert payload["theme_label"] == "A"
+    assert payload["relevance_margin"] == pytest.approx(
+        payload["relevance_score"] - payload["offtopic_score"]
     )
 
     run = gold_session.query(SemanticRun).one()
@@ -303,8 +369,7 @@ def test_semantic_run_persists_the_diagnostics_that_produced_its_map(gold_sessio
     }
 
 
-def _candidate(session, version_id: str, doi: str, value: float) -> None:
-    vector = np.full(384, value, dtype=np.float32)
+def _candidate(session, store, version_id: str, doi: str, value: float) -> None:
     session.add(DatasetVersion(version_id=version_id, status="candidate"))
     session.add(
         DatasetArticle(
@@ -324,14 +389,6 @@ def _candidate(session, version_id: str, doi: str, value: float) -> None:
             chunk_type="abstract",
             text=doi,
             char_len=len(doi),
-            embedding=vector.tolist(),
-            embedding_bin=vector.tobytes(),
-            embed_model=EMBED_MODEL_NAME,
-            text_sha256=hashlib.sha256(doi.encode("utf-8")).hexdigest(),
-            embed_revision=EMBED_MODEL_REVISION,
-            embedding_dim=384,
-            embedding_dtype="float32",
-            embedding_normalized=True,
         )
     )
     session.add(
@@ -348,13 +405,16 @@ def _candidate(session, version_id: str, doi: str, value: float) -> None:
         )
     )
     session.flush()
+    _embed_into_store(
+        store, session, version_id, lambda _index, _row: np.full(384, value, dtype=np.float32)
+    )
 
 
-def test_quality_gates_reject_incompatible_embedding(gold_session):
-    _candidate(gold_session, "a" * 64, "10.1/a", 0.1)
+def test_quality_gates_reject_incompatible_embedding(gold_session, vector_store):
+    _candidate(gold_session, vector_store, "a" * 64, "10.1/a", 0.1)
     chunk = gold_session.scalar(select(DatasetChunk))
-    chunk.embedding_bin = b"short"
-    results = embed_contract(gold_session, "a" * 64)
+    chunk.embedding_dim = 12
+    results = embed_contract(gold_session, "a" * 64, vector_store)
 
     assert any(result.check_id == "embed.compatible" and not result.passed for result in results)
     try:
@@ -365,33 +425,33 @@ def test_quality_gates_reject_incompatible_embedding(gold_session):
         raise AssertionError("incompatible embeddings must block publication")
 
 
-def test_materialization_rechecks_publication_contract(gold_session):
+def test_materialization_rechecks_publication_contract(gold_session, vector_store):
     version_id = "a" * 64
-    _candidate(gold_session, version_id, "10.1/a", 0.1)
+    _candidate(gold_session, vector_store, version_id, "10.1/a", 0.1)
     chunk = gold_session.scalar(select(DatasetChunk))
-    chunk.embedding_bin = b"invalid"
+    chunk.embedding_dtype = "float16"
 
     with pytest.raises(ContractViolation, match="embed.compatible"):
-        materialize_version(gold_session, version_id, "execution-invalid")
+        materialize_version(gold_session, version_id, "execution-invalid", store=vector_store)
 
     assert gold_session.query(Article).count() == 0
     assert gold_session.get(DatasetVersion, version_id).status == "candidate"
 
 
-def test_publication_and_reactivation_restore_exact_gold_snapshot(gold_session):
+def test_publication_and_reactivation_restore_exact_gold_snapshot(gold_session, vector_store):
     first_id = "1" * 64
     second_id = "2" * 64
-    _candidate(gold_session, first_id, "10.1/first", 0.1)
+    _candidate(gold_session, vector_store, first_id, "10.1/first", 0.1)
     assert all(result.passed for result in semantic_contract(gold_session, first_id))
-    materialize_version(gold_session, first_id, "execution-1")
+    materialize_version(gold_session, first_id, "execution-1", store=vector_store)
     gold_session.commit()
 
-    _candidate(gold_session, second_id, "10.1/second", 0.2)
-    materialize_version(gold_session, second_id, "execution-2")
+    _candidate(gold_session, vector_store, second_id, "10.1/second", 0.2)
+    materialize_version(gold_session, second_id, "execution-2", store=vector_store)
     gold_session.commit()
     assert [row.doi for row in gold_session.scalars(select(Article)).all()] == ["10.1/second"]
 
-    materialize_version(gold_session, first_id, "execution-rollback")
+    materialize_version(gold_session, first_id, "execution-rollback", store=vector_store)
     gold_session.commit()
 
     assert [row.doi for row in gold_session.scalars(select(Article)).all()] == ["10.1/first"]
@@ -494,7 +554,7 @@ def test_pipeline_lock_releases_mysql_advisory_lock(monkeypatch):
     assert session.closed is True
 
 
-def test_full_pipeline_correlates_stages_and_publishes_only_after_gates(monkeypatch):
+def test_full_pipeline_correlates_stages_and_publishes_only_after_gates(monkeypatch, vector_store):
     factories = {}
     for layer, module in {
         "raw": raw_models,
@@ -554,24 +614,11 @@ def test_full_pipeline_correlates_stages_and_publishes_only_after_gates(monkeypa
 
     monkeypatch.setattr(pipeline, "load_bib_entries", load_bib)
 
-    def embed(session, version_id):
-        vector = np.full(384, 0.1, dtype=np.float32)
-        rows = session.scalars(
-            select(DatasetChunk).where(DatasetChunk.dataset_version_id == version_id)
-        ).all()
-        for row in rows:
-            row.embedding = vector.tolist()
-            row.embedding_bin = vector.tobytes()
-            row.embed_model = EMBED_MODEL_NAME
-            row.text_sha256 = hashlib.sha256(row.text.encode("utf-8")).hexdigest()
-            row.embed_revision = EMBED_MODEL_REVISION
-            row.embedding_dim = 384
-            row.embedding_dtype = "float32"
-            row.embedding_normalized = True
-        session.flush()
-        return {"embedded": len(rows), "already_embedded": 0, "total_chunks": len(rows)}
+    def embed(session, version_id, *, store):
+        count = _embed_into_store(store, session, version_id)
+        return {"embedded": count, "already_embedded": 0, "total_chunks": count}
 
-    def semantics(session, version_id):
+    def semantics(session, version_id, *, store):
         chunks = session.scalars(
             select(DatasetChunk)
             .where(DatasetChunk.dataset_version_id == version_id)
@@ -601,6 +648,7 @@ def test_full_pipeline_correlates_stages_and_publishes_only_after_gates(monkeypa
 
     monkeypatch.setattr(pipeline, "build_dataset_embeddings", embed)
     monkeypatch.setattr(pipeline, "build_dataset_semantics", semantics)
+    monkeypatch.setattr(pipeline, "get_vector_store", lambda: vector_store)
 
     pipeline.run_all(execution_id="parent-execution")
 
@@ -613,6 +661,8 @@ def test_full_pipeline_correlates_stages_and_publishes_only_after_gates(monkeypa
     assert gold_session.get(PublicationState, 1).active_version_id == fingerprint.version_id
     assert [row.doi for row in gold_session.scalars(select(Article)).all()] == ["10.1/paper"]
     assert gold_session.query(gold_models.QualityResult).count() > 0
+    # The alias moves only after the publication committed.
+    assert vector_store.alias_target() == fingerprint.version_id
     gold_session.close()
 
     pipeline.run_all(execution_id="parent-unchanged")
@@ -629,7 +679,7 @@ def test_full_pipeline_correlates_stages_and_publishes_only_after_gates(monkeypa
     gold_session.close()
 
 
-def test_golden_corpus_add_edit_rename_remove_and_reactivate(monkeypatch, tmp_path):
+def test_golden_corpus_add_edit_rename_remove_and_reactivate(monkeypatch, tmp_path, vector_store):
     """Exercise reconciliation and publication over a complete mutation sequence."""
     from lake_research_map.ingest import hashing, raw_bib, raw_config, raw_csv, raw_pdfs
     from lake_research_map.transform import bronze_articles
@@ -708,24 +758,16 @@ def test_golden_corpus_add_edit_rename_remove_and_reactivate(monkeypatch, tmp_pa
 
     monkeypatch.setattr(pipeline, "build_fingerprint", fixture_fingerprint)
 
-    def embed(session, version_id):
-        rows = session.scalars(
-            select(DatasetChunk).where(DatasetChunk.dataset_version_id == version_id)
-        ).all()
-        for index, row in enumerate(rows, start=1):
-            vector = np.full(384, index / 100, dtype=np.float32)
-            row.embedding = vector.tolist()
-            row.embedding_bin = vector.tobytes()
-            row.embed_model = EMBED_MODEL_NAME
-            row.text_sha256 = hashlib.sha256(row.text.encode("utf-8")).hexdigest()
-            row.embed_revision = EMBED_MODEL_REVISION
-            row.embedding_dim = 384
-            row.embedding_dtype = "float32"
-            row.embedding_normalized = True
-        session.flush()
-        return {"embedded": len(rows), "already_embedded": 0, "total_chunks": len(rows)}
+    def embed(session, version_id, *, store):
+        count = _embed_into_store(
+            store,
+            session,
+            version_id,
+            lambda index, _row: np.full(384, index / 100, dtype=np.float32),
+        )
+        return {"embedded": count, "already_embedded": 0, "total_chunks": count}
 
-    def semantics(session, version_id):
+    def semantics(session, version_id, *, store):
         chunks = session.scalars(
             select(DatasetChunk)
             .where(DatasetChunk.dataset_version_id == version_id)
@@ -755,6 +797,7 @@ def test_golden_corpus_add_edit_rename_remove_and_reactivate(monkeypatch, tmp_pa
 
     monkeypatch.setattr(pipeline, "build_dataset_embeddings", embed)
     monkeypatch.setattr(pipeline, "build_dataset_semantics", semantics)
+    monkeypatch.setattr(pipeline, "get_vector_store", lambda: vector_store)
 
     def run_and_assert(execution_id: str, expected_dois: set[str]) -> str:
         pipeline.run_all(execution_id=execution_id, source_policy="snapshot")
@@ -837,6 +880,7 @@ def test_golden_corpus_add_edit_rename_remove_and_reactivate(monkeypatch, tmp_pa
         assert revised.title == "First planning study revised"
     finally:
         gold_session.close()
+    assert vector_store.alias_target() == renamed_version
 
 
 def test_recover_stale_clears_executions_with_no_heartbeat(monkeypatch, gold_session):
