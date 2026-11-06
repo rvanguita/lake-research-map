@@ -200,6 +200,8 @@ PRESENTATION_ONLY = (
     "src/lake_research_map/dashboard/charts.py",
     "src/lake_research_map/dashboard/components.py",
     "src/lake_research_map/dashboard/theme.py",
+    # Developer tools (hero image, pre-commit guard) never change what a version holds.
+    "src/lake_research_map/devtools/",
 )
 
 

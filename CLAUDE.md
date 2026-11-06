@@ -379,5 +379,5 @@ one place that decides this, and pinning a literal instead silently deletes thos
 - `.claude/settings.json` hooks run on every edit: `ruff check --fix` + `ruff format` on any `.py`, and
   `uv run pytest -q` after touching `ingest/`, `transform/` or `tests/`. Recursive deletion of `data/`,
   force-pushes and hard resets are blocked at the Bash tool.
-- `pre-commit` (gitleaks + `scripts/git-hooks/check-docs-branch.sh`) blocks docs-only commits made directly on
+- `pre-commit` (gitleaks + `lake_research_map.devtools.docs_branch_guard`) blocks docs-only commits made directly on
   `main` — put documentation changes on a `docs/<topic>` branch. `main` is protected on GitHub.

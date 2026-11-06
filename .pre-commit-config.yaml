@@ -14,8 +14,8 @@ repos:
   - repo: local
     hooks:
       - id: block-docs-on-main
-        name: Bloqueia commit de documentação direto na main
-        entry: scripts/git-hooks/check-docs-branch.sh
-        language: script
+        name: Block documentation-only commits on main
+        entry: uv run python -m lake_research_map.devtools.docs_branch_guard
+        language: system
         pass_filenames: false
         always_run: true

@@ -278,7 +278,7 @@ uv tool install pre-commit
 pre-commit install
 ```
 - **Gitleaks**: Scans staged diffs for hardcoded passwords, tokens, and private keys.
-- **Block Docs on Main** (`scripts/git-hooks/check-docs-branch.sh`): Prevents direct documentation commits to `main`, requiring dedicated feature or `docs/*` branches.
+- **Block Docs on Main** (`src/lake_research_map/devtools/docs_branch_guard.py`): Prevents direct documentation commits to `main`, requiring dedicated feature or `docs/*` branches.
 
 ---
 
@@ -314,6 +314,7 @@ lake-research-map/
 │   │   ├── vector_payloads.py    # What each Qdrant point carries
 │   │   ├── semantics.py          # Contrastive screening, KMeans, UMAP/t-SNE/PCA
 │   │   └── screening_calibration.py # SLR sensitivity/recall threshold calibration
+│   ├── devtools/                 # Hero-image generator and the docs-on-main pre-commit guard
 │   ├── retrieval/                # Article-level retrieval, shared by CLI, MCP and dashboard
 │   │   ├── api.py                # Retriever: search, screen, evidence, article, status
 │   │   ├── filters.py            # ArticleFilters as a pandas mask and as a Qdrant filter
@@ -339,9 +340,6 @@ lake-research-map/
 │       ├── lake_research_map_hero.svg # Vector source for hero illustration
 │       ├── architecture.svg      # Legacy pipeline architecture diagram
 │       └── medallion_architecture.svg # Modern white-background medallion architecture diagram
-├── scripts/
-│   ├── generate_hero.py          # Programmatic vector renderer for hero assets
-│   └── git-hooks/                # Pre-commit hook shell scripts
 ├── tests/                        # 490 tests (in-memory SQLite + Qdrant local mode)
 ├── AGENTS.md                     # Universal guidelines for AI assistants
 ├── CLAUDE.md                     # Source-data quirks and environment notes
