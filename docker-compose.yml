@@ -1,4 +1,6 @@
 services:
+  # The read-only dashboard. The pipeline does not run in a container: it runs
+  # from the repository with `uv run lake-research-map ...` (ADR-09).
   dashboard:
     build: .
     ports:
@@ -6,10 +8,8 @@ services:
     env_file:
       - .env
     environment:
-      # inside the compose network the airflow service is reachable by name;
-      # .env's own AIRFLOW_BASE_URL covers running streamlit on the host instead
-      AIRFLOW_BASE_URL: http://airflow:8080
-      # same for the vector store (ADR-08); .env's QDRANT_URL is the host's
+      # inside the compose network the vector store is reachable by name;
+      # .env's own QDRANT_URL is the host's (ADR-08)
       QDRANT_URL: http://qdrant:6333
       # fastembed's default cache is under /tmp: a fresh container would
       # re-download the models on every start
@@ -17,10 +17,8 @@ services:
     volumes:
       - model_cache:/opt/model-cache
     depends_on:
-      airflow:
-        condition: service_started
       # `required: false` keeps `docker compose up -d` working without the
-      # `qdrant` profile; dense search then degrades to lexical with a caption
+      # `qdrant` profile; dense search then degrades to lexical with a warning
       qdrant:
         condition: service_healthy
         required: false
@@ -28,57 +26,11 @@ services:
     cpus: 2.0
     mem_limit: 2g
 
-  airflow:
-    build:
-      context: .
-      dockerfile: Dockerfile.airflow
-    command: ["standalone"]
-    ports:
-      - "127.0.0.1:8080:8080"
-    env_file:
-      - .env
-    environment:
-      AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/project/airflow/dags
-      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
-      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "False"
-      # single-user local setup: GET /auth/token with no credentials returns
-      # a valid admin JWT, so the dashboard never needs to manage a password
-      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_ALL_ADMINS: "True"
-      # the installed PyJWT rejects a non-string `iss` claim, and Airflow's
-      # default `api_auth.jwt_issuer` is unset (None) -- without this, every
-      # /auth/token (and therefore every dashboard Airflow call) 500s with
-      # "Issuer (iss) must be a string."
-      AIRFLOW__API_AUTH__JWT_ISSUER: lake-research-map
-      # keep this container's uv-managed venv separate from the host's .venv
-      # (its own activation scripts embed host-specific absolute paths)
-      UV_PROJECT_ENVIRONMENT: /opt/venv-airflow
-      # the embed and semantic stages read and write vectors here (ADR-08)
-      QDRANT_URL: http://qdrant:6333
-      FASTEMBED_CACHE_PATH: /opt/model-cache
-    depends_on:
-      qdrant:
-        condition: service_healthy
-        required: false
-    volumes:
-      - airflow_home:/opt/airflow
-      - model_cache:/opt/model-cache
-      - airflow_venv:/opt/venv-airflow
-      - ./src:/opt/airflow/project/src
-      - ./main.py:/opt/airflow/project/main.py
-      - ./pyproject.toml:/opt/airflow/project/pyproject.toml
-      - ./uv.lock:/opt/airflow/project/uv.lock
-      - ./README.md:/opt/airflow/project/README.md
-      - ./data:/opt/airflow/project/data
-      - ./airflow/dags:/opt/airflow/project/airflow/dags
-    restart: unless-stopped
-    cpus: 2.0
-    mem_limit: 3g
-
   # The vector store (ADR-08): one immutable collection per Gold dataset
   # version plus the `lit_chunks_active` alias external RAG clients query.
   # Opt-in profile: `docker compose --profile qdrant up -d` (or
-  # COMPOSE_PROFILES=qdrant in .env). The embed and semantic stages and dense
-  # search need it running.
+  # COMPOSE_PROFILES=qdrant in .env). The embed and semantic stages,
+  # publication and dense search need it running.
   qdrant:
     # Pinned to the qdrant-client minor in uv.lock (1.20); move both together.
     image: qdrant/qdrant:v1.20.0
@@ -103,7 +55,5 @@ services:
     mem_limit: 1g
 
 volumes:
-  airflow_home:
-  airflow_venv:
   model_cache:
   qdrant_storage:

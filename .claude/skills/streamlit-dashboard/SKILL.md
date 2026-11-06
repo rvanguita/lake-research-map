@@ -189,11 +189,12 @@ call `render_chart`.
 - `year` ranges 1926–2027 (2027 = in-press). Use `analytics.valid_years` with
   an explicit window rather than a bare `pd.to_numeric` — a stray old/future
   row will otherwise dominate any trend/rate calculation.
-- There is no pipeline run-history table. Stage stats
-  (`pipeline.py`'s `run_raw`/`run_bronze`/etc.) only go to `print` and Airflow
-  task logs; silver/gold are truncated and rebuilt every run. Any
-  "camadas/funil" chart is computed live from current row counts, not from a
-  persisted history — say so in the page rather than implying otherwise.
+- Run history lives in `gold.lit_pipeline_executions` / `lit_pipeline_runs`
+  (stage stats JSON) and `lit_quality_results`; the Pipeline page's audit tab
+  reads them. Silver/gold are rebuilt every run, so any layer funnel chart is
+  computed live from current row counts, not from that history — say so in
+  the page rather than implying otherwise. No page starts a run (ADR-09): the
+  Pipeline page shows the CLI commands instead.
 - The **current year in the corpus is always a partial year** — it's
   collected by hand mid-year, not a closed dataset. `dashboard/forecasting.py`
   (used by `pages/forecasting.py`) treats its `HOLDOUT_YEAR` this way

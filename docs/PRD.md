@@ -50,7 +50,7 @@ The primary user is the researcher who collects exports, operates the pipeline, 
 - DOI normalization, within-source reconciliation, cross-source DOI deduplication, non-article tagging, and human-reviewed cross-DOI merges.
 - Local text extraction, chunking, embedding, semantic screening, discovery, and hybrid retrieval.
 - Descriptive bibliometrics, scientometrics, engineering-evidence taxonomies, network analysis, and cautious forecasting.
-- CLI and Airflow execution with a read-only analytical dashboard.
+- CLI execution with a read-only analytical dashboard.
 
 ### 3.2 Non-goals
 
@@ -154,7 +154,7 @@ Every inferential or predictive result must report effect size, uncertainty, sam
 | `FR-08` | Serve Gold as the canonical analytical population. | Dashboard counts agree with curated Gold and approved merges. |
 | `FR-09` | Provide auditable screening calibration. | Labels, reviewer agreement, threshold version, metrics, and holdout results persist. |
 | `FR-10` | Provide inspectable lexical, dense, and hybrid retrieval. | Results expose parent DOI and component ranks/scores. |
-| `FR-11` | Keep dashboard data access read-only. | Mutations occur only through CLI/Airflow workflows. |
+| `FR-11` | Keep dashboard data access read-only. | Mutations occur only through CLI workflows; no page starts a run. |
 | `FR-12` | Degrade safely when a table or optional analysis is unavailable. | Pages show a scoped explanation rather than crashing or inventing results. |
 | `FR-13` | Store chunk vectors in a vector store a retrieval client can query, one immutable collection per dataset version. | Every published version has a complete, contract-checked Qdrant collection; external clients find the published one under a stable alias; Gold remains the source of the evidence. |
 | `FR-14` | Rank articles, not chunks, for a query, and serve that ranking outside the dashboard. | One hit per article over the abstracts by default; filters applied before ranking, selecting the same articles in the lexical and dense paths; DOI provenance and component ranks/scores in JSON; one `Retriever` behind the CLI, the MCP server and the dashboard. |
@@ -304,6 +304,7 @@ The product is successful when all of the following are evidenced, not merely as
 | Keep cross-DOI semantic duplicates human-reviewed. | Similar abstracts can represent versions or genuinely distinct publications. | Implemented |
 | Use local BGE embeddings and binary float32 storage. | Appropriate for corpus scale and offline operation; performance claims require benchmarks. | Superseded for storage on 2026-11-06 |
 | Store vectors in Qdrant, one collection per dataset version (ADR-08). | A RAG client outside the dashboard needs filtered nearest-neighbour search behind a standard API; Gold keeps the evidence and the publication pointer. | Implemented |
+| Run the pipeline from the CLI only; remove Airflow (ADR-09). | One researcher starts runs by hand; the orchestrator's container, REST triggers and retry policies served no schedule. | Implemented on 2026-11-06 |
 | Keep dashboard pages read-only. | Separates analytical presentation from controlled pipeline mutations. | Implemented |
 | Treat contract-valid Gold as the canonical analytical population. | Gold is where approved merges and curated chunks exist; invalid or absent Gold falls back visibly to Silver/Bronze. | Versioned publication implemented; selector-to-pointer binding remains in `WP-04` |
 | Keep uploaded screening calibration non-persistent and non-operative. | The current phase can validate the method without allowing a dashboard session to mutate corpus decisions. | Implemented; governed persistence pending |

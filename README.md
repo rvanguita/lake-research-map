@@ -4,7 +4,7 @@
 [![Tests: 406 passed](https://img.shields.io/badge/tests-406%20passed-brightgreen.svg)](tests/)
 [![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
 [![Streamlit Dashboard](https://img.shields.io/badge/dashboard-Streamlit-FF4B4B.svg)](src/lake_research_map/dashboard/)
-[![Airflow Orchestration](https://img.shields.io/badge/orchestration-Apache%20Airflow-017CEE.svg)](airflow/)
+[![Vector Store: Qdrant](https://img.shields.io/badge/vectors-Qdrant-DC244C.svg)](docker-compose.yml)
 [![Database: MySQL Medallion](https://img.shields.io/badge/lake-MySQL%20Medallion-00758F.svg)](src/lake_research_map/db/)
 [![Code Style: Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -14,7 +14,7 @@
 `lake-research-map` is a production-grade **Medallion Data Lake**, automated ETL pipeline, and scientometric research platform engineered for a Systematic Literature Review (SLR) on:
 > **"Distribution System Planning" (Electric Power Distribution Networks)**
 
-It transforms raw, heterogeneous, and partial bibliographic search exports from **IEEE Xplore** and **Elsevier ScienceDirect** into a structured, versioned, audit-ready, RAG-enabled corpus. The active 2026-09-21 audit contains 3,115 Gold articles and 7,552 text chunks. Without writing direct SQL queries, researchers explore scientometric, econometric, network, and semantic evidence through an interactive 10-page Streamlit analytical dashboard orchestrated by Apache Airflow.
+It transforms raw, heterogeneous, and partial bibliographic search exports from **IEEE Xplore** and **Elsevier ScienceDirect** into a structured, versioned, audit-ready, RAG-enabled corpus. The active 2026-09-21 audit contains 3,115 Gold articles and 7,552 text chunks. Without writing direct SQL queries, researchers explore scientometric, econometric, network, and semantic evidence through an interactive 10-page Streamlit analytical dashboard, and a retrieval client finds the most relevant articles through the `search` command or the MCP server.
 
 ---
 
@@ -31,7 +31,7 @@ It transforms raw, heterogeneous, and partial bibliographic search exports from 
   - [Prerequisites & Setup](#prerequisites--setup)
   - [Pipeline CLI Execution](#pipeline-cli-execution)
   - [Streamlit Dashboard](#streamlit-dashboard)
-  - [Airflow & Multi-Container Deployment](#airflow--multi-container-deployment)
+  - [Containers: Dashboard & Qdrant](#containers-dashboard--qdrant)
 - [Testing & Quality Assurance](#-testing--quality-assurance)
 - [Project Directory Structure](#-project-directory-structure)
 - [Documentation & Architectural Standards](#-documentation--architectural-standards)
@@ -53,9 +53,9 @@ Doing this manually from raw publisher exports presents severe methodological ro
 
 ## 🏗️ Medallion Data Lake Architecture
 
-The pipeline implements a 6-tier Medallion architecture orchestrated by Apache Airflow and managed through SQLAlchemy 2.0 declarative models:
+The pipeline implements a 6-tier Medallion architecture run by a single CLI and managed through SQLAlchemy 2.0 declarative models:
 
-![Pipeline architecture: IEEE Xplore, OpenAlex, and Elsevier/ScienceDirect flowing through the raw, bronze, silver, gold, embed, and semantic layers, orchestrated by Apache Airflow, feeding the 10-page Streamlit dashboard](docs/images/medallion_architecture.svg)
+![Pipeline architecture: IEEE Xplore, OpenAlex, and Elsevier/ScienceDirect flowing through the raw, bronze, silver, gold, embed, and semantic layers, run by one CLI, feeding the 10-page Streamlit dashboard](docs/images/medallion_architecture.svg)
 
 ### Pipeline Stages
 
@@ -126,7 +126,7 @@ The Streamlit dashboard (`src/lake_research_map/dashboard/`) is partitioned into
 | **Trends & Fronts** | Complete-year volume forecasts with rolling validation and conformal bands, topic trajectories, Bass diagnostics, and two-state Kleinberg bursts. |
 | **Screening & Discovery** | Contrastive relevance margins, semantic projections and themes, isolation scores, and persistent near-duplicate review history. |
 | **Data Quality & RAG** | Metadata coverage, full-text and embedding readiness, anomaly audit, and hybrid retrieval diagnostics. |
-| **Pipeline & Provenance** | Medallion funnel, schema drift, run history, rejected-record audit, Airflow triggers, and source-search provenance. |
+| **Pipeline & Provenance** | Medallion funnel, schema drift, run history, rejected-record audit, the CLI commands that run each stage, and source-search provenance. |
 
 ---
 
@@ -240,20 +240,16 @@ uv run streamlit run main.py
 ```
 Open [http://localhost:8501](http://localhost:8501) in your browser.
 
-### Airflow & Multi-Container Deployment
+### Containers: Dashboard & Qdrant
 
-Run Airflow and the dashboard simultaneously using Docker Compose; the `qdrant` profile adds the vector store that the `embed` and `semantic` stages and dense search need:
+Docker Compose runs the read-only dashboard and, with the `qdrant` profile, the vector store that the `embed` and `semantic` stages, publication and dense search need. The pipeline itself runs from the repository with the CLI above; there is no orchestrator (`ADR-09` in `docs/SDD.md`).
 
 ```bash
 docker compose --profile qdrant up -d   # or set COMPOSE_PROFILES=qdrant in .env
 ```
 
-- **Qdrant**: [http://localhost:6333/dashboard](http://localhost:6333/dashboard) (loopback only; payloads carry chunk text)
-
 - **Streamlit Dashboard**: [http://localhost:8501](http://localhost:8501)
-- **Apache Airflow UI**: [http://localhost:8080](http://localhost:8080) (Default login: `admin` / `admin`)
-
-Airflow DAGs (`airflow/dags/lake_research_map_dags.py`) execute stages via `BashOperator` calling `uv run lake-research-map --stage <stage>`. Pipeline logic runs identically whether triggered via CLI, Streamlit UI, or Airflow REST API.
+- **Qdrant**: [http://localhost:6333/dashboard](http://localhost:6333/dashboard) (loopback only; payloads carry chunk text)
 
 ---
 
@@ -334,10 +330,7 @@ lake-research-map/
 │       ├── forecasting.py        # Regression benchmarking, quantiles, Bass diffusion
 │       ├── theme.py              # Fixed-dark theme tokens and transparent polar styling
 │       ├── components.py         # Reusable Streamlit UI widgets & metric cards
-│       ├── airflow_client.py     # Airflow REST API client
 │       └── pages/                # 10 workflow-oriented analytical controllers
-├── airflow/                      # Airflow DAGs mirroring CLI pipeline stages
-│   └── dags/lake_research_map_dags.py
 ├── docs/                         # Architecture, product specs, and assets
 │   ├── PRD.md                    # Product Requirements Document
 │   ├── SDD.md                    # System Design Document
@@ -353,7 +346,7 @@ lake-research-map/
 ├── tests/                        # 406 unit/integration tests (SQLite in-memory)
 ├── AGENTS.md                     # Universal guidelines for AI assistants
 ├── CLAUDE.md                     # Source-data quirks and environment notes
-├── docker-compose.yml            # Airflow + Dashboard container orchestration
+├── docker-compose.yml            # Dashboard + Qdrant (profile `qdrant`) containers
 └── pyproject.toml                # Project metadata, dependencies, and Ruff config
 ```
 

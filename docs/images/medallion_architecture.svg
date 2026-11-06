@@ -143,7 +143,7 @@
     <text x="814" y="299" font-size="10.5" fill="#5b21b6">• Zero API dependency</text>
     <!-- Table Badge -->
     <rect x="812" y="318" width="146" height="24" rx="4" fill="#ddd6fe" stroke="#7c3aed" stroke-width="1"/>
-    <text x="885" y="334" text-anchor="middle" font-size="10" font-weight="700" fill="#4c1d95">embedding_bin (float32)</text>
+    <text x="885" y="334" text-anchor="middle" font-size="10" font-weight="700" fill="#4c1d95">Qdrant collection</text>
   </g>
 
   <!-- Arrow Embed -> Semantic -->
@@ -177,10 +177,10 @@
     <circle cx="1075" cy="370" r="3" fill="#0ea5e9"/>
 
     <text x="600" y="391" text-anchor="middle" font-size="12.5" font-weight="700" fill="#334155">
-      ⚙️ Apache Airflow 3.x Orchestration — 6 Stage DAGs + 1 Chained Master Flow (<tspan font-family="monospace" font-size="11">airflow/dags/lake_research_map_dags.py</tspan>)
+      ⚙️ One CLI runs every stage — 6 stages + the chained full run (<tspan font-family="monospace" font-size="11">uv run lake-research-map --stage all</tspan>)
     </text>
     <text x="600" y="408" text-anchor="middle" font-size="11" fill="#64748b">
-      Dual execution paths: <tspan font-family="monospace" font-weight="600">uv run lake-research-map --stage &lt;stage&gt;</tspan> (CLI) • Interactive DAG triggers via Airflow REST API
+      Vectors in Qdrant, one collection per dataset version • Article search via <tspan font-family="monospace" font-weight="600">lake-research-map search</tspan> and the MCP server
     </text>
   </g>
 

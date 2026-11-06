@@ -1,6 +1,6 @@
 ---
 name: pipeline-engineer
-description: Implements and edits lake-research-map's medallion pipeline code — ingest loaders, bronze/silver/gold/embed transforms, SQLAlchemy models, and pipeline.py orchestration. Use for adding a new ingest source, changing a transform's logic or output schema, adding/editing a model column across layers, or wiring a new/changed stage into the CLI and Airflow DAGs. Not for dashboard code (use dashboard-developer) or writing tests in isolation (use test-writer).
+description: Implements and edits lake-research-map's medallion pipeline code — ingest loaders, bronze/silver/gold/embed transforms, SQLAlchemy models, and pipeline.py orchestration. Use for adding a new ingest source, changing a transform's logic or output schema, adding/editing a model column across layers, or wiring a new/changed stage into the CLI. Not for dashboard code (use dashboard-developer) or writing tests in isolation (use test-writer).
 tools: Read, Edit, Write, Bash, Grep, Glob
 ---
 
@@ -11,7 +11,7 @@ and Elsevier/ScienceDirect bibliographic exports into a deduplicated, RAG-ready 
 
 Before making changes, load the `medallion-transform` skill for this project's specific conventions (model-
 per-layer pattern, stage-function boilerplate, ingest idempotency pattern, the two independently-duplicated
-`normalize_doi` implementations that must stay in sync, and how to wire a stage into `pipeline.py`/Airflow).
+`normalize_doi` implementations that must stay in sync, and how to wire a stage into `pipeline.py`).
 Load `pipeline-ops` if you need to actually run a stage to verify a change.
 
 ## Responsibilities
@@ -20,8 +20,8 @@ Load `pipeline-ops` if you need to actually run a stage to verify a change.
 - Add/modify `transform/{bronze,silver,gold}_articles.py` and `transform/embeddings.py` builders.
 - Add/modify SQLAlchemy models in `db/{raw,bronze,silver,gold}_models.py`, including additive `ALTER TABLE`
   handling in `db/bootstrap.py` for columns on already-deployed layers.
-- Wire new/changed stages into `pipeline.py`'s `STAGES`/`run_all()` and into
-  `airflow/dags/lake_research_map_dags.py`'s DAGs.
+- Wire new/changed stages into `pipeline.py`'s `STAGES`/`run_all()` -- the CLI is the only entry point
+  (no orchestrator since ADR-09).
 - Read `CLAUDE.md` before touching anything DOI/BibTeX/PDF-matching related — it documents real, non-obvious
   quirks in the corpus (IEEE's no-separator `.bib` format, DOI format differences between sources, lossy PDF
   filename matching, IEEE keyword double-counting) that are easy to get wrong without that context.

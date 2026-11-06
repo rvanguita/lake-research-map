@@ -13,7 +13,7 @@ from lake_research_map.dashboard.components import (
     metric_row,
     page_header,
     render_chart,
-    render_pipeline_controls,
+    render_pipeline_commands,
 )
 from lake_research_map.dashboard.theme import (
     CATEGORICAL_PALETTE,
@@ -146,7 +146,7 @@ def render() -> None:
             )
             st.dataframe(rejected_df, hide_index=True, width="stretch")
     elif tab_operations.open:
-        render_pipeline_controls()
+        render_pipeline_commands()
         _render_search_provenance()
 
 

@@ -23,7 +23,7 @@ uv run lake-research-map --stage all             # full pipeline (default stage)
 uv run lake-research-map --stage <stage>         # raw | bronze | silver | gold | embed | semantic
 uv run python -m lake_research_map.db.bootstrap  # create the 4 databases + tables only, no ingestion
 uv run streamlit run main.py                     # dashboard at http://localhost:8501
-docker compose up -d                             # Airflow (:8080) + dashboard (:8501), both read .env
+docker compose up -d                             # the read-only dashboard (:8501); reads .env
 docker compose --profile qdrant up -d qdrant     # vector store (:6333) -- embed/semantic/search need it
 uv run lake-research-map vectors status          # each version's Qdrant collection vs its Gold chunks
 uv run lake-research-map vectors backfill        # copy vectors still held as MySQL BLOBs into Qdrant
@@ -38,8 +38,7 @@ uv run ruff check --fix && uv run ruff format    # lint + format (config in pypr
 uv add <pkg>                                     # add a dependency (updates pyproject.toml + uv.lock)
 ```
 
-MySQL connection settings, `QDRANT_URL` and `AIRFLOW_BASE_URL` live in `.env` (git-ignored; see
-`.env.example`).
+MySQL connection settings and `QDRANT_URL` live in `.env` (git-ignored; see `.env.example`).
 
 ## Skills
 
@@ -48,7 +47,7 @@ MySQL connection settings, `QDRANT_URL` and `AIRFLOW_BASE_URL` live in `.env` (g
 | Skill | Covers |
 |---|---|
 | `medallion-transform` | authoring `ingest/`, `transform/`, `db/`, `pipeline.py` |
-| `pipeline-ops` | *running* stages: local CLI vs. Docker/Airflow, `.env`, idempotency, debugging a run |
+| `pipeline-ops` | *running* stages from the CLI, `.env`, the Qdrant service, idempotency, debugging a run |
 | `developing-with-streamlit` | `dashboard/` page contract, chart contract, theme tokens, aggregation rules |
 | `python-testing-conventions` | pytest layout, per-layer SQLite fixtures, pure-function-first testing |
 
@@ -56,9 +55,10 @@ MySQL connection settings, `QDRANT_URL` and `AIRFLOW_BASE_URL` live in `.env` (g
 
 ### Stage graph
 
-`raw → bronze → silver → gold → embed → semantic`, each a `run_<stage>()` in `pipeline.py` and each a
-1:1 Airflow DAG (`airflow/dags/lake_research_map_dags.py`, thin `BashOperator` wrappers around the same CLI —
-the DAG file deliberately never imports `lake_research_map`).
+`raw → bronze → silver → gold → embed → semantic`, each a `run_<stage>()` in `pipeline.py`, run from the
+CLI: `--stage <stage>` for one, `--stage all` for the chain. There is no orchestrator: the Airflow DAGs, their
+container and the dashboard's trigger buttons were removed on 2026-11-06 (ADR-09). A failed stage is re-run
+by hand; every stage is idempotent and `embed` resumes where it stopped.
 
 - `raw` — verbatim ingestion, one table per source artifact (`ingest/raw_{csv,bib,pdfs,config}.py`).
 - `bronze` — IEEE CSV + IEEE `.bib` + Elsevier `.bib` unioned into one typed schema. The IEEE CSV is the
@@ -146,8 +146,8 @@ must be plain result rows, not ORM instances, or it detaches on the second batch
 batch will not show it).
 
 `config.relative_path()` / `absolute_path()`: stored file paths are relative to the repo root because the same
-file is `/home/…/data/x.csv` on the host and `/opt/airflow/project/data/x.csv` in the Airflow container —
-raw-layer idempotency keys off that string, so absolute paths duplicate every row on a cross-environment run.
+file has a different absolute path in every checkout and container — raw-layer idempotency keys off that
+string, so absolute paths duplicate every row on a cross-environment run.
 
 ### Dashboard
 
@@ -159,8 +159,8 @@ dashboard module any more: the Quality page's article search and benchmark call 
 `retrieval/` package's `Retriever`, one per published version, held as an `@st.cache_resource` (it owns
 indexes and a Qdrant client, which must not be pickled per lookup).
 
-Pages are read-only, with no exception: pipeline execution goes through Airflow's REST API
-(`pipeline_control.py` → `airflow_client.py`). Embedding generation used to be an in-process exception in
+Pages are read-only, with no exception: the pipeline runs only from the CLI, and the Pipeline page shows the
+commands instead of buttons (it triggered Airflow DAGs until ADR-09). Embedding generation used to be an in-process exception in
 `actions.py`; it was removed on 2026-09-21 because it wrote the live `lit_chunks` table that publication
 rebuilds from the versioned candidate, so the vectors were silently discarded on the next publish.
 

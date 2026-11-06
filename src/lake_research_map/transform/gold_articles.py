@@ -60,7 +60,7 @@ def _build_abstract_text(row: SilverArticle) -> str:
 
 def _extract_pdf_text(pdf_path: str, stats: Counter | None = None) -> str:
     # Paths are stored relative to the repo root (so the same file has the same
-    # identity on the host and inside the Airflow container) -- resolve back to
+    # identity in every checkout and container) -- resolve back to
     # an absolute path before actually opening it.
     try:
         reader = PdfReader(absolute_path(pdf_path))

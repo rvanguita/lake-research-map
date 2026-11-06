@@ -342,9 +342,8 @@ def _embedding_readiness(chunks_df: pd.DataFrame) -> None:
         # audited pipeline run like every other stage (ADR-06).
         st.info(
             f"{pending:,} chunks are waiting for a vector. Run the `embed` stage through the "
-            "pipeline \u2014 `uv run lake-research-map --stage embed`, or the Airflow trigger on "
-            "the Pipeline and provenance page \u2014 with Qdrant running "
-            "(`docker compose --profile qdrant up -d qdrant`). Embedding from here would bypass "
+            "pipeline \u2014 `uv run lake-research-map --stage embed` \u2014 with Qdrant "
+            "running (`docker compose --profile qdrant up -d qdrant`). Embedding from here would bypass "
             "the embedding contract that every published version must pass."
         )
 

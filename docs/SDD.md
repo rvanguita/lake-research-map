@@ -19,17 +19,16 @@ Local PDFs ──────┘                    │         │             
                                      │         └─ curated chunks ┘
 OpenAlex ----------------------------┘
                                                 │
-CLI <-------------------------------------------┤
-Airflow ----------------------------------------┤
-Streamlit dashboard ----------------------------┘
+CLI (pipeline, vectors, search, MCP) <-----------┤
+Streamlit dashboard (read-only) ----------------┘
 ```
 
 ### 1.1 Architectural boundaries
 
 - MySQL contains four databases named `raw`, `bronze`, `silver`, and `gold`.
 - Those databases are shared with unrelated projects. This application may access only `lit_*` tables.
-- Pipeline stages are Python functions invoked by the same CLI locally and through Airflow.
-- Dashboard pages read MySQL and trigger controlled Airflow DAGs; they do not write analytical tables directly.
+- Pipeline stages are Python functions invoked only through the CLI (`--stage <stage>`, `--stage all`); there is no orchestrator (`ADR-09`).
+- Dashboard pages read MySQL and Qdrant and show the CLI commands that run the pipeline; they neither write analytical tables nor start runs.
 - Mathematical functions live outside page controllers and must not import Streamlit.
 - The current corpus is small enough for single-process pandas/NumPy/scikit-learn execution. Distributed compute is not justified without measured pressure.
 
@@ -48,7 +47,6 @@ Streamlit dashboard ----------------------------┘
 | `transform/semantics.py` | Contrastive scoring, themes, projection, duplicate candidates | Semantic tables |
 | `transform/duplicate_resolution.py` | Validate persistent merge/keep/undo decisions | Duplicate overrides |
 | `pipeline.py` | Bootstrap, stage routing, CLI, and run telemetry | Pipeline-run records |
-| Airflow DAGs | Schedule/trigger the same CLI commands | Airflow metadata only |
 | `retrieval/` | Article-level search, screening and evidence (`Retriever`), the `search`/`screen`/`mcp` commands and the MCP tools; imports neither Streamlit nor `dashboard/` | None (reads the published Gold version and its Qdrant collection) |
 | `dashboard/data.py` | Fault-tolerant SQL reads returning DataFrames | None |
 | `dashboard/loaders.py` | Cached normalization, joins, and filtered datasets | Streamlit cache only |
@@ -166,7 +164,7 @@ Screening labels remain target governed data rather than dashboard session state
 
 ### 4.2 Current versioned run protocol
 
-1. Create or resume a parent execution shared by CLI/Airflow stage attempts under the project-scoped MySQL advisory lock.
+1. Create or resume a parent execution shared by the stage attempts of one CLI workflow (`--stage all`, or stage-by-stage with `--execution-id`/`--workflow`) under the project-scoped MySQL advisory lock.
 2. Create a parent run containing code revision, configuration hash, trigger, and requested stages.
 3. Scan inputs into a candidate dataset version and reconcile additions, changes, and removals.
 4. Execute each stage in a transaction or staging tables appropriate to its size.
@@ -175,7 +173,7 @@ Screening labels remain target governed data rather than dashboard session state
 7. Record stage metrics, quality results, lineage, duration, and error details against the parent run.
 8. Invalidate dashboard caches after successful publication.
 
-Retry policy is stage-specific and declared per stage in `STAGE_POLICY` (`airflow/dags/lake_research_map_dags.py`). Pure derived stages may retry safely; external enrichment uses bounded retries, timeouts, and durable response status; a failed batch does not masquerade as “not found.” Backfills create new versions rather than rewriting the evidential history.
+There is no automatic stage retry: the per-stage retry and timeout policy lived in the Airflow DAGs and left with them (`ADR-09`). A failed stage is re-run by hand -- every stage is idempotent and `embed` resumes from its own collection -- and the next run's start-up sweep recovers the abandoned execution. External enrichment keeps its own bounded retries, timeouts, and durable response status; a failed batch does not masquerade as “not found.” Backfills create new versions rather than rewriting the evidential history.
 
 Abandoned executions are recovered without human intervention. `run()` sweeps executions still marked `running` whenever it actually acquired the MySQL advisory lock, because holding that lock proves no other writer is live and therefore that every surviving `running` row was left by a dead process. Under SQLite the lock is bypassed, the flag is false, and no sweep occurs. The manual `maintenance recover-stale` command shares the same implementation and keeps its age cutoff for operators who want one.
 
@@ -204,7 +202,7 @@ Existing tables gain version/run references only when their producer and readers
 - `loaders.py`: the only `@st.cache_data` layer; normalization, compatible joins, and cache bounds.
 - `analytics.py` and `forecasting.py`: deterministic pure functions with explicit inputs and outputs.
 - `charts.py`: theme-aware figure construction without data access.
-- `components.py`: reusable Streamlit presentation and controlled Airflow actions.
+- `components.py`: reusable Streamlit presentation, including the read-only panel of pipeline commands.
 - `pages/*.py`: one zero-argument `render()` controller per registered page, as required by this repository's established architecture.
 
 The repository intentionally retains callable `render()` page controllers even though generic Streamlit guidance favors direct page scripts; changing that convention would require coordinated navigation and test refactoring with no current product benefit.
@@ -308,15 +306,14 @@ population every coverage audit divides by.
 - The local single-user deployment relies on the enforced `lit_*` naming boundary in application code. A shared or multi-user deployment must create separate bootstrap, pipeline-write, and dashboard-read roles with database-enforced least privilege before exposure.
 - Credentials remain in environment/secrets facilities and are never rendered or included in exported DataFrames.
 - SQL identifiers are fixed allowlisted values; user values use parameter binding.
-- Airflow's current “all admins” simple-auth setup is acceptable only for an isolated local environment. Binding it to a non-loopback or shared network requires authentication, authorization, TLS/reverse-proxy controls, and removal of unauthenticated admin access.
-- Pipeline trigger actions require an audit identity and rate/concurrency controls in any shared deployment.
+- No network service can start a pipeline run: the CLI is the only entry point, so starting a run needs a shell on the machine. Qdrant and the dashboard bind to loopback.
 - PDF text may be copyrighted; access and redistribution remain local and controlled. Retrieval returns short evidence passages and DOI provenance rather than bulk document export. The MCP server speaks stdio to a local client and opens no network port; its `get_evidence` tool returns at most a few chunks of one article.
 
 ## 9. Testing strategy
 
 ### 9.1 Current baseline
 
-The repository has 436 passing pytest tests plus four opt-in tests skipped in the default run (two MySQL, two Qdrant server). They run with isolated in-memory SQLite sessions and additionally cover deterministic fingerprints, content-addressed retention, rename detection, Bronze deletion propagation, isolated Gold candidates, embedding contract failures, atomic materialization, exact Gold reactivation, an end-to-end correlated pipeline fixture, Airflow parent correlation, temporal enrichment observations, persistent human-review evidence, retrieval metrics, provenance coverage, persisted semantic diagnostics, the durable-label-to-calibration join with its approval digests, the injected-fixture citation-graph crawl, automatic abandoned-run recovery, and the plausible-year bound that keeps in-press records dated to next year inside every trend. The MySQL acceptance tests cover JSON/NULL/BLOB round trips, rollback, advisory locks, and the idempotent `lit_config` uniqueness migration. Ruff lint and format checks are required.
+The repository has 436 passing pytest tests plus four opt-in tests skipped in the default run (two MySQL, two Qdrant server). They run with isolated in-memory SQLite sessions and additionally cover deterministic fingerprints, content-addressed retention, rename detection, Bronze deletion propagation, isolated Gold candidates, embedding contract failures, atomic materialization, exact Gold reactivation, an end-to-end correlated pipeline fixture, stage-by-stage parent correlation, temporal enrichment observations, persistent human-review evidence, retrieval metrics, provenance coverage, persisted semantic diagnostics, the durable-label-to-calibration join with its approval digests, the injected-fixture citation-graph crawl, automatic abandoned-run recovery, and the plausible-year bound that keeps in-press records dated to next year inside every trend. The MySQL acceptance tests cover JSON/NULL/BLOB round trips, rollback, advisory locks, and the idempotent `lit_config` uniqueness migration. Ruff lint and format checks are required.
 
 SQLite remains the default fast suite. MySQL-specific acceptance is recorded separately against MySQL 8.4 and must be rerun for changes to JSON/NULL behavior, BLOBs, DDL, transactions, or advisory locks. The vector store follows the same split: `qdrant-client`'s in-process local mode stands in for the server in the default suite, and `RUN_QDRANT_INTEGRATION=1 uv run pytest -m qdrant` checks what local mode ignores (payload indexes, exact-search parameters) against the compose service.
 
@@ -391,7 +388,7 @@ The 2026-09-21 active-corpus benchmark measured an 11.06 MiB vector matrix and a
 
 ### `ADR-06` — Read-only dashboard
 
-**Decision:** Data mutations remain in audited CLI/Airflow workflows.
+**Decision:** Data mutations remain in audited CLI workflows.
 
 **Alternative:** Direct page writes.
 
@@ -423,6 +420,30 @@ source complete — none does.
 
 **Generalization:** this applies to any bounded traversal of an ordered key
 whose order correlates with a property under analysis, not just to DOIs.
+
+### `ADR-09` — No orchestrator: the CLI runs the pipeline
+
+**Context:** Airflow ran each stage as a DAG of thin `BashOperator` wrappers
+around the CLI, and the dashboard triggered those DAGs through Airflow's REST
+API. It added a container with its own virtual environment, metadata database
+and authentication, a REST client in the dashboard, and per-stage retry and
+timeout policies -- for a single researcher who starts runs by hand. On
+2026-11-06 the owner removed the DAGs and asked for Airflow to go entirely.
+
+**Decision:** the CLI is the only way to run the pipeline (`--stage <stage>`,
+`--stage all`). The Airflow service, image, DAGs, REST client and dashboard
+trigger buttons are removed; the Pipeline page shows the commands instead.
+`--execution-id`/`--workflow` stay, so a workflow can still run stage by stage
+as separate processes recorded as one execution (cron or CI can drive that).
+
+**Alternatives:** keep Airflow for scheduling (no schedule exists to serve);
+replace it with another orchestrator (the same cost for the same absent need).
+
+**Consequences:** no automatic retries or timeouts -- a failed stage is re-run
+by hand, which every stage's idempotency and `embed`'s resumability make safe;
+no run history beyond `lit_pipeline_executions`/`lit_pipeline_runs`, which
+already held it; and no page can start a run, so `ADR-06` now holds trivially.
+Docker Compose keeps the dashboard and the opt-in Qdrant service.
 
 ### `ADR-08` — Qdrant is the vector store; Gold keeps the evidence
 
@@ -462,7 +483,7 @@ published snapshots and needs its own decision.
 
 - Analytical reads are already bound to the publication pointer: `dashboard/data.py::load_articles` routes Gold through `load_active_dataset_table`, which scopes every query by `active_dataset_version()`. The residual is narrower than previously recorded -- `assess_gold_articles` is still a structural check (non-empty, unique DOI, expected columns) rather than a read of the persisted `lit_quality_results` for that version.
 - Resolved on 2026-09-21: the legacy direct embedding transform and the dashboard action that called it were removed. It wrote the live `lit_chunks` table, which `materialize_version` rebuilds from the candidate on every publish, so vectors generated from the Quality page were discarded at the next publication and never passed `embed_contract`. Embedding now has exactly one writer, `versioned_gold.py::build_dataset_embeddings`, operating on the immutable candidate.
-- Parent correlation, dataset versions, cross-process advisory locking, heartbeats, stale-run recovery, and stage-specific Airflow retry/timeout policies are implemented.
+- Parent correlation, dataset versions, cross-process advisory locking, heartbeats, and stale-run recovery are implemented. Stage retries are manual since `ADR-09`.
 - OpenAlex responses are append-only observations with observation time, response state, HTTP status, response hash, retry count, longitudinal counts, outgoing edges, and access metadata. A real refresh still requires local API credentials.
 - Chunk and duplicate-candidate logical keys are not fully constrained in the database.
 - Several retired analytical functions and inactive page helpers remain in source/tests.

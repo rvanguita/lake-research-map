@@ -2255,9 +2255,9 @@ def recover_abandoned_executions(
     if cutoff is not None:
         query = query.where(last_signal < cutoff)
     if exclude:
-        # Airflow's full-pipeline DAG runs each stage as its own process under
-        # one execution id, and every stage but the last leaves that execution
-        # `running` on purpose. Holding the lock proves no *other* writer is
+        # A workflow run stage by stage (`--execution-id` with `--workflow`)
+        # runs each stage as its own process under one execution id, and every
+        # stage but the last leaves that execution `running` on purpose. Holding the lock proves no *other* writer is
         # alive; it says nothing about the execution this process is about to
         # continue, which the sweep used to mark as crashed between every task.
         query = query.where(PipelineExecution.execution_id.not_in(sorted(exclude)))
@@ -2504,9 +2504,10 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="lake-research-map medallion pipeline")
     parser.add_argument("--stage", choices=STAGES, default="all", help="pipeline stage to run")
     parser.add_argument(
-        "--execution-id", help="parent execution identifier shared by orchestrators"
+        "--execution-id",
+        help="run one stage of a workflow under a shared execution id (with --workflow), so a "
+        "workflow can run as separate stage processes and still be recorded as one execution",
     )
-    parser.add_argument("--trigger", choices=("cli", "airflow", "dashboard"), default="cli")
     parser.add_argument("--workflow", choices=STAGES, help="parent workflow for stage correlation")
     parser.add_argument(
         "--source-policy",
@@ -2593,7 +2594,7 @@ def main(argv: list[str] | None = None) -> None:
                 # is not a pipeline failure.
                 logger.info("%s stopped", args.command)
         else:
-            if args.execution_id is None and args.trigger == "cli" and args.workflow is None:
+            if args.execution_id is None and args.workflow is None:
                 if args.source_policy == "append":
                     run(args.stage)
                 else:
@@ -2602,7 +2603,6 @@ def main(argv: list[str] | None = None) -> None:
                 run(
                     args.stage,
                     execution_id=args.execution_id,
-                    trigger=args.trigger,
                     workflow=args.workflow,
                     source_policy=args.source_policy,
                 )

@@ -83,7 +83,7 @@
   <path d="M50,222 L1010,222" fill="none" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="4 3"/>
   <path d="M120,206 L120,222 M284,206 L284,222 M448,206 L448,222 M612,206 L612,222 M776,206 L776,222 M940,206 L940,222"
         fill="none" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="4 3"/>
-  <text x="530" y="242" text-anchor="middle" font-size="13" fill="#475569">orchestrated by Apache Airflow — one DAG per stage, chained end-to-end</text>
+  <text x="530" y="242" text-anchor="middle" font-size="13" fill="#475569">run by one CLI — uv run lake-research-map --stage all chains every stage</text>
 
   <!-- arrow down to dashboard -->
   <path d="M530,250 L530,280" fill="none" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow)"/>

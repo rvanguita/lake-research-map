@@ -162,18 +162,18 @@ def test_the_status_command_reports_progress_and_the_disagreement_queue(gold_ses
 
 
 def test_the_execution_being_continued_is_not_recovered(gold_session):
-    """Airflow runs each stage of the full DAG as a process under one id.
+    """A workflow run stage by stage runs each stage as a process under one id.
 
     Every stage but the last leaves the execution `running` on purpose, so the
     next task's start-up sweep used to mark the live pipeline as crashed.
     """
-    _execution(gold_session, "dag:run-1", started=NOW - timedelta(hours=1))
+    _execution(gold_session, "workflow:run-1", started=NOW - timedelta(hours=1))
     _execution(gold_session, "abandoned", started=NOW - timedelta(hours=2))
 
-    recovered = recover_abandoned_executions(gold_session, exclude={"dag:run-1"})
+    recovered = recover_abandoned_executions(gold_session, exclude={"workflow:run-1"})
 
     assert recovered == ["abandoned"]
-    assert gold_session.get(PipelineExecution, "dag:run-1").status == "running"
+    assert gold_session.get(PipelineExecution, "workflow:run-1").status == "running"
 
 
 def test_only_commands_that_change_published_inputs_take_the_lock():

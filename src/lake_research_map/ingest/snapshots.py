@@ -200,8 +200,6 @@ PRESENTATION_ONLY = (
     "src/lake_research_map/dashboard/charts.py",
     "src/lake_research_map/dashboard/components.py",
     "src/lake_research_map/dashboard/theme.py",
-    "src/lake_research_map/dashboard/pipeline_control.py",
-    "src/lake_research_map/dashboard/airflow_client.py",
 )
 
 

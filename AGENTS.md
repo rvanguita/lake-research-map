@@ -11,7 +11,7 @@ This document defines the architecture, design principles, testing protocols, an
 
 The corpus comprises hand-curated bibliographic exports from **IEEE Xplore** and **Elsevier ScienceDirect** (3,115 articles in the active Gold version as of 2026-09-21; re-measure before quoting). The project provides:
 1. **Medallion Ingestion & Transform Pipeline** (`src/lake_research_map/`): Multi-tier extraction, normalization, deduplication, chunking, binary vector embedding, and contrastive relevance screening.
-2. **Orchestration** (`airflow/`): 1:1 Airflow DAGs mirroring CLI pipeline stages (`raw`, `bronze`, `silver`, `gold`, `embed`, `semantic`, `all`).
+2. **Command line** (`pipeline.py`): one CLI runs every stage (`--stage raw|bronze|silver|gold|embed|semantic|all`) plus `vectors`, `search`, `screen` and `mcp`. There is no orchestrator (ADR-09: Airflow was removed on 2026-11-06).
 3. **Interactive Analytical Dashboard** (`src/lake_research_map/dashboard/`): Multipage Streamlit application featuring 10 deduplicated pages for bibliometric, scientometric, econometric, network, and semantic intelligence.
 
 ---
@@ -105,7 +105,7 @@ The dashboard is structured into 10 workflow-oriented pages in `src/lake_researc
   - `forecasting.py`: Complete-year volume forecasts with rolling validation and conformal bands, topic trajectories, Bass diagnostics, and Kleinberg bursts.
   - `semantics.py`: Screening calibration, multi-projection semantic space, themes, semantic isolation, and persistent duplicate-review history.
   - `quality.py`: Metadata/PDF diagnostics, content readiness, anomaly audit, and hybrid retrieval.
-  - `pipeline_layers.py`: Medallion flow, quality gates, audit history, source provenance, and Airflow operations.
+  - `pipeline_layers.py`: Medallion flow, quality gates, audit history, source provenance, and the CLI commands that run the pipeline.
 
 ### 4.3 Visual & Theme Standards
 - **Responsive Width**: Always use `width="stretch"` for charts, tables, and containers. **NEVER use deprecated `use_container_width=True`**.
@@ -149,8 +149,8 @@ uv run python -m lake_research_map.db.bootstrap  # Bootstrap schema & additive c
 # Dashboard
 uv run streamlit run main.py               # Launch Streamlit app on http://localhost:8501
 
-# Orchestration (Airflow + Dashboard)
-docker compose up -d                       # Airflow (:8080) + Streamlit (:8501)
+# Containers (dashboard + vector store)
+docker compose --profile qdrant up -d      # Streamlit (:8501) + Qdrant (:6333)
 
 # Testing & Verification
 uv run pytest                              # Run full test suite (212 tests)
@@ -162,6 +162,6 @@ uv run ruff check --fix && uv run ruff format  # Format and lint codebase
 ## 7. Golden Rules for Agents
 
 1. **Preserve Architectural Explanations**: Existing comments explain *why* specific choices were made (e.g., why chunk sizes were chosen, why contrastive margins have zero cut, why PCA 50 is shared). Do not strip comments.
-2. **Never Write MySQL Data from Pages**: Dashboard pages are read-only. Modifying pipeline data from the UI is prohibited; triggers must go through the Airflow REST API.
+2. **Never Write MySQL Data from Pages**: Dashboard pages are read-only. Modifying pipeline data from the UI is prohibited; the pipeline runs only from the CLI.
 3. **Always Run Pytest and Ruff**: Never declare a task complete without executing `uv run pytest` and `uv run ruff check`.
 4. **Git Branch Policy**: Direct commits of documentation on `main` are blocked by pre-commit hooks. Always make changes on feature or `docs/*` branches.

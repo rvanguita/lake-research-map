@@ -10,13 +10,6 @@ import pandas as pd
 import streamlit as st
 
 from lake_research_map.dashboard import loaders
-from lake_research_map.dashboard.airflow_client import AirflowError
-from lake_research_map.dashboard.pipeline_control import (
-    DAG_IDS,
-    STAGE_LABELS,
-    poll_run,
-    trigger_stage,
-)
 from lake_research_map.dashboard.theme import (
     PUBLICATION_CATEGORY_LABELS,
     SOURCE_LABELS,
@@ -24,45 +17,6 @@ from lake_research_map.dashboard.theme import (
 )
 
 logger = logging.getLogger(__name__)
-
-_TERMINAL_STATES = ("success", "failed", "error")
-
-
-def _refresh_runs() -> None:
-    """Poll every non-terminal run against Airflow. Clears the data cache the
-    first time a run is observed to have finished, so the stats reflect it
-    without a second manual refresh.
-    """
-    runs = st.session_state.pipeline_runs
-    became_success = False
-    for stage, run_ref in list(runs.items()):
-        prev_state = run_ref.get("state")
-        if prev_state in _TERMINAL_STATES:
-            continue
-        try:
-            updated = poll_run(run_ref)
-        except AirflowError as exc:
-            logger.warning("_refresh_runs: could not poll stage %r", stage, exc_info=True)
-            updated = dict(run_ref, state="error", error=str(exc))
-        runs[stage] = updated
-        if updated.get("state") == "success" and prev_state != "success":
-            became_success = True
-    if became_success:
-        st.cache_data.clear()
-
-
-def _trigger(stage: str) -> None:
-    try:
-        st.session_state.pipeline_runs[stage] = trigger_stage(stage)
-    except AirflowError as exc:
-        logger.warning("_trigger: could not trigger stage %r", stage, exc_info=True)
-        st.session_state.pipeline_runs[stage] = {
-            "stage": stage,
-            "dag_id": DAG_IDS.get(stage, stage),
-            "dag_run_id": None,
-            "state": "error",
-            "error": str(exc),
-        }
 
 
 def _prepare_filter_state(
@@ -276,54 +230,32 @@ def render_sidebar() -> None:
             st.caption(f"{len(filtered_df):,}/{len(articles_df):,} articles · **{layer}** layer")
 
 
-def render_pipeline_controls() -> None:
-    """Render Airflow controls in the operational page instead of every page."""
-    st.session_state.setdefault("pipeline_runs", {})
-    _refresh_runs()
-    st.subheader("Run pipeline through Airflow")
+PIPELINE_COMMANDS = """\
+# the complete pipeline: raw -> bronze -> silver -> gold -> embed -> semantic
+uv run lake-research-map --stage all
 
-    with st.container(border=True):
-        columns = st.columns(3)
-        for index, stage in enumerate(("raw", "bronze", "silver", "gold", "embed", "semantic")):
-            with columns[index % len(columns)]:
-                if st.button(
-                    f"Run {STAGE_LABELS[stage]}",
-                    key=f"run_{stage}",
-                    icon=":material/play_arrow:",
-                    width="stretch",
-                ):
-                    with st.spinner(f"Triggering {STAGE_LABELS[stage]} in Airflow..."):
-                        _trigger(stage)
+# one stage
+uv run lake-research-map --stage raw     # or bronze | silver | gold | embed | semantic
 
-        if st.button(
-            "Run all (raw→bronze→silver→gold→embed→semantic)",
-            key="run_all",
-            icon=":material/fast_forward:",
-        ):
-            with st.spinner("Triggering the complete pipeline in Airflow..."):
-                _trigger("all")
+# embed, semantic and publication need the vector store
+docker compose --profile qdrant up -d qdrant
+uv run lake-research-map vectors status
+"""
 
-        if st.session_state.pipeline_runs:
-            with st.container(border=True):
-                st.markdown("**Triggered runs**")
-                for stage, run_ref in st.session_state.pipeline_runs.items():
-                    label = STAGE_LABELS.get(stage, stage)
-                    state = run_ref.get("state")
-                    run_id = run_ref.get("dag_run_id")
-                    if state == "success":
-                        extra = ""
-                        tasks = run_ref.get("task_instances") or []
-                        if tasks:
-                            n_ok = sum(1 for t in tasks if t.get("state") == "success")
-                            extra = f" ({n_ok}/{len(tasks)} completed tasks)"
-                        st.success(f"{label}: completed{extra}")
-                    elif state == "failed":
-                        st.error(f"{label}: failed (run `{run_id}`; check the Airflow logs)")
-                    elif state == "error":
-                        st.error(f"{label}: {run_ref.get('error', 'unknown error')}")
-                    else:
-                        st.info(f"{label}: {state} (run `{run_id}`)")
 
+def render_pipeline_commands() -> None:
+    """How to run the pipeline -- from a terminal, never from a page (ADR-06, ADR-09).
+
+    Every run goes through the audited CLI, which records it with its stage
+    results and contract outcomes; the tables on this page read those records.
+    """
+    st.subheader("Run the pipeline")
+    st.caption(
+        "The dashboard only reads. Run the pipeline from a terminal at the repository root; "
+        "each run is recorded with its stage results and quality gates and appears in the "
+        "audit tab after a refresh."
+    )
+    st.code(PIPELINE_COMMANDS, language="bash")
     if st.button("Refresh data", icon=":material/refresh:"):
         st.cache_data.clear()
         st.rerun()

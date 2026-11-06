@@ -25,12 +25,13 @@ LAYERS = ("raw", "bronze", "silver", "gold")
 def relative_path(path) -> str:
     """Path relative to the repo root, as stored in the database.
 
-    The same file has a different absolute path depending on where the
-    pipeline runs -- `/home/<user>/.../data/references/x.bib` on the host vs
-    `/opt/airflow/project/data/references/x.bib` inside the Airflow container. Since
-    raw-layer idempotency keys off this string, storing the absolute path made
-    the same file look like two different files and duplicated every row on a
-    cross-environment run. Relative to REPO_ROOT it is identical in both.
+    The same file has a different absolute path in every checkout and inside
+    any container (`/home/<user>/.../data/references/x.bib` on one machine,
+    `/opt/project/data/references/x.bib` in an image). Since raw-layer
+    idempotency keys off this string, storing the absolute path made the same
+    file look like two different files and duplicated every row on a
+    cross-environment run -- it happened when the pipeline also ran inside a
+    container. Relative to REPO_ROOT it is identical everywhere.
     """
     resolved = Path(path).resolve()
     try:
@@ -133,8 +134,8 @@ class QdrantSettings:
     `url` has no default on purpose. Every stage and reader that touches vectors
     needs it, and a missing setting should fail naming the variable rather than
     quietly connect to whatever happens to answer on localhost. On the host it
-    is `http://127.0.0.1:6333`; inside docker compose the services override it to
-    `http://qdrant:6333`, the same way they override `AIRFLOW_BASE_URL`.
+    is `http://127.0.0.1:6333`; inside docker compose the dashboard service
+    overrides it to `http://qdrant:6333`.
     """
 
     url: str
@@ -152,13 +153,3 @@ class QdrantSettings:
 
 def get_qdrant_settings() -> QdrantSettings:
     return QdrantSettings.from_env()
-
-
-def get_airflow_base_url() -> str:
-    """Base URL of the Airflow webserver the dashboard triggers DAG runs on.
-
-    Defaults to localhost:8080 (running `streamlit run main.py` on the host,
-    with docker compose publishing Airflow's port there). Inside the compose
-    network, the `dashboard` service overrides this to `http://airflow:8080`.
-    """
-    return os.environ.get("AIRFLOW_BASE_URL", "http://localhost:8080")

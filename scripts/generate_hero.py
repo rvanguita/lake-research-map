@@ -684,9 +684,9 @@ def generate_svg() -> str:
       <rect x="120" y="0" width="146" height="26" rx="4" fill="#ccfbf1" stroke="#2dd4bf" stroke-width="0.8"/>
       <text x="193" y="17" text-anchor="middle" font-size="10" font-weight="700" fill="#0f766e">MySQL Medallion Lake</text>
 
-      <!-- Tech Badge 3: Airflow -->
+      <!-- Tech Badge 3: Qdrant -->
       <rect x="276" y="0" width="144" height="26" rx="4" fill="#e0e7ff" stroke="#818cf8" stroke-width="0.8"/>
-      <text x="348" y="17" text-anchor="middle" font-size="10" font-weight="700" fill="#3730a3">Apache Airflow 3.x</text>
+      <text x="348" y="17" text-anchor="middle" font-size="10" font-weight="700" fill="#3730a3">Qdrant Vector Store</text>
 
       <!-- Tech Badge 4: Streamlit -->
       <rect x="430" y="0" width="134" height="26" rx="4" fill="#fee2e2" stroke="#f87171" stroke-width="0.8"/>
