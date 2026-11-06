@@ -27,13 +27,21 @@ from lake_research_map.transform.embeddings import EMBED_MODEL_NAME, EMBED_MODEL
 ABSTRACT_MIN_CHARS = 50
 
 
+# Both helpers take whatever a reader hands them: `None` from a database row,
+# but NaN from a pandas 3 column, where a missing string or list is a float.
+
+
 def primary_source(sources: Sequence[str] | None) -> str:
     """The publisher an article is attributed to: the first of its sources."""
-    return sources[0] if sources else "unknown"
+    if isinstance(sources, list | tuple) and sources:
+        return sources[0]
+    return "unknown"
 
 
 def abstract_is_missing(abstract: str | None) -> bool:
-    return len((abstract or "").strip()) < ABSTRACT_MIN_CHARS
+    if not isinstance(abstract, str):
+        return True
+    return len(abstract.strip()) < ABSTRACT_MIN_CHARS
 
 
 def relevance_margin(relevance_score: float | None, offtopic_score: float | None) -> float | None:

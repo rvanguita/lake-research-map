@@ -108,7 +108,7 @@ negative example.
 
 ## Retrieval and anomaly audit
 
-Hybrid retrieval combines BM25 and dense embedding ranks through reciprocal rank fusion. The interface exposes component ranks/scores so a reviewer can inspect why an item appeared. No retrieval-quality claim is made without a labeled query relevance set.
+Hybrid retrieval combines BM25 and dense embedding ranks through reciprocal rank fusion (k = 60). The unit ranked is the article: by default each article competes through its one abstract chunk, because ranking every full-text chunk would favour the ~3% of articles that have a PDF; with the all-chunks scope an article ranks where its best chunk ranks. Eligibility filters apply before ranking, identically in the lexical and dense paths. An optional cross-encoder reorders the fused candidates. The interface exposes component ranks/scores so a reviewer can inspect why an item appeared. No retrieval-quality claim is made without a labeled query relevance set.
 
 Isolation Forest results are audit priorities. They identify multivariate outliers and do not imply data errors, exceptional scientific quality, or fraud.
 

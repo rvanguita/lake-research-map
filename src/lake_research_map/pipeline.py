@@ -1613,44 +1613,46 @@ def _run_evidence_command(args: argparse.Namespace) -> None:
             )
             workflow = "taxonomy"
         else:
-            # Retrieval pools the live search modes, so it needs the embedded
-            # corpus rather than the silver metadata the others read.
-            from lake_research_map.dashboard import loaders
-            from lake_research_map.dashboard.search import (
-                bm25_search,
-                hybrid_search_rrf,
-                semantic_search,
+            # Retrieval pools every benchmarked mode -- the chunk-level ones the
+            # v1 judgements came from and the article-level ones -- over the
+            # published version, so it needs the embedded corpus, not silver.
+            from lake_research_map.retrieval.api import (
+                BENCHMARK_MODES,
+                RetrievalUnavailable,
+                build_retriever,
+                mode_runner,
             )
 
-            # Loaded once: every query pools over the same chunk population,
-            # and re-reading it per query would be ten full table scans.
-            chunk_frame = loaders.chunk_search_data()
-            if chunk_frame.empty:
-                # `chunk_search_data` tolerates an unreachable database and an
-                # absent table alike, both as an empty frame, so this message
-                # must not assert a cause it cannot tell apart.
-                raise ValueError(
-                    "no chunks available to retrieve over. Either the `embed` stage has not "
-                    "run, or the database is unreachable -- check the log above for a "
-                    "connection error before re-running `--stage embed`."
-                )
+            retriever = build_retriever()
+            runners = {
+                name: mode_runner(retriever, settings) for name, settings in BENCHMARK_MODES.items()
+            }
+            pooled_modes: list[str] = []
+            skipped_modes: dict[str, str] = {}
 
             def _retrieve(text: str, depth: int) -> list[str]:
-                frames = (
-                    semantic_search(text, chunk_frame, top_k=depth),
-                    bm25_search(text, chunk_frame, top_k=depth),
-                    hybrid_search_rrf(text, chunk_frame, top_k=depth),
-                )
+                rankings = []
+                for name, run_mode in runners.items():
+                    if name in skipped_modes:
+                        continue
+                    try:
+                        rankings.append(run_mode(text, depth))
+                    except RetrievalUnavailable as exc:
+                        # A mode that cannot run (no reranker download, Qdrant
+                        # down) is left out of the pool and said so, rather
+                        # than failing the whole sample.
+                        skipped_modes[name] = str(exc)
+                        logger.warning("evidence retrieval: mode %r skipped: %s", name, exc)
+                        continue
+                    if name not in pooled_modes:
+                        pooled_modes.append(name)
                 # Preserve each mode's rank order before de-duplicating the
                 # pooled judgement candidates. No mode supplies the ground
                 # truth for its competitors.
-                return list(
-                    dict.fromkeys(
-                        str(doi) for hits in frames if "doi" in hits for doi in hits["doi"]
-                    )
-                )
+                return list(dict.fromkeys(doi for ranking in rankings for doi in ranking))
 
             subjects, stats = evidence_samples.retrieval_candidates(_retrieve, depth=limit or 10)
+            stats = {**stats, "pooled_modes": pooled_modes, "skipped_modes": skipped_modes}
             workflow = "retrieval"
 
     output = Path(args.output)
@@ -2208,6 +2210,13 @@ def _run_vector_command(args: argparse.Namespace) -> None:
         session.close()
 
 
+def _configure_retrieval_commands(subparsers) -> None:
+    """`search`, `screen` and `mcp` (read-only: none takes the pipeline lock)."""
+    from lake_research_map.retrieval.cli import configure
+
+    configure(subparsers)
+
+
 def _configure_maintenance_commands(subparsers) -> None:
     maintenance = subparsers.add_parser("maintenance", help="Safe pipeline recovery operations")
     actions = maintenance.add_subparsers(dest="maintenance_action", required=True)
@@ -2482,6 +2491,8 @@ def _mutates_published_inputs(args: argparse.Namespace) -> bool:
         # Repairs write collections a running embed stage or a publication may
         # be using; only the read-only status runs alongside them.
         return args.vectors_action != "status"
+    # `search`, `screen` and `mcp` only read; a long-running MCP server must
+    # never hold the lock a pipeline run needs.
     return False
 
 
@@ -2512,6 +2523,7 @@ def main(argv: list[str] | None = None) -> None:
     _configure_audit_commands(subparsers)
     _configure_maintenance_commands(subparsers)
     _configure_vector_commands(subparsers)
+    _configure_retrieval_commands(subparsers)
     args = parser.parse_args(argv if argv is not None else sys.argv[1:])
     lock = (
         _pipeline_lock(f"cli-{args.command}-{uuid.uuid4()}")
@@ -2568,6 +2580,18 @@ def main(argv: list[str] | None = None) -> None:
                 _run_vector_command(args)
             except (ValueError, VectorStoreUnavailable) as exc:
                 parser.error(str(exc))
+        elif args.command in ("search", "screen", "mcp"):
+            from lake_research_map.retrieval.api import RetrievalUnavailable
+            from lake_research_map.retrieval.cli import run as run_retrieval
+
+            try:
+                run_retrieval(args)
+            except (ValueError, RetrievalUnavailable) as exc:
+                parser.error(str(exc))
+            except PipelineInterruptedError:
+                # Ctrl-C or SIGTERM is how an MCP client stops the server; it
+                # is not a pipeline failure.
+                logger.info("%s stopped", args.command)
         else:
             if args.execution_id is None and args.trigger == "cli" and args.workflow is None:
                 if args.source_policy == "append":

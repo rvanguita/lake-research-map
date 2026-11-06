@@ -28,6 +28,9 @@ docker compose --profile qdrant up -d qdrant     # vector store (:6333) -- embed
 uv run lake-research-map vectors status          # each version's Qdrant collection vs its Gold chunks
 uv run lake-research-map vectors backfill        # copy vectors still held as MySQL BLOBs into Qdrant
 uv run lake-research-map vectors rebuild         # restore a lost collection from Gold text (--version ID)
+uv run lake-research-map search "query" --json   # article-level ranking (--mode --scope --rerank, filters)
+uv run lake-research-map screen "subject" --off-subject "competing reading"   # score every article
+uv run lake-research-map mcp                     # the same operations as MCP tools (stdio)
 uv run pytest                                    # full suite (in-memory SQLite + Qdrant local mode)
 RUN_QDRANT_INTEGRATION=1 uv run pytest -m qdrant # server-only Qdrant checks against the compose service
 uv run pytest tests/test_silver_articles.py -k merge   # one file / one test
@@ -167,6 +170,31 @@ depends on Qdrant.
 
 `main.py` calls `app.main()` **as a function** on purpose: Streamlit re-executes the entry script on every
 rerun, and a module imported for its top-level side effects would only render once.
+
+### Retrieval (`retrieval/`)
+
+The one entry point for "which articles are most relevant to X": `retrieval/api.py::Retriever`, behind the
+`search`/`screen` commands, the MCP server (`retrieval/mcp_server.py`, five tools) and the dashboard's article
+search. The package imports neither Streamlit nor `dashboard/`, and none of its commands takes the pipeline lock
+(a long-running MCP server must never block a run).
+
+- **One hit per article.** By default only the abstract chunks rank: one per article, so every article competes
+  on equal terms. `scope="all"` ranks every chunk (an article ranks where its best chunk ranks) and is labelled
+  as favouring the ~3% of articles with a PDF; full text's intended use is `evidence(doi, query)`.
+- **Dense from Qdrant, lexical in-process.** Dense candidates are an exact Qdrant query with the filters applied
+  server-side; BM25 runs over the same Gold rows with an index built once per process (IDF over the whole scope,
+  so a filter changes which documents may rank, never how one scores); hybrid is RRF with k=60; ties break by
+  DOI, so a query returns the same list on every run.
+- **One filter definition.** `retrieval/filters.py::ArticleFilters` becomes a pandas mask and a Qdrant payload
+  filter; `tests/test_retrieval_filters.py` holds the two to the same article set, missing-margin rule included.
+  The derivations behind the payload (`primary_source`, `abstract_is_missing`, `relevance_margin`) live in
+  `transform/vector_payloads.py` and nowhere else.
+- **The reranker is experimental.** `Xenova/ms-marco-MiniLM-L-6-v2`, pinned like the embedder (by snapshot or
+  by byte-identical model files). No mode -- reranked or not -- becomes a default until the WP-13 human labels
+  exist (PRD §8.5).
+- **Truncation is measured, not assumed.** fastembed's tokenizer truncates before it counts, so
+  `retrieval/models.py::token_lengths` loads the embedder's `tokenizer.json` without truncation. A lexical-only
+  search never loads a model for it.
 
 ### Why the `semantic` stage exists
 

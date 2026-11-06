@@ -343,6 +343,16 @@ This baseline does not imply that every analytical method is confirmatory. The l
 - **Deliverable:** `transform/pdf_text.py` (four pure cleaners in a fixed order), applied by both Gold builders, which report `pdf_*` counts in their stats.
 - **Completion:** On the 97 linked PDFs the reference list is cut where a standalone heading exists past 60% of the text; the cleaning effect is reported per build.
 - **Evidence:** Measured on the 97 linked PDFs: reference lists removed from 88, 6,323 line-break hyphenations rejoined, 7,368 lines of page furniture dropped; full-text chunks 4,437 → 3,623 (−18.3%), and non-final chunks ending a sentence 89.7% → 92.7%. Detecting the list by `[n]` density was rejected: 373 of the 793 citation-dense chunks precede the heading. The regeneration that applied it is recorded in `docs/evidence/2026-11-06-pdf-text-cleaning.md`.
+
+### `WP-28` — Article-level retrieval API, CLI and MCP server
+
+- **Status:** Complete on 2026-11-06 for the API, the CLI and the MCP server; the dashboard search moves to it in the same cycle.
+- **Objective:** Let a RAG client filter the most relevant articles for a subject through the same ranking a reviewer sees.
+- **Justification:** Retrieval existed only inside a Streamlit page, ranked chunks (one article could fill the top-k), and took no metadata filters.
+- **Dependencies:** `WP-13` (benchmark harness and labels), `WP-26` (Qdrant), `WP-27` (clean full text).
+- **Deliverable:** `retrieval/` (`Retriever.search/screen/evidence/article/status`, filters shared by pandas and Qdrant, BM25 index built once, RRF, optional pinned cross-encoder, untruncated token counts); `lake-research-map search|screen|mcp`; five MCP tools; evidence pooling over seven modes.
+- **Completion:** One hit per article; filters before ranking with pandas/Qdrant parity under test; JSON-only stdout; no command takes the pipeline lock; no mode becomes the default without `WP-13` labels.
+- **Evidence:** WP28_EVIDENCE_PLACEHOLDER
 ## 8. Cross-cutting completion gates
 
 Every work package that changes data or analytical behavior must include:
@@ -366,11 +376,12 @@ Every work package that changes data or analytical behavior must include:
 | `FR-09` | `ADR-05` | `WP-09`, `WP-10` |
 | `FR-10`, `NFR-05` | `ADR-04` | `WP-13`, `WP-25` |
 | `FR-13` | `ADR-03`, `ADR-08` | `WP-06`, `WP-26` |
+| `FR-14` | `ADR-06`, `ADR-08` | `WP-13`, `WP-28` |
 | `FR-15` | `ADR-03` | `WP-27` |
 | `FR-11`, `NFR-06` | `ADR-01`, `ADR-06` | `WP-08`, `WP-22` |
 | `FR-12`, `NFR-07`, `NFR-08` | `ADR-02`, `ADR-06` | `WP-03`, `WP-20`, `WP-21`, `WP-22` |
 | `RQ-04` through `RQ-07` | `ADR-02`, `ADR-04`, `ADR-05` | `WP-11` through `WP-21` |
-| `RQ-08` | `ADR-02`, `ADR-04` | `WP-06`, `WP-13`, `WP-21`, `WP-25` |
+| `RQ-08` | `ADR-02`, `ADR-04`, `ADR-08` | `WP-06`, `WP-13`, `WP-21`, `WP-25`, `WP-28` |
 
 ## 10. Deferred ideas
 

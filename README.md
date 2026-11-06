@@ -219,6 +219,14 @@ uv run lake-research-map vectors status
 uv run lake-research-map vectors backfill
 uv run lake-research-map vectors rebuild [--version VERSION_SHA256]
 
+# Article-level retrieval over the published version (one hit per article; JSON with --json)
+uv run lake-research-map search "hosting capacity of feeders with rooftop PV" --top-k 10 --json
+uv run lake-research-map search "IEEE 33-bus SOCP" --mode bm25 --year-min 2018 --min-margin 0
+uv run lake-research-map screen "distribution expansion planning" --off-subject "freight logistics" --limit 20
+
+# The same operations as MCP tools for an LLM client (stdio), e.g. registered in Claude Code:
+claude mcp add lake-research-map -- uv run --directory "$PWD" lake-research-map mcp
+
 # Schema bootstrap & additive column migration
 uv run python -m lake_research_map.db.bootstrap
 ```
@@ -310,6 +318,14 @@ lake-research-map/
 │   │   ├── vector_payloads.py    # What each Qdrant point carries
 │   │   ├── semantics.py          # Contrastive screening, KMeans, UMAP/t-SNE/PCA
 │   │   └── screening_calibration.py # SLR sensitivity/recall threshold calibration
+│   ├── retrieval/                # Article-level retrieval, shared by CLI, MCP and dashboard
+│   │   ├── api.py                # Retriever: search, screen, evidence, article, status
+│   │   ├── filters.py            # ArticleFilters as a pandas mask and as a Qdrant filter
+│   │   ├── rank.py               # BM25 index, RRF, per-article collapse
+│   │   ├── index.py              # Published version's articles and chunk texts
+│   │   ├── models.py             # Pinned reranker, untruncated token counts
+│   │   ├── cli.py                # search / screen / mcp commands
+│   │   └── mcp_server.py         # Five MCP tools over stdio
 │   └── dashboard/                # Multipage Streamlit application
 │       ├── app.py                # Dashboard navigation & router
 │       ├── data.py               # Raw SQL data layer

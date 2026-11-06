@@ -20,7 +20,6 @@ from lake_research_map.db.engines import get_engine
 from lake_research_map.db.vector_store import (
     VectorStoreUnavailable,
     get_vector_store,
-    point_id,
 )
 
 logger = logging.getLogger(__name__)
@@ -227,11 +226,9 @@ _CHUNK_LIGHT_COLUMNS = ("id", "doi", "seq", "chunk_type", "char_len", "embed_mod
 
 def load_chunks() -> pd.DataFrame:
     """Lightweight chunk metadata from `gold.lit_chunks`: everything the
-    dashboard's aggregate stats/charts need, without the `text` and
-    `embedding` columns. Both are large per row -- `embedding` is a ~768-float
-    JSON vector -- and unused outside the on-demand search box in
-    `pages/quality.py`, which pulls them separately via
-    `load_chunk_search_data` only once a query is actually submitted.
+    dashboard's aggregate stats/charts need, without the `text` column, which is
+    large per row and needed only by the article search (the retrieval package
+    loads it once per published version; vectors stay in Qdrant).
     Deserializing them here for every row dominated render time on every page
     that touches chunk counts (~7s for ~6k rows just for this one query).
     """
@@ -378,58 +375,6 @@ def load_rejected_records() -> pd.DataFrame:
     table = Table("lit_rejected", MetaData(), autoload_with=get_engine("silver"))
     query = select(table).order_by(table.c.rejected_at.desc())
     return pd.read_sql_query(query, get_engine("silver"))
-
-
-def load_chunk_search_data() -> pd.DataFrame:
-    """Binary-first chunk rows for the on-demand search box in
-    `pages/quality.py` -- loaded lazily, only once a query is actually
-    submitted, never on a plain page render.
-    """
-    version_id = active_dataset_version()
-    if version_id is None or not table_exists("gold", "lit_dataset_chunks"):
-        return pd.DataFrame()
-    engine = get_engine("gold")
-    table = Table("lit_dataset_chunks", MetaData(), autoload_with=engine)
-    names = ("id", "doi", "seq", "chunk_type", "text", "embed_model")
-    columns = [table.c[name] for name in names if name in table.c]
-    frame = pd.read_sql_query(
-        select(*columns).where(table.c.dataset_version_id == version_id), engine
-    )
-    return attach_chunk_vectors(frame, version_id)
-
-
-def attach_chunk_vectors(frame: pd.DataFrame, version_id: str) -> pd.DataFrame:
-    """Add each chunk's vector from the version's Qdrant collection.
-
-    The vector is exposed as `embedding_bin` (float32 bytes), the shape the
-    search functions consume. When the store does not answer, every vector is
-    missing and dense search degrades to lexical; the warning says why.
-    """
-    frame = frame.copy()
-    frame["embedding_bin"] = None
-    if frame.empty:
-        return frame
-    keys = [
-        point_id(doi, chunk_type, seq)
-        for doi, chunk_type, seq in zip(
-            frame["doi"], frame["chunk_type"], frame["seq"], strict=True
-        )
-    ]
-    try:
-        store = get_vector_store()
-        points = (
-            store.fetch(version_id, keys, with_vectors=True, payload_fields=False)
-            if store.has_collection(version_id)
-            else {}
-        )
-    except VectorStoreUnavailable as exc:
-        logger.warning("chunk vectors unavailable: %s", exc)
-        return frame
-    frame["embedding_bin"] = [
-        points[key].vector.tobytes() if key in points and points[key].vector is not None else None
-        for key in keys
-    ]
-    return frame
 
 
 def raw_funnel_counts() -> dict[str, dict[str, int]]:

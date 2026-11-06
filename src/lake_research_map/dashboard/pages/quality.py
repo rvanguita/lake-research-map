@@ -24,7 +24,6 @@ from lake_research_map.dashboard.retrieval_eval import (
     benchmark_retrieval_modes,
     evaluate_rankings,
 )
-from lake_research_map.dashboard.search import bm25_search, hybrid_search_rrf, semantic_search
 from lake_research_map.dashboard.theme import (
     CATEGORICAL_PALETTE,
     CHART_HEIGHT,
@@ -32,10 +31,27 @@ from lake_research_map.dashboard.theme import (
     TREND_DOWN_COLOR,
     theme_tokens,
 )
+from lake_research_map.retrieval.api import (
+    BENCHMARK_MODES,
+    ArticleHit,
+    RetrievalUnavailable,
+    mode_runner,
+)
+from lake_research_map.retrieval.filters import ArticleFilters
 from lake_research_map.transform.evidence_samples import RETRIEVAL_QUERIES
 from lake_research_map.transform.gold_articles import CHUNK_MAX_CHARS
+from lake_research_map.transform.vector_payloads import ABSTRACT_MIN_CHARS, abstract_is_missing
 
 SEARCH_DEMO_MAX_RESULTS = 10
+SEARCH_MODES = {
+    "Hybrid (dense + BM25, RRF)": "hybrid",
+    "Dense (BGE-small)": "dense",
+    "BM25 (lexical)": "bm25",
+}
+SEARCH_SCOPES = {
+    "Abstracts": "abstract",
+    "All chunks (favours articles with a PDF)": "all",
+}
 # The pooled judgement sample was drawn at depth 10, so scoring deeper than
 # that would count unjudged results as irrelevant and understate every mode.
 RETRIEVAL_BENCHMARK_K = 10
@@ -67,7 +83,7 @@ def render() -> None:
             "Metadata and coverage",
             "Text, chunks and embeddings",
             "Audit and anomalies",
-            "Hybrid search",
+            "Article search",
         ],
         on_change="rerun",
         key="quality_primary_tab",
@@ -101,7 +117,7 @@ def render() -> None:
             _bibliometric_anomalies_audit(articles_df)
     elif tab_search.open:
         with tab_search:
-            _search_demo(chunks_df)
+            _article_search(articles_df)
             _retrieval_benchmark()
 
 
@@ -664,124 +680,191 @@ def _chunks_per_article(chunks_df: pd.DataFrame) -> None:
     )
 
 
-def _render_result_card(row: pd.Series, term_pattern: re.Pattern | None) -> None:
-    text = str(row["text"])
-    if term_pattern:
-        match = term_pattern.search(text)
-        idx = match.start() if match else 0
-        match_len = (match.end() - match.start()) if match else 0
-    else:
-        idx, match_len = 0, 0
-    start = max(idx - 120, 0)
-    end = min(idx + match_len + 120, len(text))
-    excerpt = ("…" if start > 0 else "") + text[start:end] + ("…" if end < len(text) else "")
-    if term_pattern:
-        excerpt = term_pattern.sub(lambda m: f"**{m.group(0)}**", excerpt)
-    doi = row.get("doi")
-    chunk_type = row.get("chunk_type", "")
+def _sidebar_filters() -> ArticleFilters:
+    """The sidebar's filters, applied before ranking -- the same population the pages show.
+
+    Non-articles stay eligible here because the sidebar never excluded them.
+    """
+    year_range, sources, venues, min_margin, categories = loaders.filter_signature()
+    return ArticleFilters(
+        year_range=tuple(year_range) if isinstance(year_range, list | tuple) else year_range,
+        sources=tuple(sources),
+        venues=tuple(venues),
+        publication_categories=tuple(categories),
+        min_margin=min_margin,
+        exclude_non_articles=False,
+    )
+
+
+def _escape_markdown(text: str) -> str:
+    # `$` would start LaTeX in st.markdown, and abstracts quote costs in dollars.
+    return text.replace("\\", "\\\\").replace("$", "\\$").replace("*", "\\*").replace("_", "\\_")
+
+
+def _highlight(text: str, query: str) -> str:
+    escaped = _escape_markdown(text)
+    terms = sorted(
+        {t for t in re.findall(r"\w+", query.lower()) if len(t) > 2}, key=len, reverse=True
+    )
+    if not terms:
+        return escaped
+    pattern = re.compile("|".join(re.escape(term) for term in terms), re.IGNORECASE)
+    return pattern.sub(lambda match: f"**{match.group(0)}**", escaped)
+
+
+def _render_article_hit(hit: ArticleHit, query: str) -> None:
     with st.container(border=True):
-        header = f"**{chunk_type}**"
-        if pd.notna(row.get("score")):
-            label = "RRF score" if pd.notna(row.get("dense_score")) else "dense score"
-            header += f" · {label} {float(row['score']):.3f}"
-        if pd.notna(row.get("dense_rank")):
-            header += f" · dense rank {int(row['dense_rank'])}"
-        if pd.notna(row.get("bm25_score")):
-            header += f" · BM25 {float(row['bm25_score']):.3f}"
-        if pd.notna(row.get("bm25_rank")):
-            header += f" · BM25 rank {int(row['bm25_rank'])}"
-        if doi:
-            header += f" · [{doi}](https://doi.org/{doi})"
-        st.markdown(header)
-        st.caption(excerpt)
+        st.markdown(f"**{hit.rank}. {_escape_markdown(hit.title or hit.doi)}**")
+        where = " · ".join(str(part) for part in (hit.year, hit.venue, hit.source) if part)
+        st.caption(f"{_escape_markdown(where)} · [{hit.doi}](https://doi.org/{hit.doi})")
+        scores = [f"{hit.mode} score {hit.score:.4f}"]
+        if hit.dense_rank is not None:
+            scores.append(f"dense #{hit.dense_rank} ({hit.dense_score:.3f})")
+        if hit.bm25_rank is not None:
+            scores.append(f"BM25 #{hit.bm25_rank} ({hit.bm25_score:.2f})")
+        if hit.rerank_rank is not None:
+            scores.append(f"rerank #{hit.rerank_rank} ({hit.rerank_score:.2f})")
+        flags = []
+        if hit.scope == "all":
+            flags.append(f"matched {hit.chunk_type} chunk {hit.chunk_seq}")
+        if hit.abstract_missing:
+            flags.append("no usable abstract: ranked on title and keywords")
+        if hit.abstract_truncated:
+            flags.append("abstract longer than the model window: its tail is not in the vector")
+        if hit.relevance_margin is not None and hit.relevance_margin < 0:
+            flags.append("closer to the logistics reading (margin < 0)")
+        if hit.has_pdf:
+            flags.append("full text available")
+        st.caption(" · ".join(scores + flags))
+        st.markdown(_highlight(hit.excerpt, query))
 
 
-def _search_demo(chunks_df: pd.DataFrame) -> None:
-    st.subheader("🔍 Search the chunks")
-    has_embeddings = "has_embedding" in chunks_df.columns and bool(chunks_df["has_embedding"].any())
+def _abstract_disclosure(articles_df: pd.DataFrame, retriever) -> None:
+    """What the abstract-level ranking cannot see, for the articles in view."""
+    total = len(articles_df)
+    missing = (
+        int(articles_df["abstract"].map(abstract_is_missing).sum())
+        if "abstract" in articles_df.columns
+        else None
+    )
+    truncated_text, window_text = "n/a", "the embedding model could not be loaded to measure it"
+    try:
+        lengths = retriever.abstract_token_lengths()
+        if lengths is not None:
+            window = retriever.context_window()
+            dois = set(articles_df["doi"]) if "doi" in articles_df.columns else set(lengths)
+            truncated = sum(1 for doi, n in lengths.items() if doi in dois and n > window)
+            truncated_text = f"{truncated:,}"
+            window_text = f"tail beyond {window} tokens never reaches the vector"
+    except Exception as exc:  # a missing model must not take the page down
+        window_text = f"not measured ({exc.__class__.__name__})"
+    metric_row(
+        [
+            (
+                "Articles without a usable abstract",
+                "n/a" if missing is None else f"{missing:,}",
+                None
+                if missing is None or not total
+                else f"{missing / total:.1%} of the {total:,} in view; under {ABSTRACT_MIN_CHARS} characters",
+            ),
+            ("Abstracts over the model window", truncated_text, window_text),
+        ]
+    )
 
-    if has_embeddings:
-        st.caption(
-            "Search for real vector similarity: the query is embedded with the same model "
-            "(`BAAI/bge-small-en-v1.5` via `fastembed`) used for chunks, and the results are "
-            "ranked by cosine similarity (`dashboard/search.py`)."
+
+def _article_search(articles_df: pd.DataFrame) -> None:
+    st.subheader("🔍 Find the most relevant articles")
+    retriever = loaders.retriever()
+    if retriever is None:
+        st.info(
+            "Search needs a published Gold version. Run the pipeline "
+            "(`uv run lake-research-map --stage all`) and reload this page."
         )
-    else:
-        st.caption(
-            "This is keyword retrieval, **not** semantic search: embeddings are not yet available. "
-            "Run the `embed` stage to enable dense and hybrid retrieval. Keyword matches are useful "
-            "for exact terms but do not measure semantic relevance."
-        )
-    if chunks_df.empty or "doi" not in chunks_df.columns:
-        st.info("No chunk available in this layer/filter.")
         return
-
-    search_mode = "Hybrid (vector + BM25 RRF)"
-    if has_embeddings:
-        col_q, col_m = st.columns([3, 2])
-        with col_q:
-            query = st.text_input(
-                "Search (natural language or term):",
-                placeholder="ex.: distribution network, hosting capacity, IEEE 33-bus, SOCP...",
-            )
-        with col_m:
-            search_mode = st.radio(
-                "Recovery algorithm:",
-                options=[
-                    "Hybrid (vector + BM25 RRF)",
-                    "Dense vector (BGE-Small)",
-                    "BM25 lexical",
-                ],
-                horizontal=True,
-            )
-    else:
+    st.caption(
+        "One result per article. By default each article competes through its abstract "
+        "chunk (title, keywords and abstract), so every article is ranked on equal terms; "
+        "the sidebar filters apply before ranking. The same ranking is available outside "
+        "the dashboard through `lake-research-map search` and the MCP server."
+    )
+    col_query, col_mode = st.columns([3, 2])
+    with col_query:
         query = st.text_input(
-            "Search for a term in chunks:",
-            placeholder="ex.: distribution network, hosting capacity, monte carlo...",
+            "Query (natural language or exact terms):",
+            placeholder="e.g. hosting capacity of feeders with rooftop PV, IEEE 33-bus, SOCP",
+            key="quality_search_query",
         )
+    with col_mode:
+        mode_label = st.radio(
+            "Ranking:", list(SEARCH_MODES), horizontal=True, key="quality_search_mode"
+        )
+    col_scope, col_rerank = st.columns([3, 2])
+    with col_scope:
+        scope_label = st.segmented_control(
+            "Ranked unit:",
+            list(SEARCH_SCOPES),
+            default="Abstracts",
+            required=True,
+            key="quality_search_scope",
+        )
+    with col_rerank:
+        rerank = st.checkbox(
+            "Rerank with a cross-encoder (experimental)",
+            key="quality_search_rerank",
+            help="Reorders the candidates with a local MiniLM cross-encoder. Not an approved "
+            "default: no mode is, until the WP-13 human relevance labels exist.",
+        )
+    _abstract_disclosure(articles_df, retriever)
     if not query:
         return
 
-    # `chunks_df` is the lightweight, filter-scoped frame (no `text`/
-    # `embedding` -- see `data.py::load_chunks`); the full columns are only
-    # loaded here, lazily, once a query is actually submitted, then scoped to
-    # the same filtered DOI set.
-    search_df = loaders.chunk_search_data()
-    if search_df.empty or "doi" not in search_df.columns:
-        st.info("No chunk available for search in this layer.")
-        return
-    scoped = search_df[search_df["doi"].isin(chunks_df["doi"])]
-    if not require_columns(scoped, ["text"], "No chunk with text available in this layer/filter."):
-        return
-
-    if has_embeddings:
-        if "Hybrid" in search_mode:
-            matches = hybrid_search_rrf(query, scoped, top_k=SEARCH_DEMO_MAX_RESULTS)
-            caption_mode = "Hybrid Search RRF (BGE-Small + BM25 Okapi)"
-        elif search_mode.startswith("Dense"):
-            matches = semantic_search(query, scoped, top_k=SEARCH_DEMO_MAX_RESULTS)
-            caption_mode = "Dense vector search (BGE-Small)"
-        else:
-            matches = bm25_search(query, scoped, top_k=SEARCH_DEMO_MAX_RESULTS)
-            caption_mode = "BM25 lexical search"
-        st.caption(
-            f"{caption_mode} — Top {len(matches):,} most relevant chunks (of {len(scoped):,} available)."
+    mode = SEARCH_MODES[mode_label]
+    scope = SEARCH_SCOPES[scope_label or "Abstracts"]
+    filters = _sidebar_filters()
+    try:
+        hits = retriever.search(
+            query,
+            top_k=SEARCH_DEMO_MAX_RESULTS,
+            mode=mode,
+            scope=scope,
+            filters=filters,
+            rerank=rerank,
         )
-    else:
-        mask = scoped["text"].str.contains(query, case=False, na=False, regex=False)
-        n_total_matches = int(mask.sum())
-        matches = scoped.loc[mask].head(SEARCH_DEMO_MAX_RESULTS)
-        st.caption(f"{n_total_matches:,} of {len(scoped):,} chunks contain the search term.")
-
-    if matches.empty:
+    except RetrievalUnavailable as exc:
+        fallback = "bm25" if not rerank or mode == "bm25" else mode
+        if rerank and mode != "bm25":
+            st.warning(f"The reranker is unavailable ({exc}); showing the ranking without it.")
+        else:
+            st.warning(
+                f"Dense retrieval is unavailable ({exc}). Showing lexical (BM25) results; start "
+                "Qdrant with `docker compose --profile qdrant up -d qdrant` for dense search."
+            )
+        try:
+            hits = retriever.search(
+                query, top_k=SEARCH_DEMO_MAX_RESULTS, mode=fallback, scope=scope, filters=filters
+            )
+        except RetrievalUnavailable:
+            hits = retriever.search(
+                query, top_k=SEARCH_DEMO_MAX_RESULTS, mode="bm25", scope=scope, filters=filters
+            )
+    if scope == "all":
+        st.caption(
+            f"Every chunk ranked, abstracts and full text: the {retriever.corpus.fulltext_articles:,} "
+            "articles with a linked PDF compete with many chunks each, so this view favours "
+            "them. Use it to find passages, not to compare articles."
+        )
+    if not hits:
+        st.info("No article in view matches this query. Widen the sidebar filters or rephrase.")
         return
-
-    term_pattern = re.compile(re.escape(query), re.IGNORECASE)
-    for _, row in matches.iterrows():
-        _render_result_card(row, term_pattern)
-
-    if not has_embeddings and n_total_matches > SEARCH_DEMO_MAX_RESULTS:
-        st.caption(f"Showing {SEARCH_DEMO_MAX_RESULTS} of {n_total_matches:,} results.")
+    for hit in hits:
+        _render_article_hit(hit, query)
+    table = pd.DataFrame([hit.to_dict() for hit in hits])
+    article_table(
+        table,
+        ["rank", "title", "year", "venue", "source", "score", "dense_rank", "bm25_rank",
+         "rerank_rank", "relevance_margin", "abstract_missing", "abstract_truncated", "doi"],
+        download_key="article_search_hits",
+    )  # fmt: skip
 
 
 def _bibliometric_anomalies_audit(articles_df: pd.DataFrame) -> None:
@@ -856,15 +939,27 @@ def _bibliometric_anomalies_audit(articles_df: pd.DataFrame) -> None:
     article_table(outliers, display_cols, download_key="anomalous_articles_audit")
 
 
-def _retrieval_benchmark() -> None:
-    """Score dense, BM25 and RRF over the versioned query set — `RQ-08`, `WP-13`.
+def _benchmark_runners(retriever, probe: str) -> tuple[dict, dict[str, str]]:
+    """Every benchmark mode that can run here, and why the others cannot."""
+    runners, skipped = {}, {}
+    for name, settings in BENCHMARK_MODES.items():
+        run = mode_runner(retriever, settings)
+        try:
+            run(probe, 1)
+        except RetrievalUnavailable as exc:
+            skipped[name] = str(exc)
+            continue
+        runners[name] = run
+    return runners, skipped
 
-    The metric harness (`dashboard/retrieval_eval.py`) and the pooled judgement
-    sampler both existed and were reachable only from `tests/`, so the project
-    could compute Recall@k, MRR and nDCG and had nowhere to show them. This is
-    the surface, and it is deliberately honest about what stands behind the
-    numbers: a benchmark scored against one AI-assisted pass is a smoke test of
-    the harness, not evidence that a retrieval mode is better.
+
+def _retrieval_benchmark() -> None:
+    """Score every retrieval mode over the versioned query set — `RQ-08`, `WP-13`.
+
+    The harness (`dashboard/retrieval_eval.py`) and the pooled judgement sampler
+    existed before the panel did; the panel is deliberately honest about what
+    stands behind the numbers: a benchmark scored against one AI-assisted pass
+    is a smoke test of the harness, not evidence that a mode is better.
     """
     st.divider()
     st.subheader("📐 Retrieval benchmark")
@@ -892,28 +987,14 @@ def _retrieval_benchmark() -> None:
         st.warning("Judgements exist but none marked a result relevant, so no query is scorable.")
         return
 
-    chunk_frame = loaders.chunk_search_data()
-    if chunk_frame.empty or "doi" not in chunk_frame.columns:
-        st.info("No embedded chunks available to retrieve over; run the `embed` stage.")
+    retriever = loaders.retriever()
+    if retriever is None:
+        st.info("No published version to retrieve over; run the pipeline.")
         return
 
-    def _mode(search):
-        def retrieve(text: str, depth: int) -> list[str]:
-            hits = search(text, chunk_frame, top_k=depth)
-            return [str(doi) for doi in hits["doi"]] if "doi" in hits else []
-
-        return retrieve
-
     queries = [(qid, text) for qid, text in RETRIEVAL_QUERIES if qid in relevant_by_query]
-    rankings, latency = benchmark_retrieval_modes(
-        {
-            "Dense (BGE-small)": _mode(semantic_search),
-            "BM25": _mode(bm25_search),
-            "Hybrid RRF": _mode(hybrid_search_rrf),
-        },
-        queries,
-        top_k=RETRIEVAL_BENCHMARK_K,
-    )
+    runners, skipped = _benchmark_runners(retriever, queries[0][1])
+    rankings, latency = benchmark_retrieval_modes(runners, queries, top_k=RETRIEVAL_BENCHMARK_K)
     metrics = evaluate_rankings(rankings, relevant_by_query, k=RETRIEVAL_BENCHMARK_K)
 
     table = pd.DataFrame(
@@ -931,11 +1012,23 @@ def _retrieval_benchmark() -> None:
     )
     st.dataframe(table.round(3), hide_index=True, width="stretch")
 
+    pooling = (
+        " Every mode returns one result per article. The stored judgements were pooled at "
+        "depth 10 from the chunk-level modes (the three 'all chunks' rows), so an "
+        "article-level or reranked result outside that pool counts as not relevant until the "
+        "pool is regenerated with `lake-research-map evidence retrieval`."
+    )
+    if skipped:
+        pooling += (
+            " Not run here: "
+            + "; ".join(f"{name} ({reason})" for name, reason in skipped.items())
+            + "."
+        )
     if independent:
         st.caption(
             f"Scored over {len(queries)} judged queries from {', '.join(independent)}. "
-            "The pool was built from all three modes, so no mode is scored on results only "
-            "it could return."
+            "The pool was built from several modes, so no mode is scored on results only "
+            "it could return." + pooling
         )
     else:
         st.warning(
@@ -943,5 +1036,5 @@ def _retrieval_benchmark() -> None:
             f"`{', '.join(reviewers)}` — an AI-assisted pass, not an independent human "
             "review. `WP-13` requires two independent reviewers before a retrieval mode "
             "may be selected as the default on these numbers. The table shows the harness "
-            "works; it does not show which mode is better."
+            "works; it does not show which mode is better." + pooling
         )

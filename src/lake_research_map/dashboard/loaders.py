@@ -10,21 +10,23 @@ from __future__ import annotations
 
 import ast
 import json
+import logging
 import os
 from datetime import UTC, datetime
 
 import numpy as np
 import pandas as pd
 import streamlit as st
+from sqlalchemy.exc import SQLAlchemyError
 
 from lake_research_map.dashboard import qualis
 from lake_research_map.dashboard.data import (
+    active_dataset_version,
     bronze_doi_dropped_counts,
     layer_row_counts,
     load_abstract_embeddings_data,
     load_active_semantic_run,
     load_articles_all_layers,
-    load_chunk_search_data,
     load_chunks,
     load_dataset_versions,
     load_duplicate_overrides,
@@ -41,6 +43,8 @@ from lake_research_map.dashboard.data import (
     raw_funnel_counts,
     select_articles_layer,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @st.cache_data(ttl=60)
@@ -140,13 +144,33 @@ def chunks() -> pd.DataFrame:
     return load_chunks()
 
 
-@st.cache_data(ttl=60)
-def chunk_search_data() -> pd.DataFrame:
-    """Binary-first chunk rows for the on-demand search box in
-    `pages/quality.py` -- callers should only invoke this once a query is
-    actually submitted, not on a plain page render (see `data.load_chunk_search_data`).
+@st.cache_resource(max_entries=1, show_spinner=False)
+def _retriever_for(version_id: str):
+    """One retriever per published version, shared by every session.
+
+    A resource, not data: it holds the corpus texts, two BM25 indexes and a
+    Qdrant client, which must not be pickled on every cache lookup. Keyed by
+    version so a new publication builds a new one (and evicts the old).
     """
-    return load_chunk_search_data()
+    from lake_research_map.retrieval.api import build_retriever
+
+    return build_retriever(version_id)
+
+
+def retriever():
+    """The article-level retriever over the published version, or None.
+
+    None when nothing is published or the database does not answer; dense
+    search additionally degrades when Qdrant does not answer (the page says so).
+    """
+    try:
+        version_id = active_dataset_version()
+        if version_id is None:
+            return None
+        return _retriever_for(version_id)
+    except (SQLAlchemyError, ValueError) as exc:
+        logger.warning("retriever unavailable: %s", exc)
+        return None
 
 
 @st.cache_data(ttl=60)

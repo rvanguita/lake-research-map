@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+from collections.abc import Sequence
 from functools import cache
 from pathlib import Path
 
@@ -51,11 +52,11 @@ EMBED_BATCH_SIZE = max(1, int(os.environ.get("LAKE_RESEARCH_MAP_EMBED_BATCH_SIZE
 EMBED_THREADS = max(1, int(os.environ.get("LAKE_RESEARCH_MAP_EMBED_THREADS", "2")))
 
 
-def model_content_digest(model_dir) -> str | None:
-    """SHA-256 over the model-defining files of a snapshot directory, or None."""
+def model_content_digest(model_dir, files: Sequence[str] = MODEL_DEFINING_FILES) -> str | None:
+    """SHA-256 over the model-defining `files` of a snapshot directory, or None."""
     root = Path(model_dir)
     digest = hashlib.sha256()
-    for name in MODEL_DEFINING_FILES:
+    for name in files:
         path = root / name
         if not path.is_file():
             return None

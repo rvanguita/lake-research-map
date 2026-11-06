@@ -49,6 +49,7 @@ Streamlit dashboard ----------------------------┘
 | `transform/duplicate_resolution.py` | Validate persistent merge/keep/undo decisions | Duplicate overrides |
 | `pipeline.py` | Bootstrap, stage routing, CLI, and run telemetry | Pipeline-run records |
 | Airflow DAGs | Schedule/trigger the same CLI commands | Airflow metadata only |
+| `retrieval/` | Article-level search, screening and evidence (`Retriever`), the `search`/`screen`/`mcp` commands and the MCP tools; imports neither Streamlit nor `dashboard/` | None (reads the published Gold version and its Qdrant collection) |
 | `dashboard/data.py` | Fault-tolerant SQL reads returning DataFrames | None |
 | `dashboard/loaders.py` | Cached normalization, joins, and filtered datasets | Streamlit cache only |
 | `dashboard/analytics.py`, `forecasting.py` | Pure analytical computation | None |
@@ -309,7 +310,7 @@ population every coverage audit divides by.
 - SQL identifiers are fixed allowlisted values; user values use parameter binding.
 - Airflow's current “all admins” simple-auth setup is acceptable only for an isolated local environment. Binding it to a non-loopback or shared network requires authentication, authorization, TLS/reverse-proxy controls, and removal of unauthenticated admin access.
 - Pipeline trigger actions require an audit identity and rate/concurrency controls in any shared deployment.
-- PDF text may be copyrighted; access and redistribution remain local and controlled. Retrieval returns short evidence passages and DOI provenance rather than bulk document export.
+- PDF text may be copyrighted; access and redistribution remain local and controlled. Retrieval returns short evidence passages and DOI provenance rather than bulk document export. The MCP server speaks stdio to a local client and opens no network port; its `get_evidence` tool returns at most a few chunks of one article.
 
 ## 9. Testing strategy
 

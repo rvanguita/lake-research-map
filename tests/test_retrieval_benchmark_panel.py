@@ -9,11 +9,13 @@ AI-assisted pass is labelled as not being evidence.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pandas as pd
 
 from lake_research_map.dashboard.pages import quality
+from lake_research_map.retrieval.api import BENCHMARK_MODES, RetrievalUnavailable
 
 
 def _judgements(reviewer: str) -> pd.DataFrame:
@@ -30,31 +32,31 @@ def _judgements(reviewer: str) -> pd.DataFrame:
     )
 
 
-def _chunks() -> pd.DataFrame:
-    return pd.DataFrame(
-        {
-            "doi": [f"10.1/{i}" for i in range(3)],
-            "text": ["a", "b", "c"],
-            "embedding_bin": [b"", b"", b""],
-        }
-    )
+class _FakeRetriever:
+    """Answers every mode with the same three articles; can refuse the reranker."""
+
+    def __init__(self, rerank_available: bool = True) -> None:
+        self.rerank_available = rerank_available
+
+    def search(self, text, *, top_k=10, filters=None, rerank=False, **_settings):
+        if rerank and not self.rerank_available:
+            raise RetrievalUnavailable("the reranker is unavailable (offline)")
+        return [SimpleNamespace(doi=f"10.1/{i}") for i in range(min(top_k, 3))]
 
 
-def _run(judgements, chunks=None):
+_DEFAULT = object()
+
+
+def _run(judgements, retriever=_DEFAULT):
     """Render the panel, capturing what it wrote instead of drawing it."""
     written: dict[str, list] = {"info": [], "warning": [], "caption": [], "frames": []}
-
-    def _search(text, frame, top_k=10):
-        return pd.DataFrame({"doi": [f"10.1/{i}" for i in range(min(top_k, 3))]})
-
     with (
         patch.object(quality.loaders, "review_labels", lambda workflow: judgements),
         patch.object(
-            quality.loaders, "chunk_search_data", lambda: _chunks() if chunks is None else chunks
+            quality.loaders,
+            "retriever",
+            lambda: _FakeRetriever() if retriever is _DEFAULT else retriever,
         ),
-        patch.object(quality, "semantic_search", _search),
-        patch.object(quality, "bm25_search", _search),
-        patch.object(quality, "hybrid_search_rrf", _search),
         patch.object(quality.st, "divider", lambda: None),
         patch.object(quality.st, "subheader", lambda *a, **k: None),
         patch.object(quality.st, "info", lambda m: written["info"].append(m)),
@@ -108,6 +110,29 @@ def test_the_table_reports_every_mode_with_its_metrics():
     written = _run(_judgements("rene"))
     table = written["frames"][0]
 
-    assert set(table["Mode"]) == {"Dense (BGE-small)", "BM25", "Hybrid RRF"}
+    assert set(table["Mode"]) == set(BENCHMARK_MODES)
     for column in (f"Recall@{quality.RETRIEVAL_BENCHMARK_K}", "MRR", "p50 latency (ms)"):
         assert column in table.columns
+
+
+def test_a_mode_that_cannot_run_is_left_out_and_named():
+    written = _run(_judgements("rene"), retriever=_FakeRetriever(rerank_available=False))
+
+    modes = set(written["frames"][0]["Mode"])
+    assert "Hybrid RRF + rerank, abstracts" not in modes
+    assert len(modes) == len(BENCHMARK_MODES) - 1
+    assert "Not run here: Hybrid RRF + rerank, abstracts" in written["caption"][0]
+
+
+def test_the_disclosure_names_the_chunk_level_pool():
+    written = _run(_judgements("codex-assisted"))
+
+    assert "pooled at depth 10 from the chunk-level modes" in written["warning"][0]
+    assert not written["caption"]
+
+
+def test_no_published_version_is_explained_not_scored():
+    written = _run(_judgements("rene"), retriever=None)
+
+    assert not written["frames"]
+    assert "No published version" in written["info"][0]

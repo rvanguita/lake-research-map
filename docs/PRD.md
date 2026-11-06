@@ -33,7 +33,7 @@ The primary user is the researcher who collects exports, operates the pipeline, 
 
 - A reviewer or collaborator verifying search provenance, screening decisions, and analytical limitations.
 - A maintainer diagnosing pipeline failures, drift, or incomplete derived data.
-- A retrieval client or LLM agent using Gold chunks to locate evidence while preserving DOI provenance.
+- A retrieval client or LLM agent using Gold chunks to locate evidence while preserving DOI provenance -- served by the `search`/`screen` commands, the MCP server, and the `lit_chunks_active` Qdrant alias (`FR-13`, `FR-14`).
 
 ### 2.3 Required outcomes
 
@@ -157,6 +157,7 @@ Every inferential or predictive result must report effect size, uncertainty, sam
 | `FR-11` | Keep dashboard data access read-only. | Mutations occur only through CLI/Airflow workflows. |
 | `FR-12` | Degrade safely when a table or optional analysis is unavailable. | Pages show a scoped explanation rather than crashing or inventing results. |
 | `FR-13` | Store chunk vectors in a vector store a retrieval client can query, one immutable collection per dataset version. | Every published version has a complete, contract-checked Qdrant collection; external clients find the published one under a stable alias; Gold remains the source of the evidence. |
+| `FR-14` | Rank articles, not chunks, for a query, and serve that ranking outside the dashboard. | One hit per article over the abstracts by default; filters applied before ranking, selecting the same articles in the lexical and dense paths; DOI provenance and component ranks/scores in JSON; one `Retriever` behind the CLI, the MCP server and the dashboard. |
 | `FR-15` | Embed the paper's own text, not its reference list or page furniture. | Full-text chunks exclude the reference section and page-number lines, rejoin line-break hyphenations, and end at sentence boundaries; each build reports what the cleaning changed. |
 
 ### 6.2 Non-functional requirements
@@ -191,10 +192,11 @@ its requirement, or says plainly that none exists.
 | `FR-07` | Parent execution and stage rows sharing one version | `tests/test_versioning_contracts.py` |
 | `FR-08` | Article reader bound to the publication pointer | `dashboard/data.py::load_articles`; `tests/test_dashboard_pages.py` |
 | `FR-09` | Durable labels joined to calibration, with both approval digests | `reviews calibrate`; `tests/test_review_label_reader.py` |
-| `FR-10` | Component ranks and scores exposed per mode | `dashboard/search.py`; `tests/test_search.py` |
+| `FR-10` | Component ranks and scores exposed per mode | `retrieval/rank.py`, `retrieval/api.py::ArticleHit`; `tests/test_retrieval_rank.py`, `tests/test_retrieval_api.py` |
 | `FR-11` | No write call anywhere under `dashboard/` | `tests/test_theme.py` |
 | `FR-12` | Every page rendered headless in populated and empty states | `tests/test_dashboard_pages.py` |
 | `FR-13` | Per-version collection, deterministic point ids, exact search, alias moved after publication, backfill/rebuild repairs | `db/vector_store.py`; `tests/test_vector_store.py`, `tests/test_vector_collections.py`, opt-in `tests/test_qdrant_server.py`; `vectors status` |
+| `FR-14` | One hit per article, filters before ranking, pandas/Qdrant filter parity, JSON-only stdout, no pipeline lock, five MCP tools | `retrieval/`; `tests/test_retrieval_api.py`, `tests/test_retrieval_filters.py`, `tests/test_retrieval_cli.py`, `tests/test_mcp_server.py` |
 | `FR-15` | Cleaner unit tests and the measured before/after on the 97 linked PDFs; `pdf_*` keys in the Gold stats | `transform/pdf_text.py`; `tests/test_pdf_text.py`, `tests/test_gold_articles.py`; `docs/evidence/2026-11-06-pdf-text-cleaning.md` |
 | `NFR-01` | Source/config/code/curation fingerprints; per-page dataset-version caption | `ingest/snapshots.py::build_fingerprint`; `tests/test_population_provenance.py` |
 | `NFR-02` | Unchanged re-run produces no new logical rows | `tests/test_gold_articles.py`, `tests/test_raw_bib.py` |
@@ -262,6 +264,9 @@ Visualization selection follows the question: bars for discrete comparisons, lin
 - No retrieval-quality claim is valid without labeled queries and relevance judgments.
 - Dense, BM25, and RRF variants are compared on identical query sets using Recall@k, MRR, nDCG, latency, and qualitative failure analysis.
 - Full-text coverage is reported separately because PDF availability changes the candidate passage population.
+- Articles rank over their abstracts by default: one chunk per article, so every article competes on equal terms. Full text ranks only on request (`scope="all"`, labelled as favouring articles with a PDF) and otherwise serves as evidence passages for an article already found.
+- Filters apply before ranking and select the same articles in the lexical (pandas) and dense (Qdrant) paths; an article with no screening score is never filtered out by the margin filter.
+- The cross-encoder reranker is experimental. Neither it nor any other mode becomes the default until the `WP-13` human relevance labels support it.
 
 ## 9. Current evidence boundaries and risks
 
