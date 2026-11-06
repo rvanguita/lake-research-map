@@ -1,7 +1,7 @@
 # lake-research-map
 
 [![Python 3.13](https://img.shields.io/badge/python-3.13-blue.svg)](https://www.python.org/downloads/)
-[![Tests: 406 passed](https://img.shields.io/badge/tests-406%20passed-brightgreen.svg)](tests/)
+[![Tests: 490 passed](https://img.shields.io/badge/tests-490%20passed-brightgreen.svg)](tests/)
 [![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
 [![Streamlit Dashboard](https://img.shields.io/badge/dashboard-Streamlit-FF4B4B.svg)](src/lake_research_map/dashboard/)
 [![Vector Store: Qdrant](https://img.shields.io/badge/vectors-Qdrant-DC244C.svg)](docker-compose.yml)
@@ -334,7 +334,6 @@ lake-research-map/
 ├── docs/                         # Architecture, product specs, and assets
 │   ├── PRD.md                    # Product Requirements Document
 │   ├── SDD.md                    # System Design Document
-│   ├── ROADMAP.md                # Strategic research & feature backlog
 │   └── images/
 │       ├── lake_research_map_hero.png # High-resolution hero illustration (white background)
 │       ├── lake_research_map_hero.svg # Vector source for hero illustration
@@ -343,7 +342,7 @@ lake-research-map/
 ├── scripts/
 │   ├── generate_hero.py          # Programmatic vector renderer for hero assets
 │   └── git-hooks/                # Pre-commit hook shell scripts
-├── tests/                        # 406 unit/integration tests (SQLite in-memory)
+├── tests/                        # 490 tests (in-memory SQLite + Qdrant local mode)
 ├── AGENTS.md                     # Universal guidelines for AI assistants
 ├── CLAUDE.md                     # Source-data quirks and environment notes
 ├── docker-compose.yml            # Dashboard + Qdrant (profile `qdrant`) containers
@@ -355,9 +354,8 @@ lake-research-map/
 ## 📖 Documentation & Architectural Standards
 
 For in-depth documentation and contributor guidelines:
-- **System Design Document**: [`docs/SDD.md`](docs/SDD.md) — Exhaustive technical architecture, schema specifications, and algorithmic formulas.
-- **Product Requirements Document**: [`docs/PRD.md`](docs/PRD.md) — Motivation, 15 user personas, functional specifications, and acceptance criteria.
-- **Strategic Roadmap**: [`docs/ROADMAP.md`](docs/ROADMAP.md) — Active research directions, validation metrics, and improvement backlog.
+- **System Design Document**: [`docs/SDD.md`](docs/SDD.md) — Architecture, data contracts, analytical methods, decisions (ADRs), delivery history, measured baselines and the human-review protocols.
+- **Product Requirements Document**: [`docs/PRD.md`](docs/PRD.md) — Research questions, requirements and how each is measured, risks, open work, and the definition of done.
 - **AI Assistant Guidelines**: [`AGENTS.md`](AGENTS.md) — Universal rules, testing standards, and Streamlit conventions for AI pairs.
 - **Corpus Parsing Gotchas**: [`CLAUDE.md`](CLAUDE.md) — Raw publisher data quirks, BibTeX separators, and DOI matching nuances.
 

@@ -59,7 +59,7 @@ _ADDITIVE_COLUMNS: dict[str, dict[str, tuple[str, tuple[str, ...]]]] = {
         "online_date": ("DATE NULL", ("bronze", "silver", "gold")),
         "document_type": ("VARCHAR(128) NULL", ("bronze", "silver", "gold")),
         "license": ("VARCHAR(64) NULL", ("bronze", "silver", "gold")),
-        # ROADMAP #4: flag non-article records (book front matter, etc.).
+        # Flag non-article records (book front matter, etc.).
         "is_non_article": ("BOOLEAN NOT NULL DEFAULT FALSE", ("silver", "gold")),
         "dataset_version_id": ("VARCHAR(64) NULL", ("bronze", "silver")),
         "publication_category": ("VARCHAR(32) NULL", ("bronze", "silver", "gold")),
@@ -78,7 +78,7 @@ _ADDITIVE_COLUMNS: dict[str, dict[str, tuple[str, tuple[str, ...]]]] = {
         "citing_crawled_at": ("DATETIME NULL", ("bronze",)),
         "citing_truncated": ("BOOLEAN NULL", ("bronze",)),
     },
-    # ROADMAP #1: binary embedding storage (migration from JSON to BLOB).
+    # Binary embedding storage (migration from JSON to BLOB); kept for pre-ADR-08 versions.
     "lit_chunks": {
         "embedding_bin": ("LONGBLOB NULL", ("gold",)),
         "text_sha256": ("VARCHAR(64) NULL", ("gold",)),

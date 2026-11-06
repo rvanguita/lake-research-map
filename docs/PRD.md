@@ -4,11 +4,11 @@
 
 **Evidence cutoff:** 2026-09-21
 
-**Implementation baseline:** the active 2026-09-21 Gold version `2974743a…` contains 3,115 articles and 7,552 chunks, all carrying complete embedding metadata; the application has 10 registered dashboard pages and 406 passing automated tests (plus two opt-in MySQL tests skipped by the default run) as measured on 2026-09-22.
+**Implementation baseline:** the active 2026-11-06 Gold version `7cbb67e3…` contains 3,115 articles and 6,738 chunks (3,115 abstracts, 3,623 cleaned full-text chunks from 97 PDFs), every one embedded in its Qdrant collection; the application has 10 registered dashboard pages and 490 passing automated tests (plus four opt-in MySQL/Qdrant-server tests skipped by the default run).
 
-**Related documents:** [SDD.md](SDD.md), [ROADMAP.md](ROADMAP.md), [METHODOLOGY.md](METHODOLOGY.md)
+**Related documents:** [SDD.md](SDD.md) (design, analytical methods, delivery history, review protocols)
 
-This document defines the product and research problem, the decisions the platform must support, and the evidence required to claim that it succeeds. `SDD.md` defines how those requirements are implemented; `ROADMAP.md` sequences changes that are not yet implemented. Counts above are a dated corpus snapshot, not architectural constants.
+This document defines the product and research problem, the decisions the platform must support, and the evidence required to claim that it succeeds. `SDD.md` defines how those requirements are implemented; §12 lists the work still open. Counts above are a dated corpus snapshot, not architectural constants.
 
 ## 1. Problem and decision context
 
@@ -197,12 +197,12 @@ its requirement, or says plainly that none exists.
 | `FR-12` | Every page rendered headless in populated and empty states | `tests/test_dashboard_pages.py` |
 | `FR-13` | Per-version collection, deterministic point ids, exact search, alias moved after publication, backfill/rebuild repairs | `db/vector_store.py`; `tests/test_vector_store.py`, `tests/test_vector_collections.py`, opt-in `tests/test_qdrant_server.py`; `vectors status` |
 | `FR-14` | One hit per article, filters before ranking, pandas/Qdrant filter parity, JSON-only stdout, no pipeline lock, five MCP tools | `retrieval/`; `tests/test_retrieval_api.py`, `tests/test_retrieval_filters.py`, `tests/test_retrieval_cli.py`, `tests/test_mcp_server.py` |
-| `FR-15` | Cleaner unit tests and the measured before/after on the 97 linked PDFs; `pdf_*` keys in the Gold stats | `transform/pdf_text.py`; `tests/test_pdf_text.py`, `tests/test_gold_articles.py`; `docs/evidence/2026-11-06-pdf-text-cleaning.md` |
+| `FR-15` | Cleaner unit tests and the measured before/after on the 97 linked PDFs; `pdf_*` keys in the Gold stats | `transform/pdf_text.py`; `tests/test_pdf_text.py`, `tests/test_gold_articles.py`; SDD §14 |
 | `NFR-01` | Source/config/code/curation fingerprints; per-page dataset-version caption | `ingest/snapshots.py::build_fingerprint`; `tests/test_population_provenance.py` |
 | `NFR-02` | Unchanged re-run produces no new logical rows | `tests/test_gold_articles.py`, `tests/test_raw_bib.py` |
 | `NFR-03` | Contract violation blocks publication and keeps the prior version active | `quality.assert_contract`; `tests/test_mysql_contracts.py` |
 | `NFR-04` | Rejections, overrides, quality results and run errors persisted | `lit_rejected`, `lit_quality_results`, `lit_pipeline_runs` |
-| `NFR-05` | **Not measured.** Latency and memory were benchmarked once by hand (2026-09-21); no performance test guards them | see `docs/evidence/2026-09-21-search-benchmark.md` |
+| `NFR-05` | **Not measured.** Latency and memory were benchmarked once by hand (2026-09-21); no performance test guards them | SDD §14: 11.06 MiB vector matrix, 92.72 ms warm-search P95 on 2026-09-21 |
 | `NFR-06` | Secret hygiene only. The per-table privilege boundary was traded away on 2026-09-22 and is **not** enforced | `.gitignore`; `WP-08` evidence |
 | `NFR-07` | Portuguese-shaped copy, empty headings and empty metric labels all fail the build | `tests/test_dashboard_language.py` |
 | `NFR-08` | `analytics.py` and `forecasting.py` import no Streamlit; every page has `AppTest` coverage | `tests/test_theme.py`, `tests/test_dashboard_pages.py` |
@@ -279,7 +279,7 @@ Visualization selection follows the question: bars for discrete comparisons, lin
 | `RISK-05` | Author names are heuristic identities. | Homonyms merge and variants split. | Add identity audit/overrides before person-level conclusions. |
 | `RISK-06` | Screening anchors lack independent gold-standard validation. | Threshold performance may be overstated. | Persist dual-review labels and validate out of sample. |
 | `RISK-07` | Many analytical panels invite multiple testing. | False discoveries become likely. | Define test families, effect-size thresholds, and FDR control. |
-| `RISK-08` | Dynamic tabs are not used consistently. | Hidden expensive analyses execute and slow reruns. | Gate heavy tab bodies and add performance acceptance tests. |
+| `RISK-08` | An expensive tab body could again execute while hidden. | Reruns slow down. | Mitigated: every tab group renders only its open branch (`st.tabs(..., on_change="rerun")`); keep new tabs gated. |
 | `RISK-09` | External enrichment is collected under a request quota and may stay partial indefinitely. | A partial collection ordered by any key correlated with source produces a biased sample, and coverage reported in aggregate hides it. | Collect in publisher-proportional order so any prefix is representative; report coverage per registrant against the corpus denominator; treat an unfinished crawl as a stated limitation, never as missing data at the provider. |
 
 ## 10. Success criteria
@@ -311,3 +311,58 @@ The product is successful when all of the following are evidenced, not merely as
 | Version corpus, enrichment, models, anchors, and labels. | Necessary for reproducible statistical and semantic results. | Approved; implementation pending |
 | Trust `data/enrichment_cache.json` as a citation source. | Validated against OpenAlex on 2026-09-22 over 1,875 comparable rows: reference counts agree 99.7%, citation counts 90.0% with a median error of 0. Every divergence is one-directional -- the cache is never higher than OpenAlex, only older -- which is the signature of staleness rather than error. | Validated; refresh before longitudinal claims |
 | Add new methods only when they answer a distinct decision question and meet data prerequisites. | Prevents dashboard breadth from exceeding evidential validity. | Active governance rule |
+
+## 12. Open work
+
+Everything not listed here is delivered; its history is in SDD §13. The ids are kept because code, tests and
+dashboard captions cite them. Each item is blocked on human evidence, not on code: the review queues export the
+resolved context each reviewer needs, and the protocols are SDD Appendix A.
+
+| Id | Title | What is missing | Completion |
+|---|---|---|---|
+| `WP-05` | Identity, PDF matching, and rejection validation | Reviewed stratified samples of PDF links, duplicate decisions and no-DOI rejections (protocols `pdf-v1`, `screening-v2`), so the matcher, its threshold and the rejection bias are chosen from measured precision/recall. | The canonical matcher/scorer is selected from evidence, its threshold is versioned, and errors/ambiguous cases are retained for review. |
+| `WP-09` | Persistent dual-review screening workflow | The workflow is delivered (protocol `screening-v2`, 60 assignments over 30 no-DOI subjects); the two independent reviewers' labels are not. | Two reviewers label the same version independently; adjudication preserves raw labels; agreement and class prevalence are reproducible. |
+| `WP-10` | Screening threshold validation | Calibration and the hash-bound approval are delivered; the approval decision and a later-batch validation wait for `WP-09`'s labels. | The selected threshold meets the approved sensitivity target on validation data, or automatic exclusion stays disabled with the failure documented. |
+| `WP-11` | Author identity audit and overrides | Human decisions on the ambiguity sample (protocol `author-v1`), then reversible identity overrides and an audited error rate. | Person-level panels use the resolved identity version and show unresolved ambiguity coverage; corpus metrics can be recomputed after undo. |
+| `WP-13` | Retrieval evaluation corpus | Two independent human reviews of the pooled sample (protocol `retrieval-v1`); only an AI-assisted pass exists (96 labels), so no metric or default mode is approved. Regenerate the pool with `evidence retrieval` to include the article-level modes. | All retrieval modes run on identical judgments; the default is selected by an explicit metric/latency rule and reproduced in tests. |
+| `WP-21` | Integrate validated analyses into existing pages | The taxonomy-validation (`taxonomy-v1`) and identity-audit panels, which wait for `WP-11`/human taxonomy labels. | Each addition references one `RQ-*`, exposes population/coverage/limitations, and has no equivalent view elsewhere. |
+
+## 13. Definition of done for a change
+
+Every change that alters data or analytical behaviour includes:
+
+- additive migration and a rollback/recovery procedure;
+- SQLite unit coverage, plus MySQL or Qdrant integration coverage where store semantics matter;
+- fixtures for missing, degenerate and failure states;
+- updates to this document and `SDD.md` where a requirement, design decision or measured fact changes;
+- dashboard coverage and English UI copy when user-visible;
+- `uv run pytest`, `uv run ruff check` and `uv run ruff format --check` passing;
+- the measured baseline, result and residual risk recorded in SDD §14.
+
+## 14. Deferred ideas
+
+Not scheduled until a decision need and an evidence contract exist:
+
+- New standalone dashboard pages.
+- Generative summaries presented as research evidence.
+- Causal ranking of venues, authors, or methods.
+- Deep-learning forecasts on short annual series.
+- Further infrastructure without a measured need. (Qdrant was adopted under `ADR-08` for a consumer
+  requirement, not novelty.)
+- Automatic merging or screening without human-reviewed validation.
+
+## 15. Requirements traceability
+
+| Requirements | Architecture decisions | Open work |
+|---|---|---|
+| `FR-01`, `FR-02`, `NFR-01`, `NFR-02` | `ADR-03` | — |
+| `FR-03`, `FR-04`, `FR-08`, `NFR-04` | `ADR-02`, `ADR-05` | `WP-05` |
+| `FR-05`, `FR-06`, `NFR-03` | `ADR-03`, `ADR-04` | — |
+| `FR-07`, `NFR-01`, `NFR-04` | `ADR-03`, `ADR-09` | — |
+| `FR-09` | `ADR-05` | `WP-09`, `WP-10` |
+| `FR-10`, `FR-14`, `NFR-05`, `RQ-08` | `ADR-04`, `ADR-08` | `WP-13` |
+| `FR-11`, `NFR-06` | `ADR-01`, `ADR-06`, `ADR-09` | — |
+| `FR-12`, `NFR-07`, `NFR-08` | `ADR-02`, `ADR-06` | `WP-21` |
+| `FR-13` | `ADR-03`, `ADR-08` | — |
+| `FR-15` | `ADR-03` | — |
+| `RQ-04` through `RQ-07` | `ADR-02`, `ADR-04`, `ADR-05` | `WP-11`, `WP-21` |

@@ -153,7 +153,7 @@ uv run streamlit run main.py               # Launch Streamlit app on http://loca
 docker compose --profile qdrant up -d      # Streamlit (:8501) + Qdrant (:6333)
 
 # Testing & Verification
-uv run pytest                              # Run full test suite (212 tests)
+uv run pytest                              # Run full test suite (490 tests)
 uv run ruff check --fix && uv run ruff format  # Format and lint codebase
 ```
 
