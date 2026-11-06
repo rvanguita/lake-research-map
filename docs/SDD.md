@@ -156,11 +156,11 @@ Screening labels remain target governed data rather than dashboard session state
 | Stage | Current behavior | Gap |
 |---|---|---|
 | Raw | Content-addressed scan, immutable manifest/revisions, transactional active reconciliation | Archive garbage collection is not automated |
-| Bronze | Transactional rebuild with file-qualified natural keys and dataset lineage; append-only provider observations | The active corpus has no live provider observations yet |
+| Bronze | Transactional rebuild with file-qualified natural keys and dataset lineage; append-only provider observations | None open: the 2026-09-23 OpenAlex refresh observed 3,099 of 3,115 DOIs |
 | Silver | Transactional DOI rebuild/rejection audit with dataset lineage | PDF matcher validation remains in `WP-05` |
 | Gold | Build immutable candidate article/chunk snapshot with text hashes | Database uniqueness for legacy live chunk keys remains application-enforced |
 | Embed | Fill the version's Qdrant collection (reuse by text hash before compute), record provenance in Gold, delete orphan points, block incompatible/non-finite/unreachable output | `text_sha256` has no index on the deployed schema; lookups go through `dataset_version_id` |
-| Semantic | Build candidate signals only at complete embedding coverage; publish all Gold outputs atomically | Full semantic-run parameter manifest remains in `WP-06` |
+| Semantic | Build candidate signals only at complete embedding coverage; publish all Gold outputs atomically | None open: each run records model, revision, anchor hashes and stability in `lit_semantic_runs` |
 
 ### 4.2 Current versioned run protocol
 
@@ -604,12 +604,9 @@ Docker Compose keeps the dashboard and the opt-in Qdrant service.
 ## 12. Known technical debt
 
 - Analytical reads are already bound to the publication pointer: `dashboard/data.py::load_articles` routes Gold through `load_active_dataset_table`, which scopes every query by `active_dataset_version()`. The residual is narrower than previously recorded -- `assess_gold_articles` is still a structural check (non-empty, unique DOI, expected columns) rather than a read of the persisted `lit_quality_results` for that version.
-- Resolved on 2026-09-21: the legacy direct embedding transform and the dashboard action that called it were removed. It wrote the live `lit_chunks` table, which `materialize_version` rebuilds from the candidate on every publish, so vectors generated from the Quality page were discarded at the next publication and never passed `embed_contract`. Embedding now has exactly one writer, `versioned_gold.py::build_dataset_embeddings`, operating on the immutable candidate.
-- Parent correlation, dataset versions, cross-process advisory locking, heartbeats, and stale-run recovery are implemented. Stage retries are manual since `ADR-09`.
+- No automatic stage retry or timeout since `ADR-09`: a failed stage is re-run by hand (every stage is idempotent and `embed` resumes).
 - OpenAlex responses are append-only observations with observation time, response state, HTTP status, response hash, retry count, longitudinal counts, outgoing edges, and access metadata. A real refresh still requires local API credentials.
 - Chunk and duplicate-candidate logical keys are not fully constrained in the database.
-- Several retired analytical functions and inactive page helpers remain in source/tests.
-- Expensive tabs are only conditionally rendered on some pages.
 - Statistical functions need the validation improvements defined in `PRD.md` before confirmatory interpretation.
 
 Open work that is blocked on human evidence is listed in PRD §12.
