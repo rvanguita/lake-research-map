@@ -9,7 +9,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 publisher search UIs (IEEE Xplore + Elsevier/ScienceDirect), then consolidated by a medallion pipeline
 (`src/lake_research_map/`) into MySQL and explored through a Streamlit dashboard (`src/lake_research_map/dashboard/`).
 
-`README.md` is the project overview; `AGENTS.md` provides universal guidelines for all AI agents;
+`README.md` is the project overview; `AGENTS.md` is a symlink to this file (and `.agents/` to `.claude/`), so
+Codex, Cursor and other agents read the same instructions -- edit this file, never the link.
 `docs/PRD.md` (why) and `docs/SDD.md` (how) go deeper. This file is the
 canonical reference for **source-data quirks** — the other docs cross-reference it rather than repeat it.
 
@@ -48,7 +49,8 @@ MySQL connection settings and `QDRANT_URL` live in `.env` (git-ignored; see `.en
 |---|---|
 | `medallion-transform` | authoring `ingest/`, `transform/`, `db/`, `pipeline.py` |
 | `pipeline-ops` | *running* stages from the CLI, `.env`, the Qdrant service, idempotency, debugging a run |
-| `developing-with-streamlit` | `dashboard/` page contract, chart contract, theme tokens, aggregation rules |
+| `streamlit-dashboard` | `dashboard/` page contract, chart contract, theme tokens, aggregation rules |
+| `developing-with-streamlit` | Streamlit's own generic skill (a symlink into the installed `streamlit` package; resolves after `uv sync`) |
 | `python-testing-conventions` | pytest layout, per-layer SQLite fixtures, pure-function-first testing |
 
 ## Architecture
@@ -170,6 +172,29 @@ Silver and then Bronze only when Gold fails its readiness contract, and displays
 for the projections come from the version's Qdrant collection (`data.load_abstract_embeddings_data`) and degrade
 to empty when the store does not answer; the article search degrades to BM25 with a warning; embedding
 *readiness* is read from Gold provenance, so no page render depends on Qdrant.
+
+**Page ownership — every chart has exactly one home.** Never duplicate a chart across tabs or pages;
+`overview.py` holds macro summaries only, and deep dives live on their analytical page:
+
+- `production` — chronological views: annual volume, cumulative growth, CAPES/Qualis strata.
+- `topics` — venue ranking, Bradford zones, semantic structure, Zipf's law, c-TF-IDF, conceptual atypicality,
+  structural breaks.
+- `highlights` — two tabs: *Theoretical grounding* and *Citation dynamics & econometrics* (heavy-tail
+  diagnostics, age normalization, the exposure-adjusted count GLM).
+- `researchers` — productivity, leadership, trajectories, collaboration networks, research lines, bibliometric laws.
+- `synthesis` — six engineering-evidence dimensions: methods, objectives, uncertainty, horizons, test systems, solvers.
+- `forecasting` — complete-year volume forecasts with rolling validation and conformal bands, topic
+  trajectories, Bass diagnostics, Kleinberg bursts.
+- `semantics` — screening calibration, projections, themes, semantic isolation, duplicate-review history.
+- `quality` — metadata/PDF diagnostics, content readiness, anomaly audit, article search and its benchmark.
+- `pipeline_layers` — medallion flow, quality gates, audit history, source provenance, the CLI commands.
+
+**Visual standards.** `width="stretch"` on charts, tables and containers, never the deprecated
+`use_container_width=True`. The theme is a fixed dark one with matching Plotly tokens -- no light-mode toggle or
+browser-dependent palette. A polar/radar chart, if one is ever reintroduced, needs transparent `paper_bgcolor`
+and `polar_bgcolor` or it renders as an opaque white box. Publication categories are stored only as the
+canonical `journal`, `conference`, `review`, `other`, classified in that precedence: review, conference,
+journal, other.
 
 `main.py` calls `app.main()` **as a function** on purpose: Streamlit re-executes the entry script on every
 rerun, and a module imported for its top-level side effects would only render once.
@@ -376,6 +401,7 @@ one place that decides this, and pinning a literal instead silently deletes thos
   fragments unless the first one ends with it.
 - **Comments explain *why***, and the existing ones encode hard-won decisions (why a chunk boundary is where it
   is, why a palette isn't derived from the brand colors, why `fastembed` is imported lazily). Don't strip them.
+- **Never declare a task done** without `uv run pytest` and `uv run ruff check` passing.
 - `.claude/settings.json` hooks run on every edit: `ruff check --fix` + `ruff format` on any `.py`, and
   `uv run pytest -q` after touching `ingest/`, `transform/` or `tests/`. Recursive deletion of `data/`,
   force-pushes and hard resets are blocked at the Bash tool.

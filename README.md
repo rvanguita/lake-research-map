@@ -341,8 +341,8 @@ lake-research-map/
 │       ├── architecture.svg      # Legacy pipeline architecture diagram
 │       └── medallion_architecture.svg # Modern white-background medallion architecture diagram
 ├── tests/                        # 490 tests (in-memory SQLite + Qdrant local mode)
-├── AGENTS.md                     # Universal guidelines for AI assistants
-├── CLAUDE.md                     # Source-data quirks and environment notes
+├── AGENTS.md -> CLAUDE.md        # Symlink, for non-Claude agents
+├── CLAUDE.md                     # Agent instructions + source-data quirks (single source)
 ├── docker-compose.yml            # Dashboard + Qdrant (profile `qdrant`) containers
 └── pyproject.toml                # Project metadata, dependencies, and Ruff config
 ```
@@ -354,8 +354,7 @@ lake-research-map/
 For in-depth documentation and contributor guidelines:
 - **System Design Document**: [`docs/SDD.md`](docs/SDD.md) — Architecture, data contracts, analytical methods, decisions (ADRs), delivery history, measured baselines and the human-review protocols.
 - **Product Requirements Document**: [`docs/PRD.md`](docs/PRD.md) — Research questions, requirements and how each is measured, risks, open work, and the definition of done.
-- **AI Assistant Guidelines**: [`AGENTS.md`](AGENTS.md) — Universal rules, testing standards, and Streamlit conventions for AI pairs.
-- **Corpus Parsing Gotchas**: [`CLAUDE.md`](CLAUDE.md) — Raw publisher data quirks, BibTeX separators, and DOI matching nuances.
+- **AI Assistant Guidelines & Corpus Gotchas**: [`CLAUDE.md`](CLAUDE.md) — Architecture contracts, dashboard conventions, raw publisher data quirks and DOI matching nuances. `AGENTS.md` and `.agents/` are symlinks to `CLAUDE.md` and `.claude/` for other agents.
 
 ---
 
