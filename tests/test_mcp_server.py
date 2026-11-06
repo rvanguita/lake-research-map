@@ -75,4 +75,4 @@ def test_the_server_registers_the_five_tools():
         "corpus_status",
     }
     search = next(tool for tool in tools if tool.name == "search_articles")
-    assert "query" in search.inputSchema["required"]
+    assert "query" in search.input_schema["required"]

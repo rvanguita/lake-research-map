@@ -165,9 +165,10 @@ TOOLS = (search_articles, screen_articles, get_article, get_evidence, corpus_sta
 
 
 def build_server():
-    from mcp.server.fastmcp import FastMCP
+    # mcp 2.x: `FastMCP` became `MCPServer` (same decorator and stdio `run`).
+    from mcp.server.mcpserver import MCPServer
 
-    server = FastMCP("lake-research-map", instructions=INSTRUCTIONS)
+    server = MCPServer("lake-research-map", instructions=INSTRUCTIONS)
     for tool in TOOLS:
         server.add_tool(tool)
     return server
