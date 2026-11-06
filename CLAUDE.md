@@ -153,8 +153,11 @@ raw-layer idempotency keys off that string, so absolute paths duplicate every ro
 
 Strict one-way layering — `data.py` (raw SQL → DataFrame, tolerates a missing table) → `loaders.py` (the only
 `@st.cache_data` layer, plus list-column/`source` normalization) → `analytics.py` / `forecasting.py` /
-`search.py` / `qualis.py` (pure pandas, no `streamlit` import, unit-tested) → `charts.py` (styled Plotly
-figures) → `components.py` → `pages/*.py` (one zero-arg `render()`, registered in `app.py`'s `PAGES`).
+`qualis.py` (pure pandas, no `streamlit` import, unit-tested) → `charts.py` (styled Plotly figures) →
+`components.py` → `pages/*.py` (one zero-arg `render()`, registered in `app.py`'s `PAGES`). Search is not a
+dashboard module any more: the Quality page's article search and benchmark call `loaders.retriever()` -- the
+`retrieval/` package's `Retriever`, one per published version, held as an `@st.cache_resource` (it owns
+indexes and a Qdrant client, which must not be pickled per lookup).
 
 Pages are read-only, with no exception: pipeline execution goes through Airflow's REST API
 (`pipeline_control.py` → `airflow_client.py`). Embedding generation used to be an in-process exception in
@@ -163,10 +166,10 @@ rebuilds from the versioned candidate, so the vectors were silently discarded on
 
 The dashboard reads the active immutable **Gold** version through the publication pointer. It falls back to
 Silver and then Bronze only when Gold fails its readiness contract, and displays that degraded mode explicitly.
-`lit_semantics` remains a separate Gold table, so `loaders.with_semantics()` joins it on `doi`. Vectors come from
-the version's Qdrant collection (`data.attach_chunk_vectors`, `data.load_abstract_embeddings_data`) and degrade
-to empty when the store does not answer; embedding *readiness* is read from Gold provenance, so no page render
-depends on Qdrant.
+`lit_semantics` remains a separate Gold table, so `loaders.with_semantics()` joins it on `doi`. Abstract vectors
+for the projections come from the version's Qdrant collection (`data.load_abstract_embeddings_data`) and degrade
+to empty when the store does not answer; the article search degrades to BM25 with a warning; embedding
+*readiness* is read from Gold provenance, so no page render depends on Qdrant.
 
 `main.py` calls `app.main()` **as a function** on purpose: Streamlit re-executes the entry script on every
 rerun, and a module imported for its top-level side effects would only render once.

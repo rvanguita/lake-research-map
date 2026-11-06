@@ -16,7 +16,7 @@ fixture set in `tests/conftest.py`, no mocking framework).
 ## Responsibilities
 - For new pipeline logic: identify or ask for the pure/extractable function to test directly (e.g. a new
   `normalize_*`, `_merge_*`, `_chunk_*`-shaped helper) rather than only testing through a full stage run.
-- For dashboard analytics logic (`dashboard/analytics.py`, `forecasting.py`, `search.py`): test with hand-
+- For dashboard analytics logic (`dashboard/analytics.py`, `forecasting.py`, `retrieval/rank.py`): test with hand-
   built DataFrames, following `test_analytics_authors.py`'s pattern.
 - Reach for the `{raw,bronze,silver,gold}_session` fixtures only when a transform stage's end-to-end
   behavior (not just one helper) needs verifying.

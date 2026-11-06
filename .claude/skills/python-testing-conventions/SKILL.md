@@ -6,7 +6,7 @@ description: pytest conventions for lake-research-map — pure-function-first te
 # lake-research-map testing conventions
 
 Applies repo-wide — both `src/lake_research_map/{ingest,transform}/` pipeline code and
-`src/lake_research_map/dashboard/analytics.py`/`forecasting.py`/`search.py` (all pure pandas, no `streamlit`
+`src/lake_research_map/dashboard/analytics.py`/`forecasting.py` and `retrieval/rank.py` (all pure, no `streamlit`
 import, exactly so they're unit-testable). Run with `uv run pytest` (`testpaths = ["tests"]` in
 `pyproject.toml`).
 
@@ -18,7 +18,9 @@ The dominant pattern in `tests/` is extracting the interesting logic into a smal
 - `test_bronze_articles.py` — `normalize_doi`, `_split_bibtex_authors`, `_split_ieee_csv_authors`, `_to_int`
 - `test_silver_articles.py` — `normalize_title`, `_merge_group` (plus one full `build_silver_articles` flow)
 - `test_gold_articles.py` — `_chunk_text`, `_build_abstract_text`
-- `test_search.py` — `_rank_by_similarity`
+- `test_retrieval_rank.py` — `BM25Index`, `rrf_fuse`, `first_per_key`, `excerpt`
+- `test_retrieval_api.py` — `Retriever` over a hand-built version: SQLite Gold plus the in-process
+  Qdrant `vector_store` fixture, with `embed_fn`/`rerank_fn`/`token_len_fn` injected so no model downloads
 - `test_analytics_authors.py` — dashboard `analytics.py` functions (`author_year_matrix`,
   `gini_coefficient`, etc.) against hand-built DataFrames
 

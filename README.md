@@ -332,7 +332,6 @@ lake-research-map/
 │       ├── loaders.py            # @st.cache_data caching and normalization
 │       ├── analytics.py          # Pure mathematical, scientometric & network analytics
 │       ├── forecasting.py        # Regression benchmarking, quantiles, Bass diffusion
-│       ├── search.py             # Hybrid BM25 Okapi + Dense Vector Faiss/RRF search
 │       ├── theme.py              # Fixed-dark theme tokens and transparent polar styling
 │       ├── components.py         # Reusable Streamlit UI widgets & metric cards
 │       ├── airflow_client.py     # Airflow REST API client

@@ -346,7 +346,7 @@ This baseline does not imply that every analytical method is confirmatory. The l
 
 ### `WP-28` — Article-level retrieval API, CLI and MCP server
 
-- **Status:** Complete on 2026-11-06 for the API, the CLI and the MCP server; the dashboard search moves to it in the same cycle.
+- **Status:** Complete on 2026-11-06: the API, the CLI, the MCP server, and the dashboard's article search and benchmark, which now call the same `Retriever` (`dashboard/search.py` and its chunk-level DataFrame path were removed).
 - **Objective:** Let a RAG client filter the most relevant articles for a subject through the same ranking a reviewer sees.
 - **Justification:** Retrieval existed only inside a Streamlit page, ranked chunks (one article could fill the top-k), and took no metadata filters.
 - **Dependencies:** `WP-13` (benchmark harness and labels), `WP-26` (Qdrant), `WP-27` (clean full text).

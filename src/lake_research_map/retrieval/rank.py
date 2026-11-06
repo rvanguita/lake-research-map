@@ -24,11 +24,11 @@ def tokenize(text: str) -> list[str]:
 class BM25Index:
     """Okapi BM25 over a fixed list of texts, tokenized once.
 
-    The scoring is the one `dashboard/search.py::bm25_search` used (same
-    tokenizer, k1=1.5, b=0.75, IDF `log(1 + (N - df + 0.5) / (df + 0.5))`, query
-    tokens shorter than two characters ignored, a repeated query token counted
-    again), but the corpus statistics are computed once over the whole scope
-    instead of on every query over whatever subset was passed in. A filter
+    The scoring is the one the chunk-level dashboard search used before WP-28
+    (same tokenizer, k1=1.5, b=0.75, IDF `log(1 + (N - df + 0.5) / (df + 0.5))`,
+    query tokens shorter than two characters ignored, a repeated query token
+    counted again), but the corpus statistics are computed once over the whole
+    scope instead of on every query over whatever subset was passed in. A filter
     therefore changes which documents may rank, never how a document scores.
     """
 

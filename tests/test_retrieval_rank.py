@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import numpy as np
-import pandas as pd
 import pytest
 
 from lake_research_map.retrieval.rank import (
@@ -24,7 +23,7 @@ TEXTS = [
 
 
 def _single_shot_bm25(query: str, texts: list[str], k1: float = 1.5, b: float = 0.75):
-    """The scoring `dashboard/search.py::bm25_search` applied, written out."""
+    """The Okapi scoring the chunk-level dashboard search used, written out."""
     docs = [tokenize(text) for text in texts]
     lengths = np.array([max(len(doc), 1) for doc in docs], dtype=float)
     avgdl = lengths.mean()
@@ -47,18 +46,6 @@ def _single_shot_bm25(query: str, texts: list[str], k1: float = 1.5, b: float = 
 )
 def test_bm25_index_scores_equal_the_single_shot_definition(query):
     np.testing.assert_allclose(BM25Index(TEXTS).scores(query), _single_shot_bm25(query, TEXTS))
-
-
-def test_bm25_index_matches_the_dashboard_bm25_search_on_the_same_population():
-    from lake_research_map.dashboard.search import bm25_search
-
-    frame = pd.DataFrame({"id": range(len(TEXTS)), "text": TEXTS})
-    legacy = bm25_search("distribution planning uncertainty", frame, top_k=10)
-    scores = BM25Index(TEXTS).scores("distribution planning uncertainty")
-
-    np.testing.assert_allclose(
-        legacy["bm25_score"].to_numpy(), scores[legacy["id"].to_numpy()], rtol=1e-12
-    )
 
 
 def test_bm25_index_is_reusable_and_scores_zero_without_matches():
