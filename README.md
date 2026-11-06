@@ -24,7 +24,7 @@ It transforms raw, heterogeneous, and partial bibliographic search exports from 
 - [Medallion Data Lake Architecture](#-medallion-data-lake-architecture)
   - [Pipeline Stages](#pipeline-stages)
   - [Multi-Project Database Isolation](#multi-project-database-isolation)
-  - [Binary Vector Embeddings (`LargeBinary` float32)](#binary-vector-embeddings-largebinary-float32)
+  - [Vector Store (Qdrant)](#vector-store-qdrant)
 - [Interactive Analytical Dashboard (10 Pages)](#-interactive-analytical-dashboard-10-pages)
 - [Scientometric, Econometric & Machine Learning Rigor](#-scientometric-econometric--machine-learning-rigor)
 - [Quickstart & Deployment](#-quickstart--deployment)
@@ -64,8 +64,8 @@ The pipeline implements a 6-tier Medallion architecture orchestrated by Apache A
 | **1. Raw** | `raw.lit_*` | Content-addressed retention of consumed IEEE/Elsevier exports, search configuration, enrichment cache, and PDFs. The default append policy combines new files with archived active sources; `--source-policy snapshot` explicitly mirrors only the files currently on disk. |
 | **2. Bronze** | `bronze.lit_articles` | Transactional cross-source schema harmonization with file-qualified natural keys and dataset lineage. Records are classified as `journal`, `conference`, `review`, or `other`, and citation/reference backfills are applied from `data/enrichment_cache.json`. |
 | **3. Silver** | `silver.lit_articles`<br>`silver.lit_rejected` | Deduplicates records by normalized DOI into single authoritative paper records while preserving publication category and classification basis. Tags non-article items, executes fuzzy PDF matching via `rapidfuzz` ($\ge 85$), and audits DOI-less rows in `silver.lit_rejected`. |
-| **4. Gold** | `gold.lit_articles`<br>`gold.lit_chunks`<br>`gold.lit_dataset_*`<br>`gold.lit_pipeline_*` | Builds an isolated, immutable candidate snapshot, applies reviewed duplicate decisions, reuses compatible unchanged vectors, and records parent/stage lineage. The live Gold projection is replaced only after publication gates pass. |
-| **5. Embed** | `gold.lit_dataset_chunks.embedding_bin` | In-process vectorization using local ONNX-accelerated `fastembed` (`BAAI/bge-small-en-v1.5`, 384 dimensions). Completeness, model, binary dimension, and finite-value contracts block incompatible candidates. |
+| **4. Gold** | `gold.lit_articles`<br>`gold.lit_chunks`<br>`gold.lit_dataset_*`<br>`gold.lit_pipeline_*` | Builds an isolated, immutable candidate snapshot, applies reviewed duplicate decisions, records each chunk's text hash, and records parent/stage lineage. The live Gold projection is replaced only after publication gates pass. |
+| **5. Embed** | Qdrant `lit_chunks_<version_id>`<br>`gold.lit_dataset_chunks` (provenance) | In-process vectorization using local ONNX-accelerated `fastembed` (`BAAI/bge-small-en-v1.5`, 384 dimensions) into the version's Qdrant collection, copying any vector already stored for the same text. Completeness, model, dimension, finite-value, text-hash and orphan contracts on the Qdrant points block incompatible candidates. |
 | **6. Semantic** | `gold.lit_dataset_semantics`<br>`gold.lit_dataset_duplicate_pairs` | Contrastive semantic screening, theme discovery, projections, and duplicate candidates at 100% eligible abstract coverage. Successful completion atomically publishes all candidate Gold outputs. |
 
 ### Multi-Project Database Isolation
@@ -75,11 +75,39 @@ The underlying MySQL server hosts multiple discrete databases named plainly afte
 > [!IMPORTANT]
 > To preserve multi-tenant isolation, `lake-research-map` strictly queries and modifies tables bearing the `lit_` prefix. Non-`lit_` tables are completely ignored by migrations, queries, and automated tests.
 
-### Binary Vector Embeddings (`LargeBinary` float32)
+### Vector Store (Qdrant)
 
-Vector embeddings for RAG retrieval and manifold projections are stored directly as native IEEE 754 float32 byte arrays (`LargeBinary` in MySQL):
-- **82% Storage Footprint Reduction**: Binary serialization drops per-vector storage from ~8.5 KB (JSON array of floats) to **1,536 bytes** (`384 * 4 bytes`), reducing chunk table size from ~50 MB to ~9 MB.
-- **Zero-Copy In-Memory Vectorization**: Deserialization executes instantaneously via `np.frombuffer(raw_bytes, dtype=np.float32)`, eliminating JSON parsing bottlenecks and accelerating in-memory k-NN vector search by 5–10x.
+Chunk vectors live in [Qdrant](https://qdrant.tech/) (`ADR-08` in `docs/SDD.md`); MySQL Gold keeps the text, metadata, embedding provenance and the publication pointer.
+
+- **One immutable collection per dataset version** (`lit_chunks_<version_id>`), filled while the version is a candidate and contract-checked before the publication pointer can move to it. Rolling back a version moves the pointer; its vectors are already there.
+- **`lit_chunks_active` alias** for retrieval clients: it always names the published version's collection.
+- **Payload per point**: `doi`, `chunk_type`, `seq`, the chunk `text`, embedding provenance, the article fields the dashboard filters on (`year`, `source`, `venue`, `publication_category`, `is_non_article`, `has_pdf`, `abstract_missing`) and the screening signals (`relevance_score`, `offtopic_score`, `relevance_margin`, `theme_id`, `theme_label`).
+- **Exact search**: brute force over ~7.5k vectors, so a query returns the same ranking on every run.
+
+A RAG client can query it directly; embed the query with the same model so it lands in the same space:
+
+```python
+from fastembed import TextEmbedding
+from qdrant_client import QdrantClient, models
+
+client = QdrantClient(url="http://127.0.0.1:6333")
+query = next(TextEmbedding("BAAI/bge-small-en-v1.5").embed(["hosting capacity with rooftop PV"]))
+hits = client.query_points(
+    "lit_chunks_active",
+    query=query.tolist(),
+    using="dense",
+    query_filter=models.Filter(
+        must=[
+            models.FieldCondition(key="chunk_type", match=models.MatchValue(value="abstract")),
+            models.FieldCondition(key="year", range=models.Range(gte=2015)),
+        ]
+    ),
+    search_params=models.SearchParams(exact=True),
+    limit=10,
+).points
+for hit in hits:
+    print(round(hit.score, 3), hit.payload["doi"], hit.payload["title"])
+```
 
 ---
 
@@ -171,7 +199,7 @@ uv run lake-research-map --stage raw        # Ingest raw publisher exports
 uv run lake-research-map --stage bronze     # Schema harmonization + OpenAlex backfill
 uv run lake-research-map --stage silver     # DOI deduplication, PDF matching, reject logging
 uv run lake-research-map --stage gold       # Curated articles, chunks, telemetry
-uv run lake-research-map --stage embed      # Local ONNX binary vector embeddings
+uv run lake-research-map --stage embed      # Local ONNX embeddings into the version's Qdrant collection
 uv run lake-research-map --stage semantic   # Contrastive screening, themes, projections
 
 # Review cross-DOI near-duplicate candidates (dashboard remains read-only)
@@ -185,6 +213,11 @@ uv run lake-research-map --stage all
 # Inspect versions or reactivate a previously published Gold snapshot
 uv run lake-research-map versions list
 uv run lake-research-map versions activate --version-id VERSION_SHA256
+
+# Vector store: inspect, copy pre-migration MySQL vectors, restore a lost collection
+uv run lake-research-map vectors status
+uv run lake-research-map vectors backfill
+uv run lake-research-map vectors rebuild [--version VERSION_SHA256]
 
 # Schema bootstrap & additive column migration
 uv run python -m lake_research_map.db.bootstrap
@@ -201,11 +234,13 @@ Open [http://localhost:8501](http://localhost:8501) in your browser.
 
 ### Airflow & Multi-Container Deployment
 
-Run Airflow and the dashboard simultaneously using Docker Compose:
+Run Airflow and the dashboard simultaneously using Docker Compose; the `qdrant` profile adds the vector store that the `embed` and `semantic` stages and dense search need:
 
 ```bash
-docker compose up -d
+docker compose --profile qdrant up -d   # or set COMPOSE_PROFILES=qdrant in .env
 ```
+
+- **Qdrant**: [http://localhost:6333/dashboard](http://localhost:6333/dashboard) (loopback only; payloads carry chunk text)
 
 - **Streamlit Dashboard**: [http://localhost:8501](http://localhost:8501)
 - **Apache Airflow UI**: [http://localhost:8080](http://localhost:8080) (Default login: `admin` / `admin`)
@@ -256,6 +291,7 @@ lake-research-map/
 │   │   ├── silver_models.py      # lit_articles deduplicated, lit_rejected audit log
 │   │   ├── gold_models.py        # Gold articles, chunks, semantics, runs, duplicate overrides
 │   │   ├── engines.py            # Layer database session factories
+│   │   ├── vector_store.py       # Qdrant: one immutable collection per dataset version
 │   │   └── bootstrap.py          # Table creation and additive column migrations
 │   ├── ingest/                   # Raw parsing & API enrichment
 │   │   ├── raw_csv.py            # IEEE CSV parser
@@ -269,7 +305,8 @@ lake-research-map/
 │   │   ├── silver_articles.py    # Normalized DOI dedup & RapidFuzz PDF matching
 │   │   ├── gold_articles.py      # Curated RAG chunks with hash reconciliation
 │   │   ├── duplicate_resolution.py # Persistent merge/keep review decisions
-│   │   ├── embeddings.py         # Local ONNX fastembed vectorization (LargeBinary float32)
+│   │   ├── embeddings.py         # Local ONNX fastembed model identity, pin and loader
+│   │   ├── vector_payloads.py    # What each Qdrant point carries
 │   │   ├── semantics.py          # Contrastive screening, KMeans, UMAP/t-SNE/PCA
 │   │   └── screening_calibration.py # SLR sensitivity/recall threshold calibration
 │   └── dashboard/                # Multipage Streamlit application

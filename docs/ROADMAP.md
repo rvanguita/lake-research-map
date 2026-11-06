@@ -26,11 +26,11 @@ Dependencies use work-package IDs. Horizons are sequencing bands rather than cal
 
 ## 2. Delivered baseline
 
-The following capabilities are implemented and covered by the current 406 passing tests plus two opt-in MySQL tests skipped in the default run (229 before this cycle, followed by regression, application-wide page, evidence-workflow, retrieval, provenance, semantic-persistence, MySQL migration, and year-bound coverage):
+The following capabilities are implemented and covered by the current 436 passing tests plus four opt-in tests skipped in the default run -- two MySQL, two Qdrant server (229 before the 2026-09 cycle, followed by regression, application-wide page, evidence-workflow, retrieval, provenance, semantic-persistence, MySQL migration, year-bound and, on 2026-11-06, vector-store coverage):
 
 - Raw/Bronze/Silver/Gold ingestion and transformations with DOI normalization and rejection audit.
 - Local PDF inventory/matching, full-text extraction, chunk reconciliation, and local BGE embeddings.
-- Binary float32 vectors as the single canonical representation, dense/BM25/RRF retrieval, and optional Faiss indexing. The JSON mirror is no longer written.
+- Vectors in Qdrant, one immutable collection per dataset version plus the `lit_chunks_active` alias (`ADR-08`, `WP-26`); dense/BM25/RRF retrieval. No MySQL vector is written; the BLOBs of versions published before the migration remain as immutable history.
 - Contrastive screening signals, KMeans themes, PCA/t-SNE/optional UMAP, novelty/isolation, and duplicate candidates.
 - Persistent, reversible cross-DOI `merge`/`keep` decisions applied in Gold.
 - Pipeline-run history and seven Airflow DAGs matching the six stages plus the complete flow.
@@ -315,7 +315,7 @@ This baseline does not imply that every analytical method is confirmatory. The l
 
 ### `WP-25` — Scale-triggered storage and compute evolution
 
-- **Status:** Complete for the current corpus; binary-first loading and vectorized local search meet the recorded memory/latency thresholds, so no infrastructure migration is approved.
+- **Status:** Complete for the current corpus; binary-first loading and vectorized local search meet the recorded memory/latency thresholds, so no migration was approved *for performance*. The vector store did move on 2026-11-06 (`WP-26`, `ADR-08`), for consumption by external retrieval clients -- the "concurrent search becomes a product requirement" trigger -- and search stays exact; approximate search remains gated on the thresholds below.
 
 - **Objective:** Adopt external vector/search or distributed compute only when the current design misses SLOs.
 - **Justification:** Current corpus size does not justify additional infrastructure.
@@ -323,6 +323,16 @@ This baseline does not imply that every analytical method is confirmatory. The l
 - **Deliverable:** Benchmark report and ADR comparing in-process linear/Faiss search, MySQL storage, and candidate managed systems on latency, recall, cost, recovery, and operations.
 - **Completion:** Migration occurs only if an agreed corpus-size/latency/memory threshold is exceeded and the selected alternative demonstrates a material benefit.
 
+
+### `WP-26` — Qdrant vector store
+
+- **Status:** Complete on 2026-11-06.
+- **Objective:** Make the chunk vectors queryable by a retrieval client outside the dashboard process without weakening versioned publication.
+- **Justification:** The corpus is to feed a RAG client that filters the most relevant articles for a subject; vectors in MySQL BLOBs can only be searched by loading all of them into the reading process.
+- **Dependencies:** `WP-03`, `WP-06`.
+- **Deliverable:** `db/vector_store.py` (one immutable collection per version, deterministic point ids, exact search, `lit_chunks_active` alias); the embed stage writing only Qdrant and copying reusable vectors by text hash before computing; the embed contract evaluated on the Qdrant points (orphans and an unreachable store included); `vectors status|backfill|rebuild|sync-alias`; the `qdrant` compose profile; `ADR-08`.
+- **Completion:** A publication cannot move the pointer to a version whose collection is incomplete or stale; an unchanged rebuild re-embeds nothing; a lost collection is recoverable from Gold text alone.
+- **Evidence:** The backfill copied the active version's 7,552 vectors and they compared bit-identical to the MySQL BLOBs; relevance recomputed from Qdrant matched the stored scores within 5.1e-7. The superseded legacy import (`31a2270b…`) was skipped: none of its 7,552 BLOBs carries the provenance the contract demands. A fastembed snapshot change (a README-only Hub commit, 2026-09-24) was found on the way and is now accepted by model-file content, not commit hash. See `docs/evidence/2026-11-06-qdrant-vector-store.md`.
 ## 8. Cross-cutting completion gates
 
 Every work package that changes data or analytical behavior must include:
@@ -345,6 +355,7 @@ Every work package that changes data or analytical behavior must include:
 | `FR-07`, `NFR-01`, `NFR-04` | `ADR-03` | `WP-01`, `WP-07`, `WP-08` |
 | `FR-09` | `ADR-05` | `WP-09`, `WP-10` |
 | `FR-10`, `NFR-05` | `ADR-04` | `WP-13`, `WP-25` |
+| `FR-13` | `ADR-03`, `ADR-08` | `WP-06`, `WP-26` |
 | `FR-11`, `NFR-06` | `ADR-01`, `ADR-06` | `WP-08`, `WP-22` |
 | `FR-12`, `NFR-07`, `NFR-08` | `ADR-02`, `ADR-06` | `WP-03`, `WP-20`, `WP-21`, `WP-22` |
 | `RQ-04` through `RQ-07` | `ADR-02`, `ADR-04`, `ADR-05` | `WP-11` through `WP-21` |
@@ -358,7 +369,7 @@ The following are intentionally not scheduled until a decision need and evidence
 - Generative summaries presented as research evidence.
 - Causal ranking of venues, authors, or methods.
 - Deep-learning forecasts on short annual series.
-- A remote vector database solely for architectural novelty.
+- A remote vector database solely for architectural novelty. (Qdrant was adopted under `ADR-08` for a consumer requirement, not novelty; the line stays as the bar any further infrastructure must clear.)
 - Automatic merging or screening without human-reviewed validation.
 
 Deferral prevents complexity from growing faster than the project's capacity to validate and maintain it.

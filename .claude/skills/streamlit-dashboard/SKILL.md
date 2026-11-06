@@ -214,11 +214,12 @@ call `render_chart`.
   sidebar filter and the Semântica page fall back to the old percentile view
   when `offtopic_score` is absent, i.e. when the database's last `semantic` run
   predates the contrastive anchor; keep that fallback when editing either.
-- `lit_gold.chunks.embedding` is filled by the `embed` pipeline stage
-  (`transform/embeddings.py`, via `fastembed`'s local ONNX model
-  `BAAI/bge-small-en-v1.5`, no API key), not automatically by `--stage gold`.
-  It's idempotent — only `embedding IS NULL` rows are processed — so a chunk
-  never gets re-embedded, and a partial run (killed mid-way) resumes cleanly
-  since each batch commits before the next one starts. If the embeddings
-  gauge on Qualidade e RAG ever reads 0% again, it means this stage hasn't
-  run yet for the current chunks, not that something is broken.
+- Chunk vectors live in **Qdrant**, one collection per dataset version
+  (ADR-08), filled by the `embed` stage (`fastembed`'s local ONNX model
+  `BAAI/bge-small-en-v1.5`, no API key) — not by `--stage gold`. Pages get
+  them through `data.attach_chunk_vectors` / `data.load_abstract_embeddings_data`,
+  which return empty when the store does not answer; treat that as "no
+  vectors", never as an error. The readiness gauge on Quality and RAG reads
+  the *provenance* Gold records (`has_embedding` = `embed_revision IS NOT
+  NULL`), so a page render never calls Qdrant. If it reads 0%, the stage
+  has not run for the current version, not that something is broken.

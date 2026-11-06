@@ -24,13 +24,19 @@ uv run lake-research-map --stage <stage>         # raw | bronze | silver | gold 
 uv run python -m lake_research_map.db.bootstrap  # create the 4 databases + tables only, no ingestion
 uv run streamlit run main.py                     # dashboard at http://localhost:8501
 docker compose up -d                             # Airflow (:8080) + dashboard (:8501), both read .env
-uv run pytest                                    # full suite (in-memory SQLite, no MySQL needed)
+docker compose --profile qdrant up -d qdrant     # vector store (:6333) -- embed/semantic/search need it
+uv run lake-research-map vectors status          # each version's Qdrant collection vs its Gold chunks
+uv run lake-research-map vectors backfill        # copy vectors still held as MySQL BLOBs into Qdrant
+uv run lake-research-map vectors rebuild         # restore a lost collection from Gold text (--version ID)
+uv run pytest                                    # full suite (in-memory SQLite + Qdrant local mode)
+RUN_QDRANT_INTEGRATION=1 uv run pytest -m qdrant # server-only Qdrant checks against the compose service
 uv run pytest tests/test_silver_articles.py -k merge   # one file / one test
 uv run ruff check --fix && uv run ruff format    # lint + format (config in pyproject.toml)
 uv add <pkg>                                     # add a dependency (updates pyproject.toml + uv.lock)
 ```
 
-MySQL connection settings and `AIRFLOW_BASE_URL` live in `.env` (git-ignored; see `.env.example`).
+MySQL connection settings, `QDRANT_URL` and `AIRFLOW_BASE_URL` live in `.env` (git-ignored; see
+`.env.example`).
 
 ## Skills
 
@@ -57,14 +63,25 @@ the DAG file deliberately never imports `lake_research_map`).
 - `silver` — dedup by normalized DOI, quality flags, fuzzy PDF linking (rapidfuzz, threshold 85).
 - `gold` — curated `lit_articles` + `lit_chunks` (RAG unit: one `abstract` chunk per article, plus `fulltext`
   chunks from a linked PDF via pypdf).
-- `embed` — fills `lit_chunks.embedding` locally via `fastembed` (`BAAI/bge-small-en-v1.5`, ONNX, no API key).
-- `semantic` — reads those embeddings, writes `lit_semantics` + `lit_duplicate_pairs`.
+- `embed` — embeds the chunks locally via `fastembed` (`BAAI/bge-small-en-v1.5`, ONNX, no API key) into the
+  version's **Qdrant** collection, and records each vector's provenance on its Gold chunk row.
+- `semantic` — reads those vectors from Qdrant, writes `lit_semantics` + `lit_duplicate_pairs`, and copies the
+  screening signals back onto the points as payload.
 
-**`gold` rebuilds the articles table but *reconciles* the chunks: a chunk whose text is unchanged keeps its
-row and its vector, and only the chunks whose text actually changed are invalidated. (It was a plain
-delete-and-rebuild once, which silently threw away every embedding on each run — and with them the basis of
-`lit_semantics`.) So after a `gold` run, `embed` fills exactly the chunks that changed, and `semantic` has to
-be re-run either way, because it rewrites its own tables from whatever is embedded now.**
+**Vectors live in Qdrant, not MySQL (ADR-08, 2026-11-06).** Gold stays the source of truth for chunk text,
+metadata, embedding provenance and the publication pointer; `db/vector_store.py` (`get_vector_store()`, the
+counterpart of `get_engine`) holds one immutable collection per dataset version, `lit_chunks_<version_id>`,
+plus the `lit_chunks_active` alias that external RAG clients query. Internal readers resolve the collection
+through the Gold pointer, never the alias. No `embedding_bin` is written any more; the BLOBs already stored in
+published snapshots stay untouched, because those snapshots are immutable.
+
+**A vector is a function of (text, model, revision), so `embed` never re-embeds text any store has seen.**
+`gold` only reconciles chunk *text* (the run stats say how many chunks were unchanged / invalidated / added);
+`embed` then copies every reusable vector by text hash -- from the candidate's own collection after a killed
+run, then from the active version's, then from a pre-ADR-08 BLOB of the candidate or the active version -- and
+sends only new text to the model. (A delete-and-rebuild that threw away every embedding on each run, and with
+them the basis of `lit_semantics`, is what this replaced.) `semantic` has to be re-run either way, because it
+rewrites its own tables from whatever is embedded now.
 
 ### Idempotency, per stage
 
@@ -76,9 +93,11 @@ Each stage has its own re-run contract; preserve it when editing.
   re-applies the citation/reference-count backfill after every bronze build.
 - `silver` — delete-and-rebuild: fully derived from the layer above.
 - `gold` — articles delete-and-rebuild; chunks reconcile against the desired set (`(chunk_type, seq)` per
-  DOI), so unchanged text keeps its embedding. The run stats say how many were unchanged / invalidated /
-  added.
-- `embed` — only processes `embedding IS NULL`; running it twice is a no-op.
+  DOI). The run stats say how many were unchanged / invalidated / added.
+- `embed` — a chunk is pending only when its Qdrant point is missing or carries another text hash or model
+  revision, or its Gold provenance is missing; running it twice is a no-op. Each batch is upserted before Gold
+  commits the provenance, so a killed run resumes from its own collection. Points with no Gold chunk are
+  deleted.
 - `semantic` — truncates the two tables it owns, never touches curated article rows.
 
 ### Databases
@@ -92,13 +111,36 @@ column sets differ — never assume a column on one layer's model exists on anot
 
 `db/bootstrap.py` runs on every pipeline start: `create_all` (new tables only) plus the additive migrations in
 `_ADDITIVE_COLUMNS`. Adding a column to an existing table requires an entry there, and every entry must be
-nullable and purely additive — it runs unattended.
+nullable and purely additive — it runs unattended. Those migrations add no indexes: `lit_dataset_chunks.text_sha256`
+is unindexed on the deployed schema, so look rows up through `dataset_version_id` (indexed) and filter after --
+a lookup by hash alone scans the whole table (7 s per 64 hashes, measured 2026-11-06).
+
+**Qdrant** (compose profile `qdrant`, `qdrant/qdrant:v1.20.0`, pinned to the `qdrant-client` minor) is the
+fifth store. `vectors status|backfill|rebuild|sync-alias` inspect and repair it; the repairs write only Qdrant,
+never Gold rows, and take the pipeline lock. Losing the volume loses nothing: every vector is recomputable from
+Gold text with the pinned model revision, and `vectors rebuild` does exactly that. The embed contract fails a
+publication whose collection is incomplete, stale, unreachable or holds orphan points.
+
+**The embedding pin is by content, not only by commit.** `EMBED_MODEL_REVISION` names the Hugging Face snapshot
+the stored vectors came from, but the Hub repository received a README-only commit on 2026-09-24, and fastembed
+downloads the latest snapshot whenever its cache is empty -- which, with the default cache in tmpfs `/tmp`, is
+after every reboot. `resolved_model_revision` therefore also accepts a snapshot whose five model-defining files
+hash to `EMBED_MODEL_CONTENT_SHA256`, and records the pinned revision; a change to the weights or tokenizer still
+fails. Set `FASTEMBED_CACHE_PATH` to persistent storage (commented out in `.env.example`: an *empty* value makes
+fastembed cache into the current directory).
 
 ### Session lifecycle
 
 `pipeline.py` opens one `Session` per layer a stage touches and closes them in a `finally`; transform builders
 take those sessions as arguments and never open their own. That's what lets the whole suite run against
-in-memory SQLite (`tests/conftest.py`, one session fixture per layer) with no MySQL.
+in-memory SQLite (`tests/conftest.py`, one session fixture per layer) with no MySQL. The vector store follows
+the same rule: builders take a `store` argument, and the suite passes `qdrant-client`'s in-process local mode
+(`vector_store` fixture) -- which ignores payload indexes and search parameters, so server-only behaviour sits
+behind the `qdrant` marker.
+
+The embed stage commits and **expunges** the session after every batch; anything loaded before its batch loop
+must be plain result rows, not ORM instances, or it detaches on the second batch (a fixture smaller than one
+batch will not show it).
 
 `config.relative_path()` / `absolute_path()`: stored file paths are relative to the repo root because the same
 file is `/home/…/data/x.csv` on the host and `/opt/airflow/project/data/x.csv` in the Airflow container —
@@ -118,7 +160,10 @@ rebuilds from the versioned candidate, so the vectors were silently discarded on
 
 The dashboard reads the active immutable **Gold** version through the publication pointer. It falls back to
 Silver and then Bronze only when Gold fails its readiness contract, and displays that degraded mode explicitly.
-`lit_semantics` remains a separate Gold table, so `loaders.with_semantics()` joins it on `doi`.
+`lit_semantics` remains a separate Gold table, so `loaders.with_semantics()` joins it on `doi`. Vectors come from
+the version's Qdrant collection (`data.attach_chunk_vectors`, `data.load_abstract_embeddings_data`) and degrade
+to empty when the store does not answer; embedding *readiness* is read from Gold provenance, so no page render
+depends on Qdrant.
 
 `main.py` calls `app.main()` **as a function** on purpose: Streamlit re-executes the entry script on every
 rerun, and a module imported for its top-level side effects would only render once.

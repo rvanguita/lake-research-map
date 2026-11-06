@@ -45,20 +45,22 @@ The pipeline connects to a MySQL server with 4 discrete databases named plainly 
        │                       lit_chunks (RAG units: abstracts & fulltext; reconciled against text hash)
        │                       lit_pipeline_runs (execution duration, stats JSON, status)
        ▼
-   5. EMBED (`embed`)      --> fills lit_chunks.embedding_bin (LargeBinary float32); the JSON `embedding`
-       │                       mirror is no longer written, only kept nullable for older versions
+   5. EMBED (`embed`)      --> Qdrant collection lit_chunks_<version_id> (one point per chunk: dense
+       │                       vector + text, provenance and article payload; ADR-08) and the vector's
+       │                       provenance on the Gold chunk row. No MySQL vector is written any more.
        │                       via local ONNX fastembed (BAAI/bge-small-en-v1.5)
        ▼
    6. SEMANTIC (`semantic`)--> lit_semantics (contrastive topic vs logistics margin, KMeans themes, 2D projections)
                                lit_duplicate_pairs (near-duplicate abstracts under distinct DOIs)
+                               screening signals copied onto the Qdrant points as payload
 ```
 
 ### 2.3 Stage Idempotency Contracts
 - **`raw`**: Uses sha256 hashing (`lit_source_files`). Re-running skips unchanged files.
 - **`bronze`**: Natural key upsert `(source, source_id)`. Re-applies OpenAlex enrichment.
 - **`silver`**: Delete-and-rebuild derived table. Logs dropped records to `lit_rejected`.
-- **`gold`**: Rebuilds `lit_articles` but **reconciles** `lit_chunks`: existing chunks with matching text keep their vector (`embedding_bin`), avoiding redundant embedding recomputation.
-- **`embed`**: Only processes chunks where `embedding_bin IS NULL`. Running twice is a zero-op.
+- **`gold`**: Rebuilds `lit_articles` but **reconciles** `lit_chunks` text; the run stats count unchanged, invalidated and added chunks.
+- **`embed`**: A chunk is pending only when its Qdrant point is missing or carries another text hash or model revision. Reusable vectors are copied by text hash (own collection, then the active one, then pre-ADR-08 MySQL BLOBs); only new text is embedded. Running twice is a zero-op.
 - **`semantic`**: Truncates and rebuilds `lit_semantics` and `lit_duplicate_pairs` atomically without modifying articles.
 - **`bootstrap`**: `src/lake_research_map/db/bootstrap.py` executes before every pipeline run. Any newly introduced database column must be registered in `_ADDITIVE_COLUMNS` as nullable and additive.
 

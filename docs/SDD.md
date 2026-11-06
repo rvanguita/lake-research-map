@@ -41,7 +41,9 @@ Streamlit dashboard ----------------------------┘
 | `transform/bronze_articles.py` | Harmonize IEEE and Elsevier records | `bronze.lit_articles` |
 | `transform/silver_articles.py` | DOI deduplication, rejection audit, non-article flags, PDF matching | Silver tables |
 | `transform/gold_articles.py` | Apply approved merges; build curated articles and reconcile chunks | Gold articles/chunks |
-| `transform/embeddings.py` | Model identity, revision check, batch/thread bounds | Nothing; the writer is `versioned_gold.py` |
+| `transform/embeddings.py` | Model identity, revision check (by snapshot or byte-identical model files), batch/thread bounds, the one model loader | Nothing; the writer is `versioned_gold.py` |
+| `transform/vector_payloads.py` | What each Qdrant point carries: text, provenance, article filter fields, screening signals | Nothing |
+| `db/vector_store.py` | The Qdrant access point: one immutable collection per version, exact search, the `lit_chunks_active` alias | Qdrant collections (through `versioned_gold.py` and `vectors` repairs only) |
 | `transform/semantics.py` | Contrastive scoring, themes, projection, duplicate candidates | Semantic tables |
 | `transform/duplicate_resolution.py` | Validate persistent merge/keep/undo decisions | Duplicate overrides |
 | `pipeline.py` | Bootstrap, stage routing, CLI, and run telemetry | Pipeline-run records |
@@ -121,7 +123,7 @@ PDF matching currently uses `rapidfuzz.fuzz.token_sort_ratio` with threshold 85.
 | `lit_dataset_versions` | One logical corpus state | Deterministic SHA-256 | Source/config/code/curation hashes and candidate/active/superseded/failed state |
 | `lit_quality_results` | One contract result per stage attempt/check | `(stage_run_id, check_id)` | Severity, observed/expected values, details, and pass/fail |
 
-Gold articles are rebuilt, while chunks are reconciled by comparing stored and desired text. Documentation must not call this a “text-hash comparison” until a hash column exists. Unchanged text retains its vector; changed text nulls vector fields; stale chunks are removed.
+Gold articles are rebuilt, while chunks are reconciled by comparing stored and desired text; every candidate chunk row records the SHA-256 of its text. Vectors are not carried by the Gold rebuild: they live in Qdrant (ADR-08), and the embed stage reuses any stored vector whose text hash and model revision match, so unchanged text is never re-embedded and changed text always is.
 
 **Current:** Gold is the canonical input for corpus-level dashboard analyses when its minimum readiness contract passes: the table must be non-empty; DOI must be populated and unique; and the common analytical columns must exist. If that contract fails, the selector falls back to Silver and then Bronze, and every analytical page displays a degraded-mode warning with the reason. This protects approved Gold merges without turning incomplete initialization into a hard dashboard failure.
 
@@ -129,20 +131,19 @@ Gold articles are rebuilt, while chunks are reconciled by comparing stored and d
 
 ### 3.6 Embedding contract
 
-Current versioned embeddings use `BAAI/bge-small-en-v1.5`, float32 vectors, and binary BLOB storage. Candidate work is selected when the binary vector is absent, its text hash has changed, or its model contract differs. The JSON compatibility copy is no longer written: it roughly doubled chunk storage and dominated the dashboard's vector load (11.6 s to 2.3 s once it was excluded from the query). Readers are binary-only. The column is retained, nullable, because previously published versions carry both representations and stay reactivatable through the binary one; nothing reads the JSON.
+Embeddings use `BAAI/bge-small-en-v1.5` (384-dimension float32, unit norm) and are stored in **Qdrant**, one collection per dataset version (`lit_chunks_<version_id>`, named dense vector `dense`, cosine distance). Point ids are a UUIDv5 of `(doi, chunk_type, seq)`, so re-runs upsert rather than duplicate. Gold keeps the evidence of what each vector must be: `text_sha256`, model name, immutable model revision, dimension, dtype, normalization flag and embedded timestamp on every chunk row. No MySQL vector is written. The `embedding_bin` BLOBs and the retired JSON mirror stay, nullable, on the versions published before ADR-08 -- those snapshots are immutable -- and serve only as a copy source for `vectors backfill` and the first post-migration candidate.
 
-The target embedding contract requires:
-
-- `text_sha256`, model name, immutable model revision, vector dimension, dtype, normalization mode, and embedded timestamp.
-- Pending means binary vector absent, text hash changed, or model contract incompatible.
-- Binary length equals `dimension * 4`; non-finite vectors fail the stage.
-- The JSON fallback is retired: it is neither written nor read. The column is retained and nullable so that dropping it stays a separately reviewed migration rather than an unattended one.
+- **Pending** means the chunk's point is missing or carries another text hash or model revision, or the Gold provenance is missing.
+- **Reuse before compute:** reusable vectors are resolved in bulk before any batch -- the candidate's own collection (a killed run), the active version's, then qualifying BLOBs of the candidate or active version -- and only text no store has seen reaches the model.
+- **Ordering:** each batch is upserted (and waited for) before Gold records provenance and commits, so the two stores cannot disagree in the direction that loses work.
+- **Contract (`quality.embed_contract`):** every Gold chunk has a point with the pinned model and revision on both sides, the right dimension, a finite unit vector and a text hash equal to the row's current text; points without a chunk (orphans) fail; an unreachable store fails. Publication re-checks it, so the pointer never moves to a version with missing or stale vectors.
+- **Model pin:** a snapshot other than the pinned revision is accepted only when its five model-defining files hash to `EMBED_MODEL_CONTENT_SHA256` (a README-only Hub commit on 2026-09-24 made the commit-hash-only check refuse an identical model).
 
 ### 3.7 Semantic and screening contract
 
 Semantic outputs derive from abstract embeddings. The current stage calculates two anchor similarities, KMeans themes in a shared PCA space, t-SNE coordinates, and near-duplicate pairs.
 
-The current quality gate rejects publication unless all candidate chunks have compatible finite binary embeddings and every eligible abstract has a semantic row. Semantic rows and duplicate candidates are versioned and materialized atomically with articles/chunks. Persisting the full parameter/model-revision manifest remains in `WP-06`.
+The current quality gate rejects publication unless every candidate chunk has a compatible finite vector in the version's Qdrant collection and every eligible abstract has a semantic row. The stage reads the abstract matrix from Qdrant and writes the signals back onto the points as payload (including `relevance_margin`), so a retrieval client can filter by screening margin server-side. Semantic rows and duplicate candidates are versioned and materialized atomically with articles/chunks. Persisting the full parameter/model-revision manifest remains in `WP-06`.
 
 The current dashboard can export a deterministic four-stratum review sample and ingest one or more long-form CSV files in memory. It normalizes labels, rejects invalid/unknown decisions, preserves raw reviewers, gives explicit adjudication precedence, reports pairwise agreement when support is sufficient, and selects a candidate threshold on a 70% calibration split before evaluating it on a 30% holdout with stratified bootstrap intervals. Fewer than 40 resolved decisions or fewer than 10 observations in either class disables threshold recommendation. The result never changes filters or database state.
 
@@ -157,8 +158,8 @@ Screening labels remain target governed data rather than dashboard session state
 | Raw | Content-addressed scan, immutable manifest/revisions, transactional active reconciliation | Archive garbage collection is not automated |
 | Bronze | Transactional rebuild with file-qualified natural keys and dataset lineage; append-only provider observations | The active corpus has no live provider observations yet |
 | Silver | Transactional DOI rebuild/rejection audit with dataset lineage | PDF matcher validation remains in `WP-05` |
-| Gold | Build immutable candidate article/chunk snapshot; reuse compatible unchanged vectors | Database uniqueness for legacy live chunk keys remains application-enforced |
-| Embed | Fill candidate binary/JSON vectors and block incompatible/non-finite output | Immutable model revision/text hash remain in `WP-06` |
+| Gold | Build immutable candidate article/chunk snapshot with text hashes | Database uniqueness for legacy live chunk keys remains application-enforced |
+| Embed | Fill the version's Qdrant collection (reuse by text hash before compute), record provenance in Gold, delete orphan points, block incompatible/non-finite/unreachable output | `text_sha256` has no index on the deployed schema; lookups go through `dataset_version_id` |
 | Semantic | Build candidate signals only at complete embedding coverage; publish all Gold outputs atomically | Full semantic-run parameter manifest remains in `WP-06` |
 
 ### 4.2 Current versioned run protocol
@@ -313,9 +314,9 @@ population every coverage audit divides by.
 
 ### 9.1 Current baseline
 
-The repository has 406 passing pytest tests plus two opt-in MySQL tests skipped in the default run. They run with isolated in-memory SQLite sessions and additionally cover deterministic fingerprints, content-addressed retention, rename detection, Bronze deletion propagation, isolated Gold candidates, embedding contract failures, atomic materialization, exact Gold reactivation, an end-to-end correlated pipeline fixture, Airflow parent correlation, temporal enrichment observations, persistent human-review evidence, retrieval metrics, provenance coverage, persisted semantic diagnostics, the durable-label-to-calibration join with its approval digests, the injected-fixture citation-graph crawl, automatic abandoned-run recovery, and the plausible-year bound that keeps in-press records dated to next year inside every trend. The MySQL acceptance tests cover JSON/NULL/BLOB round trips, rollback, advisory locks, and the idempotent `lit_config` uniqueness migration. Ruff lint and format checks are required.
+The repository has 436 passing pytest tests plus four opt-in tests skipped in the default run (two MySQL, two Qdrant server). They run with isolated in-memory SQLite sessions and additionally cover deterministic fingerprints, content-addressed retention, rename detection, Bronze deletion propagation, isolated Gold candidates, embedding contract failures, atomic materialization, exact Gold reactivation, an end-to-end correlated pipeline fixture, Airflow parent correlation, temporal enrichment observations, persistent human-review evidence, retrieval metrics, provenance coverage, persisted semantic diagnostics, the durable-label-to-calibration join with its approval digests, the injected-fixture citation-graph crawl, automatic abandoned-run recovery, and the plausible-year bound that keeps in-press records dated to next year inside every trend. The MySQL acceptance tests cover JSON/NULL/BLOB round trips, rollback, advisory locks, and the idempotent `lit_config` uniqueness migration. Ruff lint and format checks are required.
 
-SQLite remains the default fast suite. MySQL-specific acceptance is recorded separately against MySQL 8.4 and must be rerun for changes to JSON/NULL behavior, BLOBs, DDL, transactions, or advisory locks.
+SQLite remains the default fast suite. MySQL-specific acceptance is recorded separately against MySQL 8.4 and must be rerun for changes to JSON/NULL behavior, BLOBs, DDL, transactions, or advisory locks. The vector store follows the same split: `qdrant-client`'s in-process local mode stands in for the server in the default suite, and `RUN_QDRANT_INTEGRATION=1 uv run pytest -m qdrant` checks what local mode ignores (payload indexes, exact-search parameters) against the compose service.
 
 ### 9.2 Target test layers
 
@@ -330,7 +331,7 @@ SQLite remains the default fast suite. MySQL-specific acceptance is recorded sep
 
 ## 10. Scaling and extension points
 
-Current in-process computation remains the default while measured refresh time, memory, and search latency meet targets. External vector infrastructure, distributed transforms, or materialized analytical tables require an ADR supported by benchmarks and operational cost.
+Current in-process computation remains the default while measured refresh time, memory, and search latency meet targets. Vector storage moved to Qdrant under ADR-08 for consumption reasons (external RAG clients and the MCP server), not for speed: search stays exact. Approximate search, distributed transforms, or materialized analytical tables still require an ADR supported by benchmarks and operational cost.
 
 Planned data extensions have explicit prerequisites:
 
@@ -376,6 +377,8 @@ Planned data extensions have explicit prerequisites:
 
 The 2026-09-21 active-corpus benchmark measured an 11.06 MiB vector matrix and a 92.72 ms warm-search P95 after binary-first loading. Retain local vectorized search and reconsider at 512 MiB, 250 ms P95, or a demonstrated concurrency requirement.
 
+**Superseded for vector storage by `ADR-08` (2026-11-06).** The concurrency requirement this ADR named arrived: the corpus is to be consumed by a RAG client outside the dashboard process. Everything else here -- pandas/NumPy/scikit-learn/ONNX, in-process semantic computation -- stands.
+
 ### `ADR-05` — Human authority for exclusion and cross-DOI identity
 
 **Decision:** Models prioritize and measure; reviewers decide.
@@ -418,6 +421,40 @@ source complete — none does.
 
 **Generalization:** this applies to any bounded traversal of an ordered key
 whose order correlates with a property under analysis, not just to DOIs.
+
+### `ADR-08` — Qdrant is the vector store; Gold keeps the evidence
+
+**Context:** the corpus is to feed a RAG client that filters the most relevant
+articles for a subject, alongside the dashboard and an MCP server. Vectors in
+MySQL BLOBs are readable only by loading every one of them into the reading
+process, which is fine for the dashboard and wrong for an external client that
+needs filtered nearest-neighbour search behind a standard API. This is the
+"demonstrated concurrency requirement" `ADR-04` named, not novelty.
+
+**Decision:** the embed stage writes vectors to Qdrant only, one collection per
+dataset version (`lit_chunks_<version_id>`), with text, provenance, article
+filter fields and screening signals as payload. Gold keeps chunk text, metadata,
+embedding provenance and the publication pointer, and stays the only thing a
+publication commits: the embed contract checks every chunk against its point
+before the pointer can move. External clients query the `lit_chunks_active`
+alias, moved after each publication commit; internal readers resolve
+collections through the Gold pointer and never depend on the alias. Search is
+exact (brute force) so a query ranks identically on every run. Qdrant runs as
+the opt-in `qdrant` compose profile, bound to loopback.
+
+**Alternatives:** keep BLOBs and add an HTTP search service of our own (a
+second implementation of filtering and pagination to maintain); store vectors
+in both places (two sources of truth that can disagree); a hosted vector service
+(PDF full text would leave the machine).
+
+**Consequences:** Qdrant is now required for `embed`, `semantic`, publication
+and dense search; without it the pipeline fails fast naming the compose
+command, and the dashboard degrades dense search to lexical. Losing the Qdrant
+volume loses no evidence: every vector is a function of Gold text and the
+pinned model revision, and `vectors rebuild` recomputes it. The BLOBs of
+versions published before the migration stay in MySQL, unchanged, as immutable
+history and as the source for `vectors backfill`; deleting them would mutate
+published snapshots and needs its own decision.
 
 ## 12. Known technical debt
 

@@ -23,6 +23,20 @@ table this project owns is `lit_`-prefixed; never touch a table in these databas
 `db/engines.py`'s `get_engine(layer)` (`@cache`d) / `get_session(layer)` is the one access point — always go
 through it, never construct an engine/session directly.
 
+## Vectors live in Qdrant (ADR-08)
+
+`db/vector_store.py`'s `get_vector_store()` is the equivalent access point for the fifth store. Builders take a
+`store` argument the way they take sessions (tests pass the in-process `vector_store` fixture). One collection
+per dataset version, point ids from `point_id(doi, chunk_type, seq)`; what a point carries is decided in
+`transform/vector_payloads.py`, which also owns the shared derivations (`primary_source`,
+`abstract_is_missing`, `relevance_margin`). Never write a vector to MySQL, and never write to a published
+version's collection except through `fill_vector_collection(write_provenance=False)` (the `vectors` repairs).
+
+Two traps the real data showed and small fixtures hide: the embed stage commits **and expunges** after every
+batch, so anything loaded before its loop must be plain result rows, not ORM objects; and
+`lit_dataset_chunks.text_sha256` has no index on the deployed schema (additive migrations add none), so query
+through `dataset_version_id` first.
+
 ## Adding a new column
 
 `db/bootstrap.py`'s `create_tables()` runs `Base.metadata.create_all()` per layer, which only creates

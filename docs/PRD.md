@@ -148,7 +148,7 @@ Every inferential or predictive result must report effect size, uncertainty, sam
 | `FR-02` | Detect changed and removed inputs. | Reconciliation reports additions, modifications, removals, and downstream effects. |
 | `FR-03` | Produce one Silver row per normalized DOI and audit every exclusion. | DOI uniqueness holds; rejection counts reconcile with Bronze. |
 | `FR-04` | Apply persistent, reversible cross-DOI review decisions in Gold. | Merge/keep/undo is idempotent and linked to reviewer rationale and time. |
-| `FR-05` | Reconcile chunks without retaining vectors for changed text. | Unchanged chunks retain vectors; changed/removed chunks invalidate cleanly. |
+| `FR-05` | Reconcile chunks without retaining vectors for changed text. | Unchanged text reuses its stored vector by text hash; changed text is re-embedded; points for removed chunks are deleted. |
 | `FR-06` | Publish semantic outputs only for a complete compatible embedding set. | Coverage and model/dimension checks pass before atomic replacement. |
 | `FR-07` | Record a correlated pipeline run and dataset version. | All stage events share a parent run and input/output version identifiers. |
 | `FR-08` | Serve Gold as the canonical analytical population. | Dashboard counts agree with curated Gold and approved merges. |
@@ -156,6 +156,7 @@ Every inferential or predictive result must report effect size, uncertainty, sam
 | `FR-10` | Provide inspectable lexical, dense, and hybrid retrieval. | Results expose parent DOI and component ranks/scores. |
 | `FR-11` | Keep dashboard data access read-only. | Mutations occur only through CLI/Airflow workflows. |
 | `FR-12` | Degrade safely when a table or optional analysis is unavailable. | Pages show a scoped explanation rather than crashing or inventing results. |
+| `FR-13` | Store chunk vectors in a vector store a retrieval client can query, one immutable collection per dataset version. | Every published version has a complete, contract-checked Qdrant collection; external clients find the published one under a stable alias; Gold remains the source of the evidence. |
 
 ### 6.2 Non-functional requirements
 
@@ -184,14 +185,15 @@ its requirement, or says plainly that none exists.
 | `FR-02` | Golden-corpus mutation test (add, edit, rename, remove, reactivate) | `ingest/snapshots.py::diff_manifests`; `tests/test_versioning_contracts.py` |
 | `FR-03` | `silver.doi_unique`, `silver.doi_normalized`, `silver.bronze_partition` | `quality.silver_contract`; `tests/test_silver_articles.py` |
 | `FR-04` | Idempotent merge/keep/undo with rationale and timestamps | `transform/duplicate_resolution.py`; `tests/test_duplicate_resolution.py` |
-| `FR-05` | Reused vs. invalidated chunk counts on an unchanged rebuild | `transform/versioned_gold.py`; `tests/test_gold_articles.py` |
-| `FR-06` | Dimension, model, revision, finiteness and coverage gates before publication | `quality.embed_contract`, `quality.publication_contract` |
+| `FR-05` | Reused vs. invalidated chunk counts on an unchanged rebuild; copy-before-compute and orphan deletion in the embed stage | `transform/versioned_gold.py`; `tests/test_gold_articles.py`, `tests/test_vector_collections.py` |
+| `FR-06` | Dimension, model, revision, finiteness, orphan and coverage gates on the Qdrant points before publication | `quality.embed_contract`, `quality.publication_contract`; `tests/test_vector_collections.py` |
 | `FR-07` | Parent execution and stage rows sharing one version | `tests/test_versioning_contracts.py` |
 | `FR-08` | Article reader bound to the publication pointer | `dashboard/data.py::load_articles`; `tests/test_dashboard_pages.py` |
 | `FR-09` | Durable labels joined to calibration, with both approval digests | `reviews calibrate`; `tests/test_review_label_reader.py` |
 | `FR-10` | Component ranks and scores exposed per mode | `dashboard/search.py`; `tests/test_search.py` |
 | `FR-11` | No write call anywhere under `dashboard/` | `tests/test_theme.py` |
 | `FR-12` | Every page rendered headless in populated and empty states | `tests/test_dashboard_pages.py` |
+| `FR-13` | Per-version collection, deterministic point ids, exact search, alias moved after publication, backfill/rebuild repairs | `db/vector_store.py`; `tests/test_vector_store.py`, `tests/test_vector_collections.py`, opt-in `tests/test_qdrant_server.py`; `vectors status` |
 | `NFR-01` | Source/config/code/curation fingerprints; per-page dataset-version caption | `ingest/snapshots.py::build_fingerprint`; `tests/test_population_provenance.py` |
 | `NFR-02` | Unchanged re-run produces no new logical rows | `tests/test_gold_articles.py`, `tests/test_raw_bib.py` |
 | `NFR-03` | Contract violation blocks publication and keeps the prior version active | `quality.assert_contract`; `tests/test_mysql_contracts.py` |
@@ -293,7 +295,8 @@ The product is successful when all of the following are evidenced, not merely as
 |---|---|---|
 | Use DOI as the principal conformed work key. | It is the most reliable shared identifier, but no-DOI exclusions remain auditable. | Implemented |
 | Keep cross-DOI semantic duplicates human-reviewed. | Similar abstracts can represent versions or genuinely distinct publications. | Implemented |
-| Use local BGE embeddings and binary float32 storage. | Appropriate for corpus scale and offline operation; performance claims require benchmarks. | Implemented |
+| Use local BGE embeddings and binary float32 storage. | Appropriate for corpus scale and offline operation; performance claims require benchmarks. | Superseded for storage on 2026-11-06 |
+| Store vectors in Qdrant, one collection per dataset version (ADR-08). | A RAG client outside the dashboard needs filtered nearest-neighbour search behind a standard API; Gold keeps the evidence and the publication pointer. | Implemented |
 | Keep dashboard pages read-only. | Separates analytical presentation from controlled pipeline mutations. | Implemented |
 | Treat contract-valid Gold as the canonical analytical population. | Gold is where approved merges and curated chunks exist; invalid or absent Gold falls back visibly to Silver/Bronze. | Versioned publication implemented; selector-to-pointer binding remains in `WP-04` |
 | Keep uploaded screening calibration non-persistent and non-operative. | The current phase can validate the method without allowing a dashboard session to mutate corpus decisions. | Implemented; governed persistence pending |
