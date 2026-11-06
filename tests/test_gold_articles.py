@@ -293,3 +293,74 @@ def test_keep_and_undo_restore_duplicate_on_next_gold_build(silver_session, gold
     keep_stats = build_gold_articles(silver_session, gold_session)
     assert keep_stats["articles"] == 2
     assert keep_stats["duplicate_records_merged"] == 0
+
+
+def test_chunk_text_breaks_on_sentences_once_lines_are_reflowed():
+    from lake_research_map.transform.pdf_text import reflow_lines
+
+    # pypdf's shape: every sentence ends at a line end and there is no blank line.
+    raw = "\n".join(f"Sentence {i} discusses distribution feeder planning." for i in range(60))
+
+    chunks = _chunk_text(reflow_lines(raw), max_chars=300, overlap=40)
+
+    assert len(chunks) > 1
+    assert all(chunk.endswith(".") for chunk in chunks)
+
+
+def _fake_pdf(monkeypatch, text: str) -> None:
+    from types import SimpleNamespace
+
+    from lake_research_map.transform import gold_articles
+
+    page = SimpleNamespace(extract_text=lambda: text)
+    monkeypatch.setattr(gold_articles, "PdfReader", lambda _path: SimpleNamespace(pages=[page]))
+
+
+def test_extract_pdf_text_cleans_the_text_and_counts_what_changed(monkeypatch):
+    from collections import Counter
+
+    from lake_research_map.transform.gold_articles import _extract_pdf_text
+
+    body = "\n".join(f"Line {i} of the body about distri-\nbution planning." for i in range(30))
+    _fake_pdf(monkeypatch, body + "\n12\nREFERENCES\n[1] A cited work.")
+    stats: Counter = Counter()
+
+    text = _extract_pdf_text("data/articles/paper.pdf", stats)
+
+    assert "cited work" not in text
+    assert "distribution planning." in text
+    assert "\n" not in text
+    assert stats == Counter(
+        pdf_texts_cleaned=1,
+        pdf_reference_sections_removed=1,
+        pdf_hyphens_joined=30,
+        pdf_short_lines_dropped=1,
+    )
+
+
+def test_both_gold_builders_report_the_pdf_cleaning(silver_session, gold_session, monkeypatch):
+    from lake_research_map.db.gold_models import DatasetVersion
+    from lake_research_map.transform.gold_articles import PDF_CLEANING_STATS
+    from lake_research_map.transform.versioned_gold import build_dataset_gold
+
+    _fake_pdf(monkeypatch, "Body sentence.\n" * 300 + "References\n[1] Cited.")
+    silver_session.add_all(
+        [
+            _silver(doi="10.1/pdf", has_pdf=True, pdf_path="data/articles/pdf.pdf"),
+            _silver(doi="10.1/plain"),
+        ]
+    )
+    silver_session.commit()
+    gold_session.add(DatasetVersion(version_id="v1", status="candidate"))
+    gold_session.commit()
+
+    versioned = build_dataset_gold(silver_session, gold_session, "v1")
+    legacy = build_gold_articles(silver_session, gold_session)
+
+    for stats in (versioned, legacy):
+        assert {key: stats[key] for key in PDF_CLEANING_STATS} == {
+            "pdf_texts_cleaned": 1,
+            "pdf_reference_sections_removed": 1,
+            "pdf_hyphens_joined": 0,
+            "pdf_short_lines_dropped": 0,
+        }

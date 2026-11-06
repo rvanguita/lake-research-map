@@ -52,7 +52,11 @@ from lake_research_map.transform.embeddings import (
     EMBED_MODEL_REVISION,
     embedding_model,
 )
-from lake_research_map.transform.gold_articles import _desired_chunks, _merge_silver_group
+from lake_research_map.transform.gold_articles import (
+    PDF_CLEANING_STATS,
+    _desired_chunks,
+    _merge_silver_group,
+)
 from lake_research_map.transform.semantics import (
     ANCHOR_TEXT,
     OFF_ANCHOR_TEXT,
@@ -157,6 +161,7 @@ def build_dataset_gold(
     )
 
     chunk_counts: Counter[str] = Counter()
+    pdf_stats: Counter[str] = Counter()
     reused = new = changed = 0
     for silver_row in silver_rows:
         if silver_row.doi in merged_duplicates:
@@ -189,7 +194,7 @@ def build_dataset_gold(
                 is_non_article=getattr(row, "is_non_article", False),
             )
         )
-        for desired in _desired_chunks(row):
+        for desired in _desired_chunks(row, pdf_stats):
             key = (row.doi, desired["chunk_type"], desired["seq"])
             previous = stored.get(key)
             same_text = previous is not None and previous.text == desired["text"]
@@ -221,6 +226,7 @@ def build_dataset_gold(
         "chunks_invalidated": changed,
         "duplicate_records_merged": len(merged_duplicates),
         "duplicate_overrides_inactive": merge_plan.inactive_overrides,
+        **{key: pdf_stats[key] for key in PDF_CLEANING_STATS},
     }
 
 

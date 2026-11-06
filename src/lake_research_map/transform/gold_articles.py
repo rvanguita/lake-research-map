@@ -3,7 +3,9 @@
 `articles` is the curated table a human/agent scans to pick a reference.
 `chunks` is the RAG ingestion unit: every article gets an 'abstract' chunk
 (title + abstract + keywords), and articles with a linked PDF (has_pdf) also
-get 'fulltext' chunks extracted via pypdf and split into fixed-size windows.
+get 'fulltext' chunks extracted via pypdf, cleaned (`transform/pdf_text.py`:
+reference list cut, page furniture dropped, line-break hyphens rejoined, lines
+reflowed into paragraphs) and split into fixed-size windows.
 `embedding`/`embed_model` are filled in by `transform/embeddings.py` (the
 `embed` stage, run after this one).
 
@@ -18,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections import Counter
 from dataclasses import dataclass
 from typing import Any
 
@@ -30,12 +33,20 @@ from lake_research_map.db.gold_models import Article as GoldArticle
 from lake_research_map.db.gold_models import Chunk
 from lake_research_map.db.silver_models import Article as SilverArticle
 from lake_research_map.transform.duplicate_resolution import active_merge_plan
+from lake_research_map.transform.pdf_text import clean_pdf_text
 from lake_research_map.transform.publication_categories import preferred_classification
 
 logger = logging.getLogger(__name__)
 
 CHUNK_MAX_CHARS = 1500
 CHUNK_OVERLAP_CHARS = 200
+# What the PDF cleaning did, summed over a build and reported in its stats.
+PDF_CLEANING_STATS = (
+    "pdf_texts_cleaned",
+    "pdf_reference_sections_removed",
+    "pdf_hyphens_joined",
+    "pdf_short_lines_dropped",
+)
 
 
 def _build_abstract_text(row: SilverArticle) -> str:
@@ -47,7 +58,7 @@ def _build_abstract_text(row: SilverArticle) -> str:
     return "\n\n".join(p for p in parts if p).strip()
 
 
-def _extract_pdf_text(pdf_path: str) -> str:
+def _extract_pdf_text(pdf_path: str, stats: Counter | None = None) -> str:
     # Paths are stored relative to the repo root (so the same file has the same
     # identity on the host and inside the Airflow container) -- resolve back to
     # an absolute path before actually opening it.
@@ -60,8 +71,14 @@ def _extract_pdf_text(pdf_path: str) -> str:
         # instead of silently indistinguishable from "PDF has no text".
         logger.warning("_extract_pdf_text: failed to extract text from %r", pdf_path, exc_info=True)
         return ""
-    text = "\n\n".join(pages)
-    return re.sub(r"[ \t]+", " ", text).strip()
+    text = re.sub(r"[ \t]+", " ", "\n\n".join(pages)).strip()
+    cleaned, report = clean_pdf_text(text)
+    if stats is not None:
+        stats["pdf_texts_cleaned"] += 1
+        stats["pdf_reference_sections_removed"] += int(report["reference_section_removed"])
+        stats["pdf_hyphens_joined"] += int(report["hyphens_joined"])
+        stats["pdf_short_lines_dropped"] += int(report["short_lines_dropped"])
+    return cleaned
 
 
 def _chunk_text(
@@ -96,7 +113,7 @@ def _chunk_text(
     return chunks
 
 
-def _desired_chunks(row: SilverArticle) -> list[dict]:
+def _desired_chunks(row: SilverArticle, stats: Counter | None = None) -> list[dict]:
     """Every chunk `row` should produce, in `(chunk_type, seq)` order.
 
     Split out so the reconciliation in `build_gold_articles` can compare the
@@ -109,7 +126,7 @@ def _desired_chunks(row: SilverArticle) -> list[dict]:
         chunks.append({"seq": 0, "chunk_type": "abstract", "text": abstract_text})
 
     if row.has_pdf and row.pdf_path:
-        full_text = _extract_pdf_text(row.pdf_path)
+        full_text = _extract_pdf_text(row.pdf_path, stats)
         for seq, text in enumerate(_chunk_text(full_text), start=1):
             chunks.append({"seq": seq, "chunk_type": "fulltext", "text": text})
     return chunks
@@ -206,6 +223,7 @@ _DELETE_BATCH = 500
 
 
 def build_gold_articles(silver_session: Session, gold_session: Session) -> dict:
+    pdf_stats: Counter[str] = Counter()
     silver_rows = silver_session.scalars(select(SilverArticle)).all()
     by_doi = {row.doi: row for row in silver_rows}
     merge_plan = active_merge_plan(gold_session, set(by_doi))
@@ -263,7 +281,7 @@ def build_gold_articles(silver_session: Session, gold_session: Session) -> dict:
         )
         n_articles += 1
 
-        for chunk in _desired_chunks(row):
+        for chunk in _desired_chunks(row, pdf_stats):
             key = (row.doi, chunk["chunk_type"], chunk["seq"])
             seen.add(key)
             chunk_counts[chunk["chunk_type"]] += 1
@@ -333,4 +351,5 @@ def build_gold_articles(silver_session: Session, gold_session: Session) -> dict:
         "chunks_missing_embedding": missing_embedding,
         "duplicate_records_merged": len(merged_duplicates),
         "duplicate_overrides_inactive": merge_plan.inactive_overrides,
+        **{key: pdf_stats[key] for key in PDF_CLEANING_STATS},
     }
