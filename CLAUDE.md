@@ -295,6 +295,22 @@ PDFs in `data/articles/` are named after the article title with punctuation repl
 The mapping back to a title is lossy, so match PDFs to metadata via a normalized/fuzzy title comparison rather
 than exact string equality — and prefer DOI-keyed renaming if a linking step is ever added.
 
+### PDF text is cleaned before it is chunked
+
+pypdf returns one `\n` per visual line, keeps the hyphen of every word broken at a line end, keeps page
+furniture as lines of their own, and the reference list comes along with the paper. `transform/pdf_text.py`
+cleans the extracted text before `_chunk_text` sees it, in an order that matters (the heading and the
+page-number lines are only recognisable while lines are still lines): cut at the **last** standalone reference
+heading past 60% of the text, drop lines of at most three characters with no letter, rejoin
+`lowercase-\nlowercase` hyphenations, then reflow single newlines into spaces while keeping blank-line breaks.
+
+Measured on the 97 linked PDFs (2026-11-06): reference lists removed from 88, 6,323 words rejoined, 7,368 lines
+of page furniture dropped, full-text chunks 4,437 → 3,623. Do not detect the reference list by `[n]` density:
+373 of the 793 citation-dense chunks came *before* the heading (dense in-text citation is normal here). Two
+accepted losses: an appendix printed after the references is cut with them, and a genuine compound broken at
+its hyphen is joined ("power-\nflow" → "powerflow"). The Gold stats report what the cleaning did
+(`pdf_reference_sections_removed`, `pdf_hyphens_joined`, `pdf_short_lines_dropped`, `pdf_texts_cleaned`).
+
 ### Counts don't line up
 
 Measured on the current corpus (2026-09-22): 304 IEEE CSV rows and 5,174 BibTeX entries across both sources

@@ -29,7 +29,7 @@ Dependencies use work-package IDs. Horizons are sequencing bands rather than cal
 The following capabilities are implemented and covered by the current 436 passing tests plus four opt-in tests skipped in the default run -- two MySQL, two Qdrant server (229 before the 2026-09 cycle, followed by regression, application-wide page, evidence-workflow, retrieval, provenance, semantic-persistence, MySQL migration, year-bound and, on 2026-11-06, vector-store coverage):
 
 - Raw/Bronze/Silver/Gold ingestion and transformations with DOI normalization and rejection audit.
-- Local PDF inventory/matching, full-text extraction, chunk reconciliation, and local BGE embeddings.
+- Local PDF inventory/matching, full-text extraction and cleaning (reference list, page furniture, line-break hyphens, reflow), chunk reconciliation, and local BGE embeddings.
 - Vectors in Qdrant, one immutable collection per dataset version plus the `lit_chunks_active` alias (`ADR-08`, `WP-26`); dense/BM25/RRF retrieval. No MySQL vector is written; the BLOBs of versions published before the migration remain as immutable history.
 - Contrastive screening signals, KMeans themes, PCA/t-SNE/optional UMAP, novelty/isolation, and duplicate candidates.
 - Persistent, reversible cross-DOI `merge`/`keep` decisions applied in Gold.
@@ -333,6 +333,16 @@ This baseline does not imply that every analytical method is confirmatory. The l
 - **Deliverable:** `db/vector_store.py` (one immutable collection per version, deterministic point ids, exact search, `lit_chunks_active` alias); the embed stage writing only Qdrant and copying reusable vectors by text hash before computing; the embed contract evaluated on the Qdrant points (orphans and an unreachable store included); `vectors status|backfill|rebuild|sync-alias`; the `qdrant` compose profile; `ADR-08`.
 - **Completion:** A publication cannot move the pointer to a version whose collection is incomplete or stale; an unchanged rebuild re-embeds nothing; a lost collection is recoverable from Gold text alone.
 - **Evidence:** The backfill copied the active version's 7,552 vectors and they compared bit-identical to the MySQL BLOBs; relevance recomputed from Qdrant matched the stored scores within 5.1e-7. The superseded legacy import (`31a2270b…`) was skipped: none of its 7,552 BLOBs carries the provenance the contract demands. A fastembed snapshot change (a README-only Hub commit, 2026-09-24) was found on the way and is now accepted by model-file content, not commit hash. See `docs/evidence/2026-11-06-qdrant-vector-store.md`.
+
+### `WP-27` — Full-text cleaning before chunking
+
+- **Status:** Complete on 2026-11-06.
+- **Objective:** Embed the paper's own text: no reference list, no page furniture, no words split across lines, chunk boundaries at sentence ends.
+- **Justification:** One in six full-text chunks was a citation list competing with the paper's text in every search, and pypdf's one-newline-per-line output hid most sentence ends from the chunker.
+- **Dependencies:** `WP-26` (the re-embedding it triggers reuses every unchanged abstract vector).
+- **Deliverable:** `transform/pdf_text.py` (four pure cleaners in a fixed order), applied by both Gold builders, which report `pdf_*` counts in their stats.
+- **Completion:** On the 97 linked PDFs the reference list is cut where a standalone heading exists past 60% of the text; the cleaning effect is reported per build.
+- **Evidence:** Measured on the 97 linked PDFs: reference lists removed from 88, 6,323 line-break hyphenations rejoined, 7,368 lines of page furniture dropped; full-text chunks 4,437 → 3,623 (−18.3%), and non-final chunks ending a sentence 89.7% → 92.7%. Detecting the list by `[n]` density was rejected: 373 of the 793 citation-dense chunks precede the heading. The regeneration that applied it is recorded in `docs/evidence/2026-11-06-pdf-text-cleaning.md`.
 ## 8. Cross-cutting completion gates
 
 Every work package that changes data or analytical behavior must include:
@@ -356,6 +366,7 @@ Every work package that changes data or analytical behavior must include:
 | `FR-09` | `ADR-05` | `WP-09`, `WP-10` |
 | `FR-10`, `NFR-05` | `ADR-04` | `WP-13`, `WP-25` |
 | `FR-13` | `ADR-03`, `ADR-08` | `WP-06`, `WP-26` |
+| `FR-15` | `ADR-03` | `WP-27` |
 | `FR-11`, `NFR-06` | `ADR-01`, `ADR-06` | `WP-08`, `WP-22` |
 | `FR-12`, `NFR-07`, `NFR-08` | `ADR-02`, `ADR-06` | `WP-03`, `WP-20`, `WP-21`, `WP-22` |
 | `RQ-04` through `RQ-07` | `ADR-02`, `ADR-04`, `ADR-05` | `WP-11` through `WP-21` |

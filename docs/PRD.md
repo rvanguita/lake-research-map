@@ -157,6 +157,7 @@ Every inferential or predictive result must report effect size, uncertainty, sam
 | `FR-11` | Keep dashboard data access read-only. | Mutations occur only through CLI/Airflow workflows. |
 | `FR-12` | Degrade safely when a table or optional analysis is unavailable. | Pages show a scoped explanation rather than crashing or inventing results. |
 | `FR-13` | Store chunk vectors in a vector store a retrieval client can query, one immutable collection per dataset version. | Every published version has a complete, contract-checked Qdrant collection; external clients find the published one under a stable alias; Gold remains the source of the evidence. |
+| `FR-15` | Embed the paper's own text, not its reference list or page furniture. | Full-text chunks exclude the reference section and page-number lines, rejoin line-break hyphenations, and end at sentence boundaries; each build reports what the cleaning changed. |
 
 ### 6.2 Non-functional requirements
 
@@ -194,6 +195,7 @@ its requirement, or says plainly that none exists.
 | `FR-11` | No write call anywhere under `dashboard/` | `tests/test_theme.py` |
 | `FR-12` | Every page rendered headless in populated and empty states | `tests/test_dashboard_pages.py` |
 | `FR-13` | Per-version collection, deterministic point ids, exact search, alias moved after publication, backfill/rebuild repairs | `db/vector_store.py`; `tests/test_vector_store.py`, `tests/test_vector_collections.py`, opt-in `tests/test_qdrant_server.py`; `vectors status` |
+| `FR-15` | Cleaner unit tests and the measured before/after on the 97 linked PDFs; `pdf_*` keys in the Gold stats | `transform/pdf_text.py`; `tests/test_pdf_text.py`, `tests/test_gold_articles.py`; `docs/evidence/2026-11-06-pdf-text-cleaning.md` |
 | `NFR-01` | Source/config/code/curation fingerprints; per-page dataset-version caption | `ingest/snapshots.py::build_fingerprint`; `tests/test_population_provenance.py` |
 | `NFR-02` | Unchanged re-run produces no new logical rows | `tests/test_gold_articles.py`, `tests/test_raw_bib.py` |
 | `NFR-03` | Contract violation blocks publication and keeps the prior version active | `quality.assert_contract`; `tests/test_mysql_contracts.py` |

@@ -41,6 +41,7 @@ Streamlit dashboard ----------------------------┘
 | `transform/bronze_articles.py` | Harmonize IEEE and Elsevier records | `bronze.lit_articles` |
 | `transform/silver_articles.py` | DOI deduplication, rejection audit, non-article flags, PDF matching | Silver tables |
 | `transform/gold_articles.py` | Apply approved merges; build curated articles and reconcile chunks | Gold articles/chunks |
+| `transform/pdf_text.py` | Clean pypdf output before chunking: reference list, page furniture, line-break hyphens, reflow | Nothing; called by the Gold builders |
 | `transform/embeddings.py` | Model identity, revision check (by snapshot or byte-identical model files), batch/thread bounds, the one model loader | Nothing; the writer is `versioned_gold.py` |
 | `transform/vector_payloads.py` | What each Qdrant point carries: text, provenance, article filter fields, screening signals | Nothing |
 | `db/vector_store.py` | The Qdrant access point: one immutable collection per version, exact search, the `lit_chunks_active` alias | Qdrant collections (through `versioned_gold.py` and `vectors` repairs only) |

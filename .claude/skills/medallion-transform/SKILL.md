@@ -85,6 +85,14 @@ duplicated** (comments in both explain this avoids a circular import). If DOI no
 (e.g. handling a new URL prefix format), update both — a divergence here silently breaks either bronze
 building or citation-count enrichment lookups.
 
+## Gold full text
+
+`gold_articles._extract_pdf_text` runs every PDF through `transform/pdf_text.clean_pdf_text` before chunking
+(reference list cut, page furniture dropped, line-break hyphens rejoined, lines reflowed); see CLAUDE.md for the
+measured effect. Any change to a cleaner changes the text of every full-text chunk, which mints a new version and
+re-embeds the full text once -- the abstracts keep their vectors. Keep each cleaner pure and add its effect to
+`PDF_CLEANING_STATS` so the run stats say what it did.
+
 ## Silver PDF-linking and dedup
 
 `transform/silver_articles.py` is the reference implementation for "how a transform stage should look":

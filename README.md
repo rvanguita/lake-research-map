@@ -304,6 +304,7 @@ lake-research-map/
 │   │   ├── bronze_articles.py    # Schema unification
 │   │   ├── silver_articles.py    # Normalized DOI dedup & RapidFuzz PDF matching
 │   │   ├── gold_articles.py      # Curated RAG chunks with hash reconciliation
+│   │   ├── pdf_text.py           # PDF text cleaning before chunking (references, hyphens, reflow)
 │   │   ├── duplicate_resolution.py # Persistent merge/keep review decisions
 │   │   ├── embeddings.py         # Local ONNX fastembed model identity, pin and loader
 │   │   ├── vector_payloads.py    # What each Qdrant point carries
