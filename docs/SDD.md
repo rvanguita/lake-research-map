@@ -750,7 +750,7 @@ Re-measure before quoting; the corpus grows with every export (CLAUDE.md keeps t
 | 2026-11-06 | PDF cleaning, 97 linked PDFs | reference lists cut in 88; 6,323 hyphenations rejoined; 7,368 furniture lines dropped; full-text chunks 4,437 → 3,623 |
 | 2026-11-06 | Regeneration with cleaned text (`7cbb67e3…`) | 3,115 abstract vectors copied, 3,623 full-text chunks embedded (~32 min at 2 threads); 206 duplicate pairs, 4 themes, unchanged |
 | 2026-11-06 | Retrieval disclosures | 95 articles without a usable abstract (< 50 chars); 21 abstract chunks exceed the 512-token window |
-| 2026-11-06 | Test collection (`uv run pytest --collect-only -q`) | 521 tests collected, of which 4 opt-in (`mysql`/`qdrant` markers) |
+| 2026-11-06 | Test collection (`uv run pytest --collect-only -q`) | 534 tests collected, of which 4 opt-in (`mysql`/`qdrant` markers) |
 | 2026-11-06 | Model snapshot drift | Hub snapshot `aa8f8b06…` differs from the pin `52398278…` only in README; re-embedding 200 chunks reproduced the stored vectors exactly |
 
 ## Appendix A. Review protocols

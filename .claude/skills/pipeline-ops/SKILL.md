@@ -29,7 +29,10 @@ the compose command in the message; set `QDRANT_URL` in `.env` (`http://127.0.0.
 dashboard container overrides it to `http://qdrant:6333`). `uv run lake-research-map vectors status` compares
 every version's collection with its Gold chunks and says whether the `lit_chunks_active` alias is in sync;
 `vectors backfill` copies vectors still held as MySQL BLOBs, `vectors rebuild [--version ID]` restores a lost
-collection from Gold text, `vectors sync-alias` re-points the alias. Repairs take the pipeline lock.
+collection from Gold text, `vectors sync-alias` re-points the alias. Repairs take the pipeline lock, as do stage
+runs, `duplicates merge|keep|undo`, `versions activate`, `enrichment refresh-openalex` and
+`maintenance recover-stale` (`pipeline._mutates_published_inputs`; full table in SDD §4.3); `search`, `screen`,
+`mcp`, `reviews`, `evidence`, `audit` and the other `enrichment` crawls never do.
 
 Embedding is CPU-bound and bounded on purpose (`LAKE_RESEARCH_MAP_EMBED_THREADS=2` in `.env`): re-embedding the
 ~3,600 full-text chunks after a change to the PDF cleaning takes the better part of an hour at that setting,

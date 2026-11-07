@@ -19,26 +19,38 @@ covered and focus review effort on what they can't catch.
 - DOI normalization: is `transform/bronze_articles.normalize_doi` matched by
   `ingest/enrichment._normalize_doi` if either changed? A silent divergence breaks either bronze building or
   citation enrichment lookups without an obvious error.
-- Does a new/changed transform stage close every SQLAlchemy session it opens (the `try`/`finally` pattern in
-  `pipeline.py`)? A leaked session is easy to miss in review since it won't fail a test using short-lived
-  in-memory SQLite.
-- Does a new model column that needs to exist on an already-deployed MySQL layer get an `ALTER TABLE` in
-  `db/bootstrap.py`'s `create_tables()`, not just a new SQLAlchemy column definition (which only affects
-  fresh databases)?
+- Does a new/changed stage open its sessions through `_layer_sessions(...)` in `pipeline.py` (so every one is
+  closed on failure), and do builders take sessions/`store` as arguments instead of opening their own? A leaked
+  session is easy to miss in review since it won't fail a test using short-lived in-memory SQLite.
+- Does a new model column on an already-deployed table get an entry in `_ADDITIVE_COLUMNS` in
+  `db/bootstrap.py` -- nullable, purely additive, and with no index -- not just a new SQLAlchemy column
+  (which only affects fresh databases) and not a hand-written `ALTER TABLE`?
+- Import boundary: the core (`config.py`, `pipeline.py`, `quality.py`, `db/`, `ingest/`, `transform/`) must not
+  gain a new import from `apps/` (known exceptions: `pipeline.py` wiring the `apps.qdrant`/`apps.api` commands,
+  and the `transform/` → `apps/dashboard/analytics.py` inversion recorded in SDD §12); `apps/api/` never imports
+  Streamlit or `apps/dashboard/`.
 - Is `data/` treated as read-only input anywhere in the diff (no writes, no assumption that a file there can
   be regenerated cheaply)?
 
-**Dashboard chart contract** (load the `streamlit-dashboard` skill for the full list):
+**Dashboard layering and contract** (load the `streamlit-dashboard` skill for the full list):
+- `@st.cache_data`/`@st.cache_resource` only in `loaders.py`; no `streamlit` import in `analytics.py`,
+  `forecasting.py`, `qualis.py` or `retrieval_eval.py`; SQL only in `data.py`.
+- Pages stay read-only: no database write, no file write, no pipeline trigger.
+- Page ownership: a new chart does not duplicate one that another page or tab already owns (CLAUDE.md "Page
+  ownership", PRD §7).
+- Every rendered string is English (titles, captions, axis names, metric labels, download filenames).
 - No `add_hline`/`add_vline`/`add_shape`/`add_hrect`/`add_vrect` reference lines on any chart.
 - "Total" (if present) is a real series with `TOTAL_COLOR`/`TOTAL_LABEL`, not a reference annotation.
-- No hardcoded hex colors for chart/CSS backgrounds — theme tokens only.
+- No hex color literal outside `theme.py` for chart backgrounds or inline chrome — theme tokens only (a data
+  color scale is the documented exception).
 - A page reading the full corpus regardless of the sidebar filter (like `pages/forecasting.py`) discloses
   that, the way that page already does.
 
 **Testing** (load `python-testing-conventions`):
 - Does new transform/analytics logic have an extracted pure-function test, not only (or instead of) a full-
   flow test?
-- No new mocking framework introduced.
+- No mocking framework in new tests; fakes go through the documented injection points (`session_factory`,
+  `embed_fn`/`store`, `pipeline.get_session`, `_default_embed_fn`).
 
 ## Output
 

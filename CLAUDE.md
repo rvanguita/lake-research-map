@@ -272,9 +272,9 @@ trustworthiness beside the map, since a flat silhouette means the boundaries des
 
 `data/` is excluded from git, so it exists only on this machine and paths referenced in code will not resolve for
 anyone else. Treat it as read-only input: it is raw publisher output, re-downloading it is manual and tedious.
-(A `PreToolUse` hook in `.claude/settings.json` denies Edit/Write on `data/articles/*`, `data/ieee/*`,
-`data/sciencedirect.zip` and `data/enrichment_cache.json`, and always allows any `config.csv`; nothing else under
-`data/` -- the `.bib` exports in `data/references/` included -- is guarded, so the rule is yours to keep.)
+(A `PreToolUse` hook in `.claude/settings.json` denies Edit/Write on every path under `data/` -- exports, PDFs,
+the enrichment cache and the `.lake_research_map/` archive -- and always allows a `config.csv`. It does not
+cover shell commands, so the rule is still yours to keep in Bash.)
 
 ```
 data/references/IEEE Xplore/      current IEEE Xplore BibTeX exports plus their config.csv

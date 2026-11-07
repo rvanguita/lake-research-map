@@ -28,7 +28,8 @@ Load `pipeline-ops` if you need to actually run a stage to verify a change.
   `_mutates_published_inputs` so it takes the pipeline lock.
 - Read `CLAUDE.md` before touching anything DOI/BibTeX/PDF-matching related — it documents real, non-obvious
   quirks in the corpus (IEEE's no-separator `.bib` format, DOI format differences between sources, lossy PDF
-  filename matching, IEEE keyword double-counting) that are easy to get wrong without that context.
+  filename matching) that are easy to get wrong without that context; IEEE keyword double-counting is in the
+  `streamlit-dashboard` skill's data pitfalls.
 
 ## Constraints
 - Never edit files under `data/` — it's read-only input, manually collected and tedious to regenerate (a

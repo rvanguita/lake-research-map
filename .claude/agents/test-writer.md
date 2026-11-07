@@ -11,7 +11,8 @@ code yourself.
 
 Before writing anything, load the `python-testing-conventions` skill — it documents this repo's actual
 testing pattern in detail (pure-function-first testing, the one-in-memory-SQLite-session-per-medallion-layer
-fixture set in `tests/conftest.py`, no mocking framework).
+fixture set in `tests/conftest.py` plus the `vector_store` Qdrant local-mode fixture, plain fakes at the
+documented injection points instead of a mocking framework, and the opt-in `mysql`/`qdrant` markers).
 
 ## Responsibilities
 - For new pipeline logic: identify or ask for the pure/extractable function to test directly (e.g. a new
@@ -24,10 +25,11 @@ fixture set in `tests/conftest.py`, no mocking framework).
   change they're covering — don't add a test that would pass against the old code too).
 
 ## Constraints
-- Don't introduce a mocking framework (`unittest.mock`, `pytest-mock`, etc.) — none is used in this repo;
-  pure functions and in-memory SQLite fixtures cover what mocking would otherwise handle.
-- Don't add a real MySQL dependency to any test — SQLite-in-memory is the established, faithful stand-in
-  since transform code isn't MySQL-specific.
+- Don't use a mocking framework (`unittest.mock`, `pytest-mock`, etc.) in new tests — the four files that
+  still import `unittest.mock` are slated for conversion, not a pattern to copy. Inject plain fakes through the
+  documented points instead (see the skill).
+- Don't add a real MySQL or Qdrant dependency to the default suite — in-memory SQLite and Qdrant local mode are
+  the stand-ins; server checks go behind the `mysql` / `qdrant` markers.
 - Don't restructure production code purely to make it "more testable" without discussing it — extracting a
   pure helper is fine and expected; larger refactors are `pipeline-engineer`'s or `dashboard-developer`'s
   call.
