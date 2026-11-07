@@ -103,6 +103,8 @@ _ADDITIVE_COLUMNS: dict[str, dict[str, tuple[str, tuple[str, ...]]]] = {
     "lit_source_files": {
         "dataset_version_id": ("VARCHAR(64) NULL", ("raw",)),
         "source_revision_id": ("VARCHAR(64) NULL", ("raw",)),
+        # Wave P0-5b: a loader fix must re-parse files whose bytes did not change.
+        "loader_revision": ("VARCHAR(16) NULL", ("raw",)),
     },
     "lit_config": {
         "dataset_version_id": ("VARCHAR(64) NULL", ("raw",)),

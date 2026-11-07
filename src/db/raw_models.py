@@ -34,6 +34,12 @@ class SourceFile(Base):
     ingested_at: Mapped[dt.datetime] = mapped_column(DateTime, default=naive_utc_now)
     dataset_version_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     source_revision_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    # Which revision of its loader produced this file's child rows (see
+    # `ingest/hashing.record_source_file`). The content hash alone cannot tell
+    # that a loader fix changed what the same bytes ingest to, so without this
+    # a fixed loader never reached a file already in the manifest. NULL on rows
+    # stored before the column existed, which is what makes them re-parse once.
+    loader_revision: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
 
 class SourceBlob(Base):
@@ -142,6 +148,11 @@ class BibEntry(Base):
     doi: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)
     dataset_version_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     source_revision_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    # Set only on an entry whose citation key the export had already used in the
+    # same file: ScienceDirect reuses keys (`1996356` names 14 distinct articles
+    # in one export), so `bib_key` carries a line-qualified key (`1996356#L91`,
+    # see `ingest/raw_bib.py`) and the key as written stays here. NULL otherwise.
+    original_bib_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     __table_args__ = (UniqueConstraint("source", "bib_key", "source_file"),)
 
