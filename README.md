@@ -381,4 +381,4 @@ For in-depth documentation and contributor guidelines:
 
 ## ⚖️ License
 
-This project is licensed under the MIT License.
+This project is licensed under the MIT License — see [`LICENSE`](LICENSE).

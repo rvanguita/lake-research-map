@@ -1,6 +1,8 @@
 [project]
 name = "lake-research-map"
 version = "0.1.0"
+license = "MIT"
+license-files = ["LICENSE"]
 description = "Medallion data lake and analytical research platform turning IEEE Xplore and Elsevier bibliographic exports into a deduplicated, RAG-ready literature corpus"
 readme = "README.md"
 authors = [
