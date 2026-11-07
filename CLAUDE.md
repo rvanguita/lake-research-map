@@ -22,7 +22,7 @@ uv run lake-research-map --stage all             # full pipeline (default stage)
 uv run lake-research-map --stage <stage>         # raw | bronze | silver | gold | embed | semantic
 uv run python -m lake_research_map.db.bootstrap  # create the 4 databases + tables only, no ingestion
 uv run streamlit run main.py                     # dashboard at http://localhost:8501
-docker compose up -d                             # the read-only dashboard (:8501); reads .env
+docker compose up -d                             # the read-only dashboard (:${DASHBOARD_PORT:-8501}); reads .env
 docker compose --profile qdrant up -d qdrant     # vector store (:6333) -- embed/semantic/search need it
 uv run lake-research-map vectors status          # each version's Qdrant collection vs its Gold chunks
 uv run lake-research-map vectors backfill        # copy vectors still held as MySQL BLOBs into Qdrant

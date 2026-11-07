@@ -251,6 +251,8 @@ docker compose --profile qdrant up -d   # or set COMPOSE_PROFILES=qdrant in .env
 - **Streamlit Dashboard**: [http://localhost:8501](http://localhost:8501)
 - **Qdrant**: [http://localhost:6333/dashboard](http://localhost:6333/dashboard) (loopback only; payloads carry chunk text)
 
+Both host ports are set in `.env` (`DASHBOARD_PORT`, `QDRANT_PORT`; defaults 8501 and 6333) for when another project already holds one; keep `QDRANT_URL` on the same port as `QDRANT_PORT`.
+
 ---
 
 ## 🧪 Testing & Quality Assurance

@@ -14,7 +14,7 @@ This is the "how do I actually execute this" skill — for how to *write* ingest
 uv run lake-research-map --stage all                                 # the chained full run
 uv run lake-research-map --stage {raw,bronze,silver,gold,embed,semantic}   # one stage
 docker compose --profile qdrant up -d qdrant                         # vector store, port 6333 (loopback)
-docker compose up -d                                                 # the read-only dashboard, port 8501
+docker compose up -d                                                 # the read-only dashboard, port ${DASHBOARD_PORT:-8501}
 ```
 
 There is no orchestrator: Airflow (DAGs, container, the dashboard's trigger buttons) was removed on
