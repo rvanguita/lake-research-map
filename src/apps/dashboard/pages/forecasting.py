@@ -50,8 +50,8 @@ def render() -> None:
     page_header(
         "🔮",
         "Trends and fronts",
-        "Volume projection with temporal validation, training only in complete years and intervals "
-        "conformations calibrated in historical errors.",
+        "Volume projection with temporal validation, trained only on complete years, with conformal "
+        "intervals calibrated on historical errors.",
     )
 
     hero_banner(
@@ -360,7 +360,7 @@ def _render_series_forecast(label: str, color: str, result: ForecastResult) -> N
                 "model": "Model",
                 "holdout_mae": f"MAE vs. partial {HOLDOUT_YEAR}",
                 "cv_mae": f"MAE cross-validation ({CV_YEARS[0]}–{CV_YEARS[-1]})",
-                "combined_mae": "MAE temporal (usado na escolha)",
+                "combined_mae": "Temporal MAE (used for model selection)",
             }
         )
         st.dataframe(table, hide_index=True, width="stretch")

@@ -1707,7 +1707,7 @@ def _research_line_articles(
     article_table(
         subset,
         ["title", "year", "venue", "source", "citation_count", "doi"],
-        download_key=f"lideres_{selected.replace(' ', '_')}",
+        download_key=f"leaders_{selected.replace(' ', '_')}",
     )
 
 

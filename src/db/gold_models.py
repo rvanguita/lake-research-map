@@ -62,8 +62,10 @@ class Article(Base):
     pdf_path: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     silver_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    is_non_article: Mapped[bool] = mapped_column(
-        Boolean, default=False, nullable=False, server_default="0"
+    # Nullable to match its additive migration in db/bootstrap.py (which must be
+    # nullable); the builders always write a bool and readers coerce NULL to False.
+    is_non_article: Mapped[bool | None] = mapped_column(
+        Boolean, default=False, nullable=True, server_default="0"
     )
 
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=naive_utc_now)
@@ -83,7 +85,11 @@ class Chunk(Base):
     embedding: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # filled by --stage embed
     embed_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
     embedding_bin: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
-    text_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    # Deliberately unindexed, as on the deployed MySQL schema (the additive
+    # migration in db/bootstrap.py adds no index). Look rows up through
+    # dataset_version_id (indexed) and filter by hash after: a lookup by hash
+    # alone scans the table (7 s per 64 hashes, measured 2026-11-06).
+    text_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     embed_revision: Mapped[str | None] = mapped_column(String(128), nullable=True)
     embedding_dim: Mapped[int | None] = mapped_column(Integer, nullable=True)
     embedding_dtype: Mapped[str | None] = mapped_column(String(32), nullable=True)
@@ -307,7 +313,11 @@ class DatasetChunk(Base):
     embedding: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     embed_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
     embedding_bin: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
-    text_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    # Deliberately unindexed, as on the deployed MySQL schema (the additive
+    # migration in db/bootstrap.py adds no index). Look rows up through
+    # dataset_version_id (indexed) and filter by hash after: a lookup by hash
+    # alone scans the table (7 s per 64 hashes, measured 2026-11-06).
+    text_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     embed_revision: Mapped[str | None] = mapped_column(String(128), nullable=True)
     embedding_dim: Mapped[int | None] = mapped_column(Integer, nullable=True)
     embedding_dtype: Mapped[str | None] = mapped_column(String(32), nullable=True)

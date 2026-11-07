@@ -59,8 +59,10 @@ class Article(Base):
     has_pdf: Mapped[bool] = mapped_column(Boolean, default=False)
     pdf_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     pdf_match_score: Mapped[float | None] = mapped_column(Float, nullable=True)
-    is_non_article: Mapped[bool] = mapped_column(
-        Boolean, default=False, nullable=False, server_default="0"
+    # Nullable to match its additive migration in db/bootstrap.py (which must be
+    # nullable); the builders always write a bool and readers coerce NULL to False.
+    is_non_article: Mapped[bool | None] = mapped_column(
+        Boolean, default=False, nullable=True, server_default="0"
     )
 
     bronze_ids: Mapped[list] = mapped_column(

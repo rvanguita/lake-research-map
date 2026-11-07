@@ -7,6 +7,8 @@ column map's invariants and that table creation succeeds on a clean engine.
 
 from __future__ import annotations
 
+import re
+
 from sqlalchemy import create_engine, inspect
 
 from db import bronze_models, gold_models, raw_models, silver_models
@@ -36,15 +38,26 @@ def test_additive_columns_map_is_well_formed():
                 assert layer in VALID_LAYERS, f"{table}.{col_name}: unknown layer {layer!r}"
 
 
-def test_additive_columns_all_nullable_or_have_default():
-    """Additive columns must not break existing rows -- they need NULL or a DEFAULT."""
+def test_additive_columns_are_nullable_and_add_no_index():
+    """Every additive column is explicitly nullable and adds no index.
+
+    The map runs unattended on every pipeline start: a NOT NULL column can fail
+    or rewrite existing rows, and an index rebuilds a possibly large table. A
+    plain ``"NULL" in ddl`` check would also accept ``NOT NULL``, so the
+    tokens are inspected instead.
+    """
     for table, cols in _ADDITIVE_COLUMNS.items():
         for col_name, (ddl, _layers) in cols.items():
-            ddl_upper = ddl.upper()
-            assert "NULL" in ddl_upper or "DEFAULT" in ddl_upper, (
-                f"{table}.{col_name}: additive column DDL must be nullable or "
-                f"have a default, got {ddl!r}"
+            tokens = re.findall(r"[A-Z_]+", ddl.upper())
+            pairs = list(zip(tokens, tokens[1:], strict=False))
+            assert "NULL" in tokens, f"{table}.{col_name}: must be declared NULL, got {ddl!r}"
+            assert ("NOT", "NULL") not in pairs, (
+                f"{table}.{col_name}: additive columns must be nullable, got {ddl!r}"
             )
+            for forbidden in ("INDEX", "UNIQUE", "KEY", "PRIMARY"):
+                assert forbidden not in tokens, (
+                    f"{table}.{col_name}: additive migrations add no {forbidden}, got {ddl!r}"
+                )
 
 
 def test_create_tables_on_sqlite_for_each_layer():
@@ -95,3 +108,35 @@ def test_silver_has_rejected_table():
     inspector = inspect(engine)
     assert "lit_rejected" in inspector.get_table_names()
     engine.dispose()
+
+
+def test_text_sha256_is_unindexed_like_the_deployed_schema():
+    """The deployed MySQL chunk tables carry no index on ``text_sha256`` (the
+    additive migration adds none), so the test schema must not have one either:
+    otherwise a lookup by hash alone is fast here and a full scan in production."""
+    engine = create_engine("sqlite:///:memory:", future=True)
+    gold_models.Base.metadata.create_all(engine)
+    inspector = inspect(engine)
+    for table in ("lit_chunks", "lit_dataset_chunks"):
+        indexed = {
+            column for index in inspector.get_indexes(table) for column in index["column_names"]
+        }
+        assert "text_sha256" not in indexed, f"{table}.text_sha256 must stay unindexed"
+    engine.dispose()
+
+
+def test_model_columns_match_their_additive_migration_nullability():
+    """A column created by ``create_all`` and the same column added by the
+    additive migration must agree: every migrated column is nullable, so the
+    model may not declare it NOT NULL."""
+    for layer, module in _MODELS.items():
+        tables = module.Base.metadata.tables
+        for table, cols in _ADDITIVE_COLUMNS.items():
+            if table not in tables:
+                continue
+            for col_name, (_ddl, layers) in cols.items():
+                if layer not in layers or col_name not in tables[table].c:
+                    continue
+                assert tables[table].c[col_name].nullable, (
+                    f"{layer}.{table}.{col_name}: model is NOT NULL but its migration is nullable"
+                )

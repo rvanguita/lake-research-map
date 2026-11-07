@@ -17,7 +17,6 @@ already uses for PDF-to-title matching, reusing its `normalize_title`.
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import unicodedata
 import warnings
@@ -38,6 +37,13 @@ NOT_CLASSIFIED = "Not classified"
 
 # Best to worst; unclassified always last. Shared by every chart/table that
 # ranks or orders by classification, so "A1 first" only needs to be defined once.
+# Shown by every page whose Qualis view has nothing to match against -- the
+# dashboard container ships without `data/`, so this is an expected state.
+SOURCE_UNAVAILABLE_MESSAGE = (
+    "CAPES/Qualis source unavailable: the official classification workbook "
+    "(`config.CAPES_QUALIS_XLSX`) was not found, so no venue can be classified."
+)
+
 ESTRATO_ORDER = ("A1", "A2", "A3", "A4", "B1", "B2", "B3", "B4", "C", NOT_CLASSIFIED)
 
 
@@ -52,39 +58,25 @@ def _empty_reference() -> pd.DataFrame:
     return pd.DataFrame(columns=["issn", "titulo", "estrato"])
 
 
-def _cache_path(xlsx_path: Path) -> Path:
-    """Parquet cache path for `xlsx_path`, keyed on its mtime, size and area.
-
-    The key is in the filename, so replacing the CAPES export simply produces
-    a different path -- a stale cache can never be read as if it were current.
-    """
-    stat = xlsx_path.stat()
-    key = hashlib.sha256(f"{stat.st_mtime_ns}:{stat.st_size}:{QUALIS_AREA}".encode()).hexdigest()[
-        :16
-    ]
-    return xlsx_path.with_name(f".qualis_{key}.parquet")
-
-
 def load_qualis_reference(path=None) -> pd.DataFrame:
     """Read the official CAPES export, filtered to `QUALIS_AREA`.
 
-    Returns columns `["issn", "titulo", "estrato"]`. Thin I/O wrapper over the
-    xlsx file -- not unit tested, same as this project's other raw-file loaders.
+    Returns columns `["issn", "titulo", "estrato"]`, or an empty frame with
+    those columns when the workbook is absent. Pure and read-only: no
+    Streamlit import and no file written anywhere. `data/` is read-only input
+    and is not shipped in the dashboard image (`.dockerignore`), so a missing
+    workbook is an expected state the pages report, never an exception.
 
-    The xlsx holds every evaluation area (~171k rows) and openpyxl takes ~3.4s
-    to parse it, all to keep the few thousand ENGENHARIAS IV rows. That subset
-    is cached next to the source as parquet, which reloads in milliseconds on
-    later dashboard starts.
+    The xlsx holds every evaluation area (~171k rows) and openpyxl takes
+    seconds to parse it. Caching that parse is `loaders._qualis_reference`'s
+    job (`@st.cache_data`, the dashboard's only cache layer); an earlier
+    parquet cache written next to the source was removed because the
+    dashboard must never write into the data directory.
     """
     xlsx_path = Path(path or CAPES_QUALIS_XLSX)
-    cache = _cache_path(xlsx_path)
-    if cache.exists():
-        try:
-            return pd.read_parquet(cache)
-        except Exception:
-            # A truncated/unreadable cache must never be fatal -- fall back to
-            # the xlsx, which then overwrites it.
-            logger.debug("load_qualis_reference: unusable cache %s", cache, exc_info=True)
+    if not xlsx_path.is_file():
+        logger.info("load_qualis_reference: CAPES/Qualis workbook not found at %s", xlsx_path)
+        return _empty_reference()
 
     with warnings.catch_warnings():
         # The source workbook has no explicit default cell style; openpyxl
@@ -124,19 +116,9 @@ def load_qualis_reference(path=None) -> pd.DataFrame:
             list(df.columns),
         )
         return _empty_reference()
-    reference = df.rename(columns={source: target for target, source in required.items()})[
+    return df.rename(columns={source: target for target, source in required.items()})[
         ["issn", "titulo", "estrato"]
     ].reset_index(drop=True)
-
-    try:
-        reference.to_parquet(cache, index=False)
-        for stale in cache.parent.glob(".qualis_*.parquet"):
-            if stale != cache:
-                stale.unlink()
-    except Exception:
-        # A read-only data dir just means no cache -- never fail the load.
-        logger.debug("load_qualis_reference: could not write cache %s", cache, exc_info=True)
-    return reference
 
 
 def match_venues_to_qualis(

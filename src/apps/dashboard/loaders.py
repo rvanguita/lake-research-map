@@ -550,9 +550,20 @@ def _qualis_reference() -> pd.DataFrame:
     Parsing the national CAPES xlsx (171k rows across every evaluation area,
     filtered down to ENGENHARIAS IV) takes ~9s via openpyxl; without this it
     reran on every `venue_qualis_map` cache miss, since that cache is keyed
-    by the venues tuple rather than by this file.
+    by the venues tuple rather than by this file. This is the only cache of
+    that parse: nothing is written next to the workbook (`data/` is read-only).
+    An absent workbook yields an empty frame -- see `qualis_available()`.
     """
     return qualis.load_qualis_reference()
+
+
+def qualis_available() -> bool:
+    """Whether the CAPES/Qualis workbook could be read into a non-empty reference.
+
+    False in the dashboard container, which ships without `data/`; pages show
+    `qualis.SOURCE_UNAVAILABLE_MESSAGE` instead of an all-"Not classified" view.
+    """
+    return not _qualis_reference().empty
 
 
 @st.cache_data(ttl=None)

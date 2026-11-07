@@ -95,3 +95,45 @@ def test_load_qualis_reference_filters_full_export_by_area(tmp_path, monkeypatch
     result = load_qualis_reference(workbook)
 
     assert result["issn"].tolist() == ["1234-5678"]
+
+
+def _tree(root) -> set[str]:
+    return {str(path.relative_to(root)) for path in root.rglob("*")}
+
+
+def test_missing_workbook_returns_an_empty_reference_and_writes_nothing(tmp_path):
+    # The dashboard container ships without `data/`: a missing workbook is an
+    # expected state, not a FileNotFoundError.
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+
+    result = load_qualis_reference(data_dir / "capes-qualis.xlsx")
+
+    assert result.empty
+    assert list(result.columns) == ["issn", "titulo", "estrato"]
+    assert _tree(tmp_path) == {"data"}
+
+
+def test_reading_a_workbook_writes_no_cache_next_to_it(tmp_path):
+    # `data/` is read-only input: the parsed subset is cached in memory by
+    # `loaders._qualis_reference`, never as a file beside the source.
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    workbook = data_dir / "capes-qualis.xlsx"
+    pd.DataFrame(
+        [{"ISSN": "1234-5678", "Título": "Renewable Energy", "Estrato": "A1"}]
+    ).to_excel(workbook, sheet_name="RelatorioQualis", index=False)
+    before = _tree(tmp_path)
+
+    result = load_qualis_reference(workbook)
+
+    assert result["estrato"].tolist() == ["A1"]
+    assert _tree(tmp_path) == before
+
+
+def test_unavailable_reference_leaves_every_venue_unclassified():
+    empty = load_qualis_reference("/nonexistent/capes-qualis.xlsx")
+
+    result = match_venues_to_qualis(["Renewable Energy"], empty)
+
+    assert result.iloc[0]["estrato"] is None

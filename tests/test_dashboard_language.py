@@ -12,15 +12,27 @@ DASHBOARD_ROOT = Path("src/apps/dashboard")
 # common Portuguese function word rather than a domain term. The closed-class
 # words below (pronouns, prepositions, copulas) are what actually distinguish a
 # Portuguese sentence from an English one carrying a Portuguese noun.
+#
+# The boundaries are letters, not `\b`: `\b` does not fire between a word and
+# `_`, so a Portuguese word inside a snake_case identifier or a download
+# filename (`fora_do_escopo`, `erro_superior`) slipped through. Download keys
+# become the file name a user saves, and column keys can reach a table header.
 PORTUGUESE_UI_WORDS = re.compile(
-    r"\b(?:arquivo|busca|campo|cobertura|complexidade|curada|desde|equidade|erro|"
+    r"(?<![^\W\d_])(?:arquivo|busca|campo|cobertura|complexidade|curada|desde|equidade|erro|"
     r"etapas|ferramental|horizonte|incerteza|modelagem|paradigma|preenchimento|"
     r"recomendado|severidade|similaridade|vetorial|justificativa|atualizado|"
     r"como|identidade|confirmada|confirmado|nao|não|sao|são|está|estão|pelo|pela|"
     r"apenas|ainda|cada|mais|menos|entre|sobre|quando|onde|porque|foram|"
-    r"deve|pode|seja|sem|muito|todos|todas)\b",
+    r"deve|pode|seja|sem|muito|todos|todas|"
+    # Leftovers found by the 2026-11-06 audit.
+    r"fora|escopo|novidade|semantica|semântica|impacto|normalizado|idade|"
+    r"lideres|líderes|funil|nota|conformations|palavras|multiplicador|usado|escolha|"
+    r"texto|completo)(?![^\W\d_])",
     re.IGNORECASE,
 )
+# "IC" (intervalo de confiança) is too short to list as a word, and a decimal
+# comma ("2,5%") is a Portuguese number format; both appeared in one header.
+PORTUGUESE_NUMBER_OR_CI = re.compile(r"\bIC [0-9]|\bIC bootstrap|\b[0-9]+,[0-9]+%")
 EMPTY_HEADING = re.compile(r"st\.(?:header|subheader)\(\s*(['\"])\1\s*\)")
 
 # `metric_row` takes (label, value[, delta]) tuples and passes the label
@@ -39,9 +51,10 @@ def test_dashboard_source_has_no_portuguese_ui_copy_or_empty_headings():
     failures = []
     for path in _python_sources():
         source = path.read_text(encoding="utf-8")
-        for match in PORTUGUESE_UI_WORDS.finditer(source):
-            line = source.count("\n", 0, match.start()) + 1
-            failures.append(f"{path}:{line}: {match.group(0)!r}")
+        for pattern in (PORTUGUESE_UI_WORDS, PORTUGUESE_NUMBER_OR_CI):
+            for match in pattern.finditer(source):
+                line = source.count("\n", 0, match.start()) + 1
+                failures.append(f"{path}:{line}: {match.group(0)!r}")
         if match := EMPTY_HEADING.search(source):
             line = source.count("\n", 0, match.start()) + 1
             failures.append(f"{path}:{line}: empty Streamlit heading")

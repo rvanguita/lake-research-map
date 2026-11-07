@@ -213,7 +213,7 @@ def _merge_silver_group(
         url=first_value("url"),
         has_pdf=pdf_row is not None,
         pdf_path=pdf_row.pdf_path if pdf_row is not None else None,
-        is_non_article=primary.is_non_article,
+        is_non_article=bool(primary.is_non_article),
     )
 
 
@@ -276,7 +276,7 @@ def build_gold_articles(silver_session: Session, gold_session: Session) -> dict:
                 has_pdf=row.has_pdf,
                 pdf_path=row.pdf_path,
                 silver_id=row.id,
-                is_non_article=getattr(row, "is_non_article", False),
+                is_non_article=bool(getattr(row, "is_non_article", False)),
             )
         )
         n_articles += 1

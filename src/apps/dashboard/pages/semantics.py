@@ -172,8 +172,6 @@ def _relevance_screening(scored: pd.DataFrame) -> None:
     review = low.sort_values("relevance_margin").head(TOP_REVIEW_ROWS).copy()
     for column in ("relevance_margin", "relevance_score"):
         review[column] = review[column].round(3)
-    if "has_abstract" in review.columns:
-        review["nota"] = review["has_abstract"].apply(lambda x: "" if x else "")
     display_cols = [
         "relevance_margin",
         "relevance_score",
@@ -184,12 +182,10 @@ def _relevance_screening(scored: pd.DataFrame) -> None:
         "source",
         "doi",
     ]
-    if "nota" in review.columns:
-        display_cols.insert(0, "nota")
     article_table(
         review,
         display_cols,
-        download_key="fora_do_escopo",
+        download_key="out_of_scope",
     )
 
     st.divider()
@@ -216,7 +212,7 @@ def _relevance_screening(scored: pd.DataFrame) -> None:
             "source",
             "doi",
         ],
-        download_key="active_learning_incerteza",
+        download_key="active_learning_uncertainty",
     )
 
     _screening_calibration_panel(scored)
@@ -474,7 +470,7 @@ def _semantic_map(scored: pd.DataFrame) -> None:
                 "Projection",
                 options=projection_options,
                 default="t-SNE",
-                key="sem_proj_choice",
+                key="semantic_proj_choice",
                 help="Alters the dimensional reduction technique of 384D vectors.",
             )
             or "t-SNE"
@@ -496,7 +492,7 @@ def _semantic_map(scored: pd.DataFrame) -> None:
                 "Subtitle position",
                 options=["Right side", "Bottom", "Hide"],
                 default="Right side",
-                key="sem_map_legend_pos",
+                key="semantic_map_legend_pos",
                 help="Position the legend for better readability or hide to expand the graph.",
             )
             or "Right side"
@@ -507,14 +503,14 @@ def _semantic_map(scored: pd.DataFrame) -> None:
             show_density = st.checkbox(
                 "🌊 Density (KDE)",
                 value=False,
-                key="sem_show_density",
+                key="semantic_show_density",
                 help="It overlaps two-dimensional probability density level curves.",
             )
         with sub_c2:
             show_theme_labels = st.checkbox(
                 "🏷️ Theme labels",
                 value=True,
-                key="sem_show_theme_labels",
+                key="semantic_show_theme_labels",
                 help="Shows the names of the themes on the median centroids of the clusters in the foreground.",
             )
 
@@ -858,7 +854,7 @@ def _semantic_novelty_panel(scored: pd.DataFrame) -> None:
         top_novel["relevance_score"] = top_novel["relevance_score"].round(3)
     cols = ["novelty_score", "relevance_score", "theme_label", "title", "year", "venue", "doi"]
     display_cols = [c for c in cols if c in top_novel.columns]
-    article_table(top_novel, display_cols, download_key="top_novidade_semantica")
+    article_table(top_novel, display_cols, download_key="top_semantic_novelty")
 
 
 def _themes(scored: pd.DataFrame) -> None:

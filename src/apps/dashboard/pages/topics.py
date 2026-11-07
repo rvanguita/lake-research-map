@@ -37,6 +37,7 @@ from apps.dashboard.qualis import (
     MATCH_THRESHOLD,
     NOT_CLASSIFIED,
     QUALIS_AREA,
+    SOURCE_UNAVAILABLE_MESSAGE,
 )
 from apps.dashboard.theme import (
     CATEGORICAL_PALETTE,
@@ -84,10 +85,12 @@ def render() -> None:
             if venue_view == "Ranking and impact":
                 _top_venues(articles_df)
             elif require_columns(articles_df, ["venue"]) and articles_df["venue"].notna().any():
-                match_df, with_estrato, totals_by_estrato, estrato_order = _qualis_match_data(
-                    articles_df
-                )
-                if venue_view == "CAPES/Qualis":
+                if venue_view == "CAPES/Qualis" and not loaders.qualis_available():
+                    st.info(SOURCE_UNAVAILABLE_MESSAGE)
+                elif venue_view == "CAPES/Qualis":
+                    match_df, with_estrato, totals_by_estrato, estrato_order = _qualis_match_data(
+                        articles_df
+                    )
                     qualis_view = (
                         st.segmented_control(
                             "CAPES/Qualis visualization format",
@@ -338,7 +341,7 @@ def _zipf_analysis(articles_df: pd.DataFrame) -> None:
                 "Quality of log-log adjustment",
             ),
             ("📚 Unique vocabulary", f"{zipf_res['vocab_size']:,} terms", None),
-            ("📝 Total Occurrence", f"{zipf_res['total_tokens']:,} palavras", None),
+            ("📝 Total Occurrence", f"{zipf_res['total_tokens']:,} words", None),
         ]
     )
 
@@ -669,7 +672,7 @@ def _first_appearance(kw_year: pd.DataFrame) -> None:
 def _qualis_match_data(
     articles_df: pd.DataFrame,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.Series, list[str]]:
-    """Returns `(match_df, with_estrato, totals_by_estrato, estrato_order)`; `with_estrato` is `articles_df` with an added `estrato` column (each article's vein's CAPES/Qualis tier)."""
+    """Returns `(match_df, with_estrato, totals_by_estrato, estrato_order)`; `with_estrato` is `articles_df` with an added `estrato` column (each article's venue's CAPES/Qualis tier)."""
     # Filter the full-corpus match table down to venues in the current filter
     # scope, rather than calling `venue_qualis_map` with a filtered venues
     # tuple directly -- that would re-trigger the rapidfuzz matching pass
@@ -787,10 +790,15 @@ def _qualis_cumulative_chart(with_estrato: pd.DataFrame, estrato_order: list[str
     fig.update_traces(
         hovertemplate="Year %{x}<br>%{data.name}: %{y:,.0f} cumulative articles<extra></extra>"
     )
-    fig.update_layout(xaxis_title="Year of publication", yaxis_title="Cumulative articles")
+    fig.update_layout(
+        xaxis_title="Year of publication",
+        yaxis_title="Cumulative articles",
+        # px names the legend after the raw `estrato` column otherwise.
+        legend_title_text="Classification",
+    )
     render_chart(
         fig,
-        caption="Cumulative corpus composition by CAPES/Qualis stratum (area"
+        caption="Cumulative corpus composition by CAPES/Qualis stratum (area "
         f"{QUALIS_AREA}). Journals without a reliable match remain in "
         f'"{NOT_CLASSIFIED}" and are not mixed into a real stratum.',
     )
@@ -929,7 +937,7 @@ def _bradford_analysis(articles_df: pd.DataFrame) -> None:
                 f"{int(zone_sum.iloc[2]['articles']):,} articles",
             ),
             (
-                "📐 Multiplicador de Bradford (k)",
+                "📐 Bradford multiplier (k)",
                 f"{res.get('multiplier_mean', 1.0):.2f}",
                 "Geometric dispersion rate",
             ),

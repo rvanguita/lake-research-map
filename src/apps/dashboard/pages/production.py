@@ -23,7 +23,12 @@ from apps.dashboard.charts import (
     stacked_area,
 )
 from apps.dashboard.components import page_header, render_chart, require_columns
-from apps.dashboard.qualis import ESTRATO_ORDER, NOT_CLASSIFIED, QUALIS_AREA
+from apps.dashboard.qualis import (
+    ESTRATO_ORDER,
+    NOT_CLASSIFIED,
+    QUALIS_AREA,
+    SOURCE_UNAVAILABLE_MESSAGE,
+)
 from apps.dashboard.theme import (
     venue_color_map,
 )
@@ -131,6 +136,9 @@ def _volume_by_year_category(years_df: pd.DataFrame) -> None:
 def _volume_by_year_qualis(articles_df: pd.DataFrame) -> None:
     st.subheader("Publication volume by year — CAPES/Qualis classification through B2")
     if not require_columns(articles_df, ["venue"]) or not articles_df["venue"].notna().any():
+        return
+    if not loaders.qualis_available():
+        st.info(SOURCE_UNAVAILABLE_MESSAGE)
         return
 
     # Matches against the full corpus's venues (cached indefinitely), not a

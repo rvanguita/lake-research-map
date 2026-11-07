@@ -59,8 +59,10 @@ _ADDITIVE_COLUMNS: dict[str, dict[str, tuple[str, tuple[str, ...]]]] = {
         "online_date": ("DATE NULL", ("bronze", "silver", "gold")),
         "document_type": ("VARCHAR(128) NULL", ("bronze", "silver", "gold")),
         "license": ("VARCHAR(64) NULL", ("bronze", "silver", "gold")),
-        # Flag non-article records (book front matter, etc.).
-        "is_non_article": ("BOOLEAN NOT NULL DEFAULT FALSE", ("silver", "gold")),
+        # Flag non-article records (book front matter, etc.). Nullable like
+        # every other entry: readers coerce NULL to False (`bool(...)` in
+        # transform/gold_articles.py and transform/versioned_gold.py).
+        "is_non_article": ("BOOLEAN NULL DEFAULT FALSE", ("silver", "gold")),
         "dataset_version_id": ("VARCHAR(64) NULL", ("bronze", "silver")),
         "publication_category": ("VARCHAR(32) NULL", ("bronze", "silver", "gold")),
         "publication_category_basis": ("VARCHAR(64) NULL", ("bronze", "silver", "gold")),
@@ -147,6 +149,19 @@ def _migrate_config_uniqueness(engine) -> None:
     provenance of later searches from the same publisher. This constraint-only
     migration does not rewrite rows: the former source uniqueness guarantees
     that existing ``source_file`` values are already distinct.
+
+    This is the single, deliberate exception to "bootstrap migrations add no
+    indexes" (see ``_ADDITIVE_COLUMNS``). The constraints *are* the
+    correctness guarantee: ``ingest/raw_config.py`` looks a report up by
+    ``source_file``, so a leftover unique key on ``source`` rejects a second
+    search report from the same publisher, and without the unique key on
+    ``source_file`` nothing stops the same report from being stored twice.
+    The plain ``source`` index replaces the one the dropped unique key
+    provided. It is checked on every start but is a no-op
+    once the schema is in its final shape, it only ever runs on MySQL, and it
+    touches only ``raw.lit_config``. Do not use it as precedent for indexing
+    other tables here: an index on a large table (``lit_dataset_chunks``, for
+    instance) would rebuild it unattended on the next pipeline start.
     """
     if engine.dialect.name != "mysql":
         return

@@ -270,7 +270,7 @@ def _headline_metrics(funnel_df: pd.DataFrame) -> None:
 
 
 def _sankey_funnel(funnel_df: pd.DataFrame) -> None:
-    st.subheader("Funil raw → bronze → silver → gold")
+    st.subheader("Funnel raw → bronze → silver → gold")
 
     labels = []
     label_index: dict[str, int] = {}

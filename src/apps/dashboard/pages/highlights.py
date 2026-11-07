@@ -500,7 +500,7 @@ def _age_normalized_rankings(articles_df: pd.DataFrame) -> None:
             "cohort_citation_percentile",
             "doi",
         ],
-        download_key="impacto_normalizado_idade",
+        download_key="age_normalized_impact",
     )
 
 

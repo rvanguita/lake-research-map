@@ -191,7 +191,7 @@ def build_dataset_gold(
                 has_pdf=row.has_pdf,
                 pdf_path=row.pdf_path,
                 silver_id=row.id,
-                is_non_article=getattr(row, "is_non_article", False),
+                is_non_article=bool(getattr(row, "is_non_article", False)),
             )
         )
         for desired in _desired_chunks(row, pdf_stats):

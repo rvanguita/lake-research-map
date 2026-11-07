@@ -172,14 +172,14 @@ def _ieee_extras(articles_df: pd.DataFrame) -> None:
         ]
     )
 
-    sub_pais, sub_mes, sub_tipo = st.tabs(
+    sub_country, sub_month, sub_type = st.tabs(
         ["🌍 Countries", "🗓️ Monthly granularity", "📄 License type"],
         on_change="rerun",
         key="quality_ieee_tab",
     )
 
-    if sub_pais.open:
-        with sub_pais:
+    if sub_country.open:
+        with sub_country:
             exploded = countries.explode().dropna()
             if exploded.empty:
                 st.info("No affiliation with identifiable country.")
@@ -201,8 +201,8 @@ def _ieee_extras(articles_df: pd.DataFrame) -> None:
                     "which also handles the U.S. format (`…, UT, USA`).",
                 )
 
-    if sub_mes.open:
-        with sub_mes:
+    if sub_month.open:
+        with sub_month:
             if "online_date" not in ieee_only.columns or ieee_only["online_date"].isna().all():
                 st.info("'online_date' column unavailable.")
             else:
@@ -229,10 +229,10 @@ def _ieee_extras(articles_df: pd.DataFrame) -> None:
                     "reveal seasonality and the lag between online publication and the formal issue.",
                 )
 
-    if sub_tipo.open:
-        with sub_tipo:
-            col_tipo, col_lic = st.columns(2)
-            with col_tipo:
+    if sub_type.open:
+        with sub_type:
+            col_type, col_license = st.columns(2)
+            with col_type:
                 if (
                     "document_type" in ieee_only.columns
                     and ieee_only["document_type"].notna().any()
@@ -251,7 +251,7 @@ def _ieee_extras(articles_df: pd.DataFrame) -> None:
                     )
                 else:
                     st.info("'document_type' column unavailable.")
-            with col_lic:
+            with col_license:
                 if "license" in ieee_only.columns and ieee_only["license"].notna().any():
                     counts = ieee_only["license"].dropna().value_counts()
                     oa = int(counts.filter(like="CC").sum())
@@ -436,8 +436,8 @@ def _pdf_selection_bias(articles_df: pd.DataFrame) -> None:
     bias["Metrics"] = bias["metric"].map(labels)
     finite = finite.copy()
     finite["Metrics"] = finite["metric"].map(labels)
-    finite["erro_superior"] = finite["ci_high"] - finite["smd"]
-    finite["erro_inferior"] = finite["smd"] - finite["ci_low"]
+    finite["error_upper"] = finite["ci_high"] - finite["smd"]
+    finite["error_lower"] = finite["smd"] - finite["ci_low"]
     colors = [
         TREND_DOWN_COLOR if abs(value) >= 0.1 else CATEGORICAL_PALETTE[0] for value in finite["smd"]
     ]
@@ -449,8 +449,8 @@ def _pdf_selection_bias(articles_df: pd.DataFrame) -> None:
             marker={"size": 11, "color": colors},
             error_x={
                 "type": "data",
-                "array": finite["erro_superior"],
-                "arrayminus": finite["erro_inferior"],
+                "array": finite["error_upper"],
+                "arrayminus": finite["error_lower"],
                 "visible": True,
             },
             customdata=finite[["n_pdf", "n_no_pdf", "transform"]],
@@ -464,7 +464,7 @@ def _pdf_selection_bias(articles_df: pd.DataFrame) -> None:
     fig.add_vrect(x0=-0.1, x1=0.1, fillcolor=CATEGORICAL_PALETTE[0], opacity=0.08, line_width=0)
     fig.update_layout(
         title="Standardized difference: articles with PDF less articles without PDF",
-        xaxis_title="Standardized mean difference (IC bootstrap of 95%)",
+        xaxis_title="Standardized mean difference (95% bootstrap CI)",
         yaxis_title="Metrics",
         showlegend=False,
     )
@@ -483,8 +483,8 @@ def _pdf_selection_bias(articles_df: pd.DataFrame) -> None:
             "n_pdf": "n with PDF",
             "n_no_pdf": "n without PDF",
             "smd": "SMD",
-            "ci_low": "IC 2,5%",
-            "ci_high": "IC 97,5%",
+            "ci_low": "CI 2.5%",
+            "ci_high": "CI 97.5%",
             "status": "Status",
         }
     )
@@ -667,15 +667,15 @@ def _chunks_per_article(chunks_df: pd.DataFrame) -> None:
         fulltext_chunks_per_article.rename("n_chunks").reset_index(),
         x="n_chunks",
         nbins=20,
-        labels={"n_chunks": "Leads per article (abstract + fulltext)"},
+        labels={"n_chunks": "Chunks per article (abstract + full text)"},
     )
     fig.update_traces(marker_color=CATEGORICAL_PALETTE[1])
     fig.update_layout(yaxis_title="Number of articles")
     render_chart(
         fig,
         height=CHART_HEIGHT,
-        caption="Dimensions the cost of generating embeddings: articles with long PDFs generate more blanks "
-        "de texto completo.",
+        caption="Sizes the cost of generating embeddings: articles with long PDFs produce more "
+        "full-text chunks.",
     )
 
 
