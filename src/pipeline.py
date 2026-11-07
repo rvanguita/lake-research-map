@@ -22,13 +22,15 @@ Usage (`uv run lake-research-map <group> --help` lists each group's actions):
 
 from __future__ import annotations
 
+import logging
 import uuid
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import OperationalError, ProgrammingError
 
 from db.bootstrap import bootstrap
 from db.vector_store import get_vector_store
-from ingest.raw_bib import load_bib_entries
+from ingest.raw_bib import count_bib_parse_failures, load_bib_entries
 from ingest.raw_config import load_configs
 from ingest.raw_csv import load_ieee_csv
 from ingest.raw_pdfs import load_pdf_inventory
@@ -64,13 +66,21 @@ from runs import (
     _working_version,
 )
 from transform.bronze_articles import build_bronze_articles
-from transform.publication import materialize_version, publish_vector_alias
+from transform.publication import (
+    PublishedVersionError,
+    activate_hint,
+    is_published,
+    materialize_version,
+    publish_vector_alias,
+)
 from transform.silver_articles import build_silver_articles
 from transform.versioned_gold import (
     build_dataset_embeddings,
     build_dataset_gold,
     build_dataset_semantics,
 )
+
+logger = logging.getLogger(__name__)
 
 STAGES = (*STAGE_ORDER, "all")
 
@@ -134,7 +144,17 @@ def _enrichment_records() -> list[list]:
     with _layer_sessions("bronze") as (session,):
         try:
             observed = load_enrichment_observations(session)
-        except Exception:  # pragma: no cover - a pre-enrichment database
+        except (OperationalError, ProgrammingError) as exc:
+            # Only a missing table is tolerable (MySQL raises ProgrammingError
+            # 1146 for it, SQLite an OperationalError): a database that
+            # predates the enrichment tables has no observations to hash. This
+            # used to swallow every exception, so any other failure
+            # fingerprinted the corpus as "no enrichment" and minted a version
+            # whose id described inputs it never read.
+            logger.warning(
+                "enrichment observations could not be read; fingerprinting without them: %s",
+                exc,
+            )
             return []
     return [
         [doi, values.get("citation_count"), values.get("reference_count")]
@@ -176,6 +196,19 @@ def _prepare_raw_version(execution_id: str, workflow: str, trigger: str, source_
             version.status = "candidate"
             version.failed_at = None
             version.failure_reason = None
+        elif is_published(version) and version.status != "active":
+            # The same inputs, code and curation as a snapshot readers have
+            # already seen. Pointing the working version at it rebuilt the
+            # superseded snapshot in place (its `published_at` is still set,
+            # and exact rollback depends on it being what readers saw). The
+            # active version is the other published case: the unchanged-run
+            # skip below.
+            raise PublishedVersionError(
+                f"this fingerprint already belongs to published version {version.version_id} "
+                f"(status {version.status}); nothing in the inputs, code or curation changed "
+                "since it was published, so there is no new candidate to build. Use "
+                f"{activate_hint(version.version_id)} to serve it again"
+            )
         state.working_version_id = fingerprint.version_id
         state.execution_id = execution_id
         _ensure_execution(
@@ -217,6 +250,7 @@ def run_raw(
                 "config": load_configs(raw_session),
                 "ieee_csv_rows": load_ieee_csv(raw_session),
                 "bib_entries": load_bib_entries(raw_session),
+                "bib_failed_blocks": count_bib_parse_failures(raw_session),
                 "pdf_files": load_pdf_inventory(raw_session),
             }
             changes = persist_snapshot(
@@ -254,7 +288,7 @@ def run_raw(
 
 def run_bronze(*, execution_id: str, workflow: str = "bronze", trigger: str = "cli") -> dict:
     with _layer_sessions("gold", "raw", "bronze") as (gold_session, raw_session, bronze_session):
-        version_id = _working_version(gold_session, execution_id)
+        version_id = _working_version(gold_session, execution_id, workflow=workflow)
         _ensure_execution(
             gold_session, execution_id, workflow=workflow, trigger=trigger, version_id=version_id
         )
@@ -297,7 +331,7 @@ def run_silver(*, execution_id: str, workflow: str = "silver", trigger: str = "c
         bronze_session,
         silver_session,
     ):
-        version_id = _working_version(gold_session, execution_id)
+        version_id = _working_version(gold_session, execution_id, workflow=workflow)
         _ensure_execution(
             gold_session, execution_id, workflow=workflow, trigger=trigger, version_id=version_id
         )
@@ -335,7 +369,7 @@ def run_silver(*, execution_id: str, workflow: str = "silver", trigger: str = "c
 
 def run_gold(*, execution_id: str, workflow: str = "gold", trigger: str = "cli") -> dict:
     with _layer_sessions("gold", "silver") as (gold_session, silver_session):
-        version_id = _working_version(gold_session, execution_id)
+        version_id = _working_version(gold_session, execution_id, workflow=workflow)
         _ensure_execution(
             gold_session, execution_id, workflow=workflow, trigger=trigger, version_id=version_id
         )
@@ -371,7 +405,7 @@ def run_gold(*, execution_id: str, workflow: str = "gold", trigger: str = "cli")
 
 def run_embed(*, execution_id: str, workflow: str = "embed", trigger: str = "cli") -> dict:
     with _layer_sessions("gold") as (gold_session,):
-        version_id = _working_version(gold_session, execution_id)
+        version_id = _working_version(gold_session, execution_id, workflow=workflow)
         _ensure_execution(
             gold_session, execution_id, workflow=workflow, trigger=trigger, version_id=version_id
         )
@@ -440,7 +474,7 @@ def _version_ready(session, version_id: str) -> bool:
 
 def run_semantic(*, execution_id: str, workflow: str = "semantic", trigger: str = "cli") -> dict:
     with _layer_sessions("gold") as (gold_session,):
-        version_id = _working_version(gold_session, execution_id)
+        version_id = _working_version(gold_session, execution_id, workflow=workflow)
         _ensure_execution(
             gold_session, execution_id, workflow=workflow, trigger=trigger, version_id=version_id
         )

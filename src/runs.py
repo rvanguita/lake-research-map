@@ -192,17 +192,38 @@ def _ensure_execution(
     return execution
 
 
-def _working_version(session, execution_id: str | None = None) -> str:
-    from db.gold_models import PipelineExecution, PublicationState
+def _working_version(
+    session, execution_id: str | None = None, *, workflow: str | None = None
+) -> str:
+    """The version this stage builds, refusing one that readers have seen.
 
+    An execution id names its version; otherwise the publication state's
+    working pointer does. Either can name a published version -- the pointer
+    is moved onto every version as it is published, and an old execution id
+    stays bound to the version it built -- and a stage run over one rewrites
+    a snapshot (`--execution-id` of a superseded version used to do exactly
+    that). The one legitimate case is the unchanged `--stage all` of the
+    active version, which every stage records as skipped
+    (`_is_unchanged_full_run`); a superseded version is refused even then.
+    """
+    from db.gold_models import DatasetVersion, PipelineExecution, PublicationState
+    from transform.publication import is_mutable, published_version_error
+
+    version_id = None
     if execution_id:
         execution = session.get(PipelineExecution, execution_id)
         if execution and execution.dataset_version_id:
-            return execution.dataset_version_id
-    state = session.get(PublicationState, 1)
-    if state and state.working_version_id:
-        return state.working_version_id
-    raise RuntimeError("no working dataset version; run the raw stage first")
+            version_id = execution.dataset_version_id
+    if version_id is None:
+        state = session.get(PublicationState, 1)
+        if state and state.working_version_id:
+            version_id = state.working_version_id
+    if version_id is None:
+        raise RuntimeError("no working dataset version; run the raw stage first")
+    version = session.get(DatasetVersion, version_id)
+    if not is_mutable(version) and not (workflow == "all" and version.status == "active"):
+        raise published_version_error(version)
+    return version_id
 
 
 def _is_unchanged_full_run(session, version_id: str, workflow: str) -> bool:
@@ -290,8 +311,13 @@ def _finalize_execution(session, execution_id: str, status: str, error: str | No
     execution.finished_at = datetime.now(UTC)
     execution.error_message = error
     if error and execution.dataset_version_id:
+        from transform.publication import is_mutable
+
         version = session.get(DatasetVersion, execution.dataset_version_id)
-        if version is not None and version.status != "active":
+        # Only a candidate can fail. A published snapshot keeps its status
+        # whichever execution stumbled while bound to it: marking a superseded
+        # version `failed` would hide it from `versions activate`.
+        if version is not None and is_mutable(version):
             version.status = "failed"
             version.failed_at = datetime.now(UTC)
             version.failure_reason = error

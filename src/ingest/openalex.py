@@ -18,6 +18,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import time
 from datetime import UTC, datetime
 from urllib.parse import quote
@@ -55,6 +56,26 @@ def _user_agent(email: str | None) -> str:
     if not contact:
         return DEFAULT_USER_AGENT
     return f"lake-research-map/1.0 ({PROJECT_URL}; mailto:{contact})"
+
+
+# `requests` puts the full URL, query string included, into the message of
+# every exception it raises, and that message was logged and stored verbatim
+# as `error_message` in `bronze.lit_enrichment_observations` -- a table on a
+# server shared with other projects. The key is masked by shape (the
+# `api_key=` parameter) and by content (the resolved value, wherever it
+# surfaces: an echoed body, a header dump).
+_API_KEY_PARAM = re.compile(r"(api_key=)[^&\s]+")
+
+
+def _redact(text, *secrets: str | None) -> str | None:
+    """Mask the OpenAlex API key in a message about to be logged, stored or returned."""
+    if text is None:
+        return None
+    masked = _API_KEY_PARAM.sub(r"\1<redacted>", str(text))
+    for secret in (*secrets, os.environ.get("OPENALEX_API_KEY")):
+        if secret:
+            masked = masked.replace(secret, "<redacted>")
+    return masked
 
 
 # A crawl that has been told to stop must stop. The corpus refresh on
@@ -239,13 +260,14 @@ def fetch_openalex_observation(
             if retry_count < max_retries:
                 time.sleep(min(2**retry_count, 8))
                 continue
-            logger.warning("OpenAlex request failed for %s: %s", clean_doi, exc)
+            message = _redact(str(exc), resolved_key)
+            logger.warning("OpenAlex request failed for %s: %s", clean_doi, message)
             return {
                 "doi": clean_doi,
                 "status": "error",
                 "http_status": getattr(getattr(exc, "response", None), "status_code", None),
                 "retry_count": retry_count,
-                "error_message": str(exc),
+                "error_message": message,
             }
     raise AssertionError("retry loop must return")
 
@@ -339,8 +361,9 @@ def fetch_openalex_batch(
             if retry_count < max_retries:
                 time.sleep(min(2**retry_count, 8))
                 continue
-            logger.warning("OpenAlex batch request failed: %s", exc)
-            return _failure("error", None, retry_count, str(exc))
+            message = _redact(str(exc), resolved_key)
+            logger.warning("OpenAlex batch request failed: %s", message)
+            return _failure("error", None, retry_count, message)
 
         results: dict[str, dict] = {}
         for work in payload.get("results") or []:
@@ -533,7 +556,9 @@ def refresh_openalex_observations(
                     # works would add hundreds of megabytes to a MySQL server
                     # this project shares with unrelated ones, so it is opt-in.
                     payload=result.get("payload") if store_payload else None,
-                    error_message=result.get("error_message"),
+                    # Redacted at the source already; masked again here because
+                    # this is the line that writes to the shared database.
+                    error_message=_redact(result.get("error_message")),
                 )
             )
             if result["status"] == "success":
@@ -855,7 +880,7 @@ def _paged_filter(
                     "count": total,
                     "pages": pages,
                     "throttled": False,
-                    "error": str(exc),
+                    "error": _redact(str(exc), params.get("api_key")),
                 }
             status = getattr(response, "status_code", 200)
             if status == 429 or status >= 500:
@@ -1020,7 +1045,7 @@ def resolve_reference_years(
             logger.warning(
                 "reference years: %d-value filter rejected (%s); falling back to %d",
                 size,
-                fetched["error"],
+                _redact(fetched["error"]),
                 REFERENCE_BATCH_FALLBACK,
             )
             size = REFERENCE_BATCH_FALLBACK
@@ -1028,7 +1053,7 @@ def resolve_reference_years(
         if fetched["throttled"] or fetched["error"]:
             consecutive_failures += 1
             if fetched["error"]:
-                logger.warning("reference years: batch rejected: %s", fetched["error"])
+                logger.warning("reference years: batch rejected: %s", _redact(fetched["error"]))
             if consecutive_failures >= CONSECUTIVE_FAILURE_LIMIT or fetched["error"]:
                 stopped_early = "rate_limited" if fetched["throttled"] else "error"
                 break

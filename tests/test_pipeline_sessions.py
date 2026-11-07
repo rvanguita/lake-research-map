@@ -48,7 +48,9 @@ def handed_out(monkeypatch):
         "_prepare_raw_version",
         lambda *args, **kwargs: ([], "v" * 64, False),
     )
-    monkeypatch.setattr(pipeline, "_working_version", lambda session, execution_id: "v" * 64)
+    monkeypatch.setattr(
+        pipeline, "_working_version", lambda session, execution_id, **kwargs: "v" * 64
+    )
     monkeypatch.setattr(pipeline, "_ensure_execution", lambda session, execution_id, **kw: None)
     return sessions
 

@@ -45,6 +45,11 @@ PDF_CLEANING_STATS = (
     "pdf_hyphens_joined",
     "pdf_short_lines_dropped",
 )
+# Everything a build reports about PDFs: the cleaning above plus the PDFs pypdf
+# could not read at all. Such an article keeps its abstract chunk only, and a
+# run that lost full text has to say so in its stats instead of looking like a
+# corpus with fewer linked PDFs.
+PDF_STATS = (*PDF_CLEANING_STATS, "pdf_extraction_failures")
 
 
 def _build_abstract_text(row: SilverArticle) -> str:
@@ -68,6 +73,8 @@ def _extract_pdf_text(pdf_path: str, stats: Counter | None = None) -> str:
         # encrypted/truncated PDF; log so a failed extraction is diagnosable
         # instead of silently indistinguishable from "PDF has no text".
         logger.warning("_extract_pdf_text: failed to extract text from %r", pdf_path, exc_info=True)
+        if stats is not None:
+            stats["pdf_extraction_failures"] += 1
         return ""
     text = re.sub(r"[ \t]+", " ", "\n\n".join(pages)).strip()
     cleaned, report = clean_pdf_text(text)

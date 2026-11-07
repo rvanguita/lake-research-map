@@ -50,10 +50,11 @@ from transform.embeddings import (
     embedding_model,
 )
 from transform.gold_articles import (
+    PDF_STATS,
     _desired_chunks,
     _merge_silver_group,
 )
-from transform.publication import _state
+from transform.publication import _state, is_mutable, published_version_error
 from transform.semantics import (
     ANCHOR_TEXT,
     OFF_ANCHOR_TEXT,

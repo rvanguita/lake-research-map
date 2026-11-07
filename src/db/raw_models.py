@@ -146,6 +146,31 @@ class BibEntry(Base):
     __table_args__ = (UniqueConstraint("source", "bib_key", "source_file"),)
 
 
+class BibParseFailure(Base):
+    """One block of a .bib file that bibtexparser could not turn into an entry.
+
+    bibtexparser 2.x does not raise on a malformed block: it collects it in
+    `library.failed_blocks` and parses on, so a file with one broken entry
+    loads every other entry and silently loses that one -- and an unbalanced
+    brace in a glued IEEE export swallows every entry after it. Kept beside
+    the file's entries (rewritten with them when the file changes) so the raw
+    contract sees the loss on every run, not only on the run that parsed it.
+    """
+
+    __tablename__ = "lit_bib_parse_failures"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source: Mapped[str] = mapped_column(String(32), index=True)  # 'ieee' | 'elsevier'
+    # 512*4 = 2048 bytes, under MySQL's 3072-byte key cap, like SourceFile.path.
+    source_file: Mapped[str] = mapped_column(String(512), index=True)
+    start_line: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 1-based
+    block_type: Mapped[str] = mapped_column(String(64))  # bibtexparser's block class
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    raw_text: Mapped[str | None] = mapped_column(Text, nullable=True)  # an excerpt
+    dataset_version_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    source_revision_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+
+
 class PdfFile(Base):
     """Inventory of data/articles/*.pdf."""
 

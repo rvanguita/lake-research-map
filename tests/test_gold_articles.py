@@ -18,6 +18,7 @@ from transform.gold_articles import (
     CHUNK_MAX_CHARS,
     CHUNK_OVERLAP_CHARS,
     PDF_CLEANING_STATS,
+    PDF_STATS,
     _build_abstract_text,
     _chunk_text,
     _extract_pdf_text,
@@ -406,3 +407,58 @@ def test_pdf_linked_article_gets_cleaned_fulltext_chunks_and_the_stats_say_so(
     assert [c.seq for c in fulltext] == list(range(1, len(fulltext) + 1))
     assert all(c.char_len == len(c.text) <= CHUNK_MAX_CHARS for c in fulltext)
     assert not any("Cited" in c.text for c in fulltext)
+    assert stats["pdf_extraction_failures"] == 0
+
+
+# ---------------------------------------------------------------------------
+# No silent input loss (Wave P0-5d): a PDF pypdf cannot read is logged, counted
+# in the run stats and leaves the article with its abstract chunk only --
+# instead of looking like a corpus with one linked PDF fewer.
+# ---------------------------------------------------------------------------
+
+
+def _unreadable_pdf(monkeypatch) -> None:
+    from transform import gold_articles
+
+    def _raise(_path):
+        raise OSError("truncated PDF")
+
+    monkeypatch.setattr(gold_articles, "PdfReader", _raise)
+
+
+def test_extract_pdf_text_counts_a_failed_extraction(monkeypatch):
+    _unreadable_pdf(monkeypatch)
+    stats: Counter = Counter()
+
+    assert _extract_pdf_text("data/articles/broken.pdf", stats) == ""
+    assert stats == Counter(pdf_extraction_failures=1)
+    assert "pdf_extraction_failures" in PDF_STATS
+
+
+def test_a_pdf_that_cannot_be_read_is_counted_and_leaves_only_the_abstract_chunk(
+    silver_session, gold_session, monkeypatch
+):
+    _unreadable_pdf(monkeypatch)
+    silver_session.add_all(
+        [
+            _silver(
+                doi="10.1/broken",
+                has_pdf=True,
+                pdf_path="data/articles/broken.pdf",
+                abstract="An abstract.",
+            ),
+            _silver(doi="10.1/plain", abstract="Another abstract."),
+        ]
+    )
+    silver_session.commit()
+    _candidate(gold_session)
+
+    stats = build_dataset_gold(silver_session, gold_session, "v1")
+
+    assert stats["pdf_extraction_failures"] == 1
+    assert stats["pdf_texts_cleaned"] == 0
+    assert stats["fulltext_chunks"] == 0
+    assert [(c.doi, c.chunk_type) for c in _chunks(gold_session)] == [
+        ("10.1/broken", "abstract"),
+        ("10.1/plain", "abstract"),
+    ]

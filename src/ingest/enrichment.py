@@ -28,21 +28,36 @@ from ingest.doi import normalize_doi
 ENRICHMENT_CACHE_PATH = DATA_DIR / "enrichment_cache.json"
 
 
+class EnrichmentCacheError(ValueError):
+    """`enrichment_cache.json` exists but cannot be read as the cache it claims to be."""
+
+
 def load_enrichment_cache(path: Path | None = None) -> dict[str, dict[str, int | None]]:
     """Load the DOI -> {citation_count, reference_count} cache.
 
-    Tolerates a missing file -- `data/` is gitignored and won't exist on a
-    fresh checkout -- by returning an empty dict rather than raising.
+    Tolerates a *missing* file -- `data/` is gitignored and won't exist on a
+    fresh checkout -- by returning an empty dict rather than raising. A file
+    that exists but cannot be read or parsed is a different situation:
+    returning `{}` for it too made a corrupt cache indistinguishable from no
+    cache, and bronze was rebuilt without a single Elsevier count and no
+    message. That raises `EnrichmentCacheError`, which the bronze stage does
+    not catch, so the run fails and says why.
     """
     cache_path = path or ENRICHMENT_CACHE_PATH
     if not cache_path.exists():
         return {}
     try:
         raw = json.loads(cache_path.read_text())
-    except (OSError, json.JSONDecodeError):
-        return {}
+    except (OSError, ValueError) as exc:
+        # `json.JSONDecodeError` and `UnicodeDecodeError` are both ValueErrors.
+        raise EnrichmentCacheError(
+            f"enrichment cache {cache_path} exists but could not be read: {exc}"
+        ) from exc
     if not isinstance(raw, dict):
-        return {}
+        raise EnrichmentCacheError(
+            f"enrichment cache {cache_path} must be a JSON object keyed by DOI, "
+            f"not {type(raw).__name__}"
+        )
 
     normalized: dict[str, dict[str, int | None]] = {}
     for doi, values in raw.items():

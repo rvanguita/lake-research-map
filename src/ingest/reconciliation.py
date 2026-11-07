@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from db.raw_models import (
     BibEntry,
+    BibParseFailure,
     Config,
     DatasetSourceFile,
     IeeeCsvRow,
@@ -39,6 +40,7 @@ def remove_absent_sources(session: Session, present_paths: set[str]) -> int:
     session.execute(delete(Config).where(Config.source_file.in_(stale)))
     session.execute(delete(IeeeCsvRow).where(IeeeCsvRow.source_file.in_(stale)))
     session.execute(delete(BibEntry).where(BibEntry.source_file.in_(stale)))
+    session.execute(delete(BibParseFailure).where(BibParseFailure.source_file.in_(stale)))
     session.execute(delete(PdfFile).where(PdfFile.path.in_(stale)))
     session.execute(delete(SourceFile).where(SourceFile.path.in_(stale)))
     session.flush()
@@ -125,6 +127,11 @@ def persist_snapshot(
         elif source.kind == "bib":
             session.execute(
                 update(BibEntry).where(BibEntry.source_file == source.path).values(**lineage)
+            )
+            session.execute(
+                update(BibParseFailure)
+                .where(BibParseFailure.source_file == source.path)
+                .values(**lineage)
             )
         elif source.kind == "pdf":
             session.execute(

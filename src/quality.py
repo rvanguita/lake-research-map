@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 from typing import Any
@@ -22,6 +23,7 @@ from db.gold_models import (
 )
 from db.raw_models import (
     BibEntry,
+    BibParseFailure,
     Config,
     DatasetSourceFile,
     IeeeCsvRow,
@@ -83,13 +85,18 @@ def raw_contract(session: Session, version_id: str) -> list[CheckResult]:
     version_rows = session.scalars(
         select(DatasetSourceFile).where(DatasetSourceFile.dataset_version_id == version_id)
     ).all()
+    parse_failures = session.scalars(
+        select(BibParseFailure).order_by(BibParseFailure.source_file, BibParseFailure.start_line)
+    ).all()
     paths = {row.path for row in manifest}
     child_paths = {
         *(row.source_file for row in configs),
         *(row.source_file for row in session.scalars(select(BibEntry)).all()),
+        *(row.source_file for row in parse_failures),
         *(row.source_file for row in session.scalars(select(IeeeCsvRow)).all()),
         *(row.path for row in session.scalars(select(PdfFile)).all()),
     }
+    failed_blocks_by_file = Counter(row.source_file for row in parse_failures)
     uniform = {row.dataset_version_id for row in manifest}
     input_directories = {
         (row.source, str(PurePosixPath(row.path).parent))
@@ -139,6 +146,22 @@ def raw_contract(session: Session, version_id: str) -> list[CheckResult]:
             len(input_directories),
             severity="warning",
             details={"missing_source_directories": missing_provenance},
+        ),
+        # A warning until the corpus has been measured at zero; then it blocks,
+        # because every failed block is an export record the review never saw.
+        _result(
+            "raw.bib_parse_failures",
+            not parse_failures,
+            len(parse_failures),
+            0,
+            severity="warning",
+            details={
+                "failed_blocks_by_file": dict(sorted(failed_blocks_by_file.items())[:20]),
+                "blocks": [
+                    {"source_file": row.source_file, "line": row.start_line, "error": row.error}
+                    for row in parse_failures[:20]
+                ],
+            },
         ),
     ]
 
