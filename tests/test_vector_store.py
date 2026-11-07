@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from lake_research_map.db.vector_store import (
+from db.vector_store import (
     ACTIVE_ALIAS,
     QdrantVectorStore,
     VectorPoint,

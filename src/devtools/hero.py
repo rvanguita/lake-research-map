@@ -1,0 +1,773 @@
+"""Generate the official hero illustration for lake-research-map.
+
+Run with `uv run python -m devtools.hero`. Rebuilds
+src/images/lake_research_map_hero.png from the ground up as a clean,
+professional, technically coherent vector-grade graphic on a solid white
+background (#ffffff).
+
+The composition integrates:
+1. Power Distribution Grid Domain (substation, feeder backbone, DERs, IEEE test feeder).
+2. Heterogeneous Corpus Ingestion (IEEE Xplore, ScienceDirect, OpenAlex).
+3. 4-Tier Medallion Data Lake (RAW, BRONZE, SILVER, GOLD).
+4. FastEmbed ONNX binary vector core (384d LargeBinary) & contrastive screening.
+5. Scientometric Intelligence Cockpit (Callon Strategic Diagram, Citation MLE, 2D UMAP manifold).
+"""
+
+import subprocess
+import sys
+
+
+def generate_svg() -> str:
+    """Construct the complete SVG specification for the hero banner."""
+    return """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" width="100%" height="100%" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <defs>
+    <!-- Shadow Filters -->
+    <filter id="shadow-card" x="-4%" y="-5%" width="108%" height="114%" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="#0f172a" flood-opacity="0.06"/>
+    </filter>
+    <filter id="shadow-elevated" x="-6%" y="-8%" width="112%" height="120%" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="6" stdDeviation="9" flood-color="#0f172a" flood-opacity="0.09"/>
+    </filter>
+    <filter id="shadow-glow-blue" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="0" stdDeviation="6" flood-color="#0284c7" flood-opacity="0.25"/>
+    </filter>
+
+    <!-- Markers -->
+    <marker id="arr-slate" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,1 L9,5 L0,9 z" fill="#64748b"/>
+    </marker>
+    <marker id="arr-blue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,1 L9,5 L0,9 z" fill="#0284c7"/>
+    </marker>
+    <marker id="arr-emerald" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,1 L9,5 L0,9 z" fill="#059669"/>
+    </marker>
+    <marker id="arr-amber" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,1 L9,5 L0,9 z" fill="#d97706"/>
+    </marker>
+
+    <!-- Subtle Dot Grid Background -->
+    <pattern id="grid-dots" x="0" y="0" width="32" height="32" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1.2" fill="#e2e8f0" opacity="0.65"/>
+    </pattern>
+
+    <!-- Linear Gradients -->
+    <linearGradient id="grad-logo" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0284c7"/>
+      <stop offset="100%" stop-color="#2563eb"/>
+    </linearGradient>
+    <linearGradient id="grad-raw" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#059669"/>
+      <stop offset="100%" stop-color="#10b981"/>
+    </linearGradient>
+    <linearGradient id="grad-bronze" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#d97706"/>
+      <stop offset="100%" stop-color="#f59e0b"/>
+    </linearGradient>
+    <linearGradient id="grad-silver" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#2563eb"/>
+      <stop offset="100%" stop-color="#0ea5e9"/>
+    </linearGradient>
+    <linearGradient id="grad-gold" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#b45309"/>
+      <stop offset="100%" stop-color="#eab308"/>
+    </linearGradient>
+  </defs>
+
+  <!-- ==================== BASE CANVAS & BACKGROUND ==================== -->
+  <rect width="100%" height="100%" fill="#ffffff"/>
+  <rect width="100%" height="100%" fill="url(#grid-dots)"/>
+  <rect x="20" y="20" width="1880" height="1040" rx="16" fill="none" stroke="#e2e8f0" stroke-width="2"/>
+
+  <!-- ==================== TOP BRANDING HEADER ==================== -->
+  <g id="header">
+    <!-- Brand Logo Mark (Hexagon with Power Grid & Lake Nodes) -->
+    <g transform="translate(48, 42)">
+      <polygon points="26,2 52,17 52,47 26,62 0,47 0,17" fill="url(#grad-logo)" filter="url(#shadow-glow-blue)"/>
+      <path d="M26,14 L38,26 L30,26 L34,44 L20,32 L26,32 Z" fill="#ffffff"/>
+      <circle cx="10" cy="20" r="3.5" fill="#bae6fd"/>
+      <circle cx="42" cy="44" r="3.5" fill="#fde68a"/>
+      <line x1="10" y1="20" x2="26" y2="14" stroke="#ffffff" stroke-width="1.2" opacity="0.6"/>
+      <line x1="42" y1="44" x2="34" y2="44" stroke="#ffffff" stroke-width="1.2" opacity="0.6"/>
+    </g>
+
+    <!-- Title & Domain Subtitle -->
+    <text x="116" y="68" font-size="28" font-weight="900" fill="#0f172a" letter-spacing="-0.5">lake-research-map</text>
+    <text x="116" y="93" font-size="14" font-weight="600" fill="#475569">
+      Medallion Data Lake &amp; Scientometric Research Intelligence Platform
+      <tspan font-weight="400" fill="#64748b"> • Systematic Literature Review on Distribution System Planning</tspan>
+    </text>
+
+    <!-- Header Badges -->
+    <g transform="translate(1310, 48)">
+      <!-- Badge 1: Domain -->
+      <g filter="url(#shadow-card)">
+        <rect x="0" y="0" width="180" height="38" rx="8" fill="#f0fdf4" stroke="#86efac" stroke-width="1.2"/>
+        <path d="M18,12 L24,20 L20,20 L23,28 L15,19 L19,19 Z" fill="#16a34a"/>
+        <text x="100" y="24" text-anchor="middle" font-size="12" font-weight="700" fill="#166534">Power Systems SLR</text>
+      </g>
+      <!-- Badge 2: PRISMA Audit -->
+      <g filter="url(#shadow-card)" transform="translate(195, 0)">
+        <rect x="0" y="0" width="180" height="38" rx="8" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.2"/>
+        <!-- Magnifying Glass Icon -->
+        <circle cx="18" cy="18" r="6" fill="none" stroke="#2563eb" stroke-width="2"/>
+        <line x1="22" y1="22" x2="27" y2="27" stroke="#2563eb" stroke-width="2" stroke-linecap="round"/>
+        <text x="100" y="24" text-anchor="middle" font-size="12" font-weight="700" fill="#1d4ed8">PRISMA Audit-Ready</text>
+      </g>
+      <!-- Badge 3: 13 Pages -->
+      <g filter="url(#shadow-card)" transform="translate(390, 0)">
+        <rect x="0" y="0" width="170" height="38" rx="8" fill="#fff7ed" stroke="#fed7aa" stroke-width="1.2"/>
+        <!-- Chart Icon -->
+        <rect x="14" y="20" width="4" height="8" rx="1" fill="#ea580c"/>
+        <rect x="20" y="15" width="4" height="13" rx="1" fill="#ea580c"/>
+        <rect x="26" y="11" width="4" height="17" rx="1" fill="#ea580c"/>
+        <text x="96" y="24" text-anchor="middle" font-size="12" font-weight="700" fill="#c2410c">13-Page Cockpit</text>
+      </g>
+    </g>
+  </g>
+
+  <!-- Divider Line -->
+  <line x1="48" y1="120" x2="1872" y2="120" stroke="#e2e8f0" stroke-width="1.5"/>
+
+  <!-- ==================== 3-PILLAR MAIN ARCHITECTURE ==================== -->
+
+  <!-- ==================================================================== -->
+  <!-- PILLAR 1: DOMAIN ENGINEERING & INGESTION (LEFT: x=48..620, w=572)     -->
+  <!-- ==================================================================== -->
+  <g id="pillar-1" transform="translate(48, 140)">
+    <!-- Column Card Background -->
+    <rect x="0" y="0" width="572" height="840" rx="14" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1.5" filter="url(#shadow-card)"/>
+
+    <!-- Column Header -->
+    <path d="M0,0 L572,0 A14,14 0 0 1 572,46 L0,46 Z" fill="#f1f5f9"/>
+    <rect x="14" y="11" width="24" height="24" rx="5" fill="#0284c7" opacity="0.15"/>
+    <!-- SVG Lightning Glyph -->
+    <path d="M26,14 L31,21 L27,21 L30,29 L22,20 L26,20 Z" fill="#0284c7"/>
+    <text x="46" y="28" font-size="14" font-weight="800" fill="#0f172a" letter-spacing="-0.2">POWER DISTRIBUTION &amp; INGESTION</text>
+    <rect x="390" y="11" width="168" height="24" rx="5" fill="#e2e8f0"/>
+    <text x="474" y="27" text-anchor="middle" font-size="10.5" font-weight="700" fill="#475569">Physical Grid &amp; Sources</text>
+
+    <!-- SECTION 1A: ELECTRIC POWER DISTRIBUTION SCHEMATIC -->
+    <g transform="translate(18, 62)">
+      <rect x="0" y="0" width="536" height="380" rx="10" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
+      
+      <!-- Sub-panel Header -->
+      <rect x="0" y="0" width="536" height="32" rx="10" fill="#f8fafc"/>
+      <path d="M0,32 L536,32" stroke="#e2e8f0" stroke-width="1"/>
+      <text x="14" y="21" font-size="12" font-weight="700" fill="#1e293b">Electric Power Distribution Grid (SLR Research Scope)</text>
+      <text x="430" y="21" font-size="10" font-weight="600" fill="#64748b">Radial / Mesh Feeders</text>
+
+      <!-- Substation 69kV / 13.8kV -->
+      <g transform="translate(18, 52)">
+        <rect x="0" y="0" width="112" height="84" rx="8" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+        <text x="56" y="22" text-anchor="middle" font-size="11" font-weight="800" fill="#1e40af">SUBSTATION</text>
+        <!-- Transformer Symbol (interlocking circles) -->
+        <circle cx="45" cy="46" r="14" fill="none" stroke="#2563eb" stroke-width="2"/>
+        <circle cx="67" cy="46" r="14" fill="none" stroke="#2563eb" stroke-width="2"/>
+        <text x="56" y="74" text-anchor="middle" font-size="9.5" font-weight="600" fill="#3b82f6">69 kV → 13.8 kV</text>
+      </g>
+
+      <!-- Feeder Trunk (Medium Voltage Primary) -->
+      <path d="M130,94 L495,94" stroke="#0284c7" stroke-width="4" stroke-linecap="round"/>
+      <text x="315" y="82" text-anchor="middle" font-size="9.5" font-weight="800" fill="#0369a1">PRIMARY FEEDER TRUNK (13.8 kV)</text>
+
+      <!-- Bus Nodes & Branches (Optimized spacing: Bus 1=140, Bus 2=225, Bus 3=330, Bus 4=435, Bus 5=490) -->
+      <!-- Bus 1 (Slack Bus) -->
+      <circle cx="140" cy="94" r="6" fill="#1d4ed8"/>
+      <text x="140" y="115" text-anchor="middle" font-size="9" font-weight="700" fill="#1e293b">Bus 1</text>
+
+      <!-- Bus 2 + Lateral Branch to Solar PV -->
+      <circle cx="225" cy="94" r="6" fill="#0284c7"/>
+      <text x="225" y="115" text-anchor="middle" font-size="9" font-weight="700" fill="#1e293b">Bus 2</text>
+      <line x1="225" y1="94" x2="225" y2="185" stroke="#64748b" stroke-width="1.8" stroke-dasharray="3 3"/>
+      <!-- Solar PV Node Card (x: 178..272, width: 94) -->
+      <g transform="translate(178, 185)" filter="url(#shadow-card)">
+        <rect x="0" y="0" width="94" height="74" rx="6" fill="#fefce8" stroke="#eab308" stroke-width="1.2"/>
+        <!-- Sun Icon -->
+        <circle cx="47" cy="18" r="5" fill="#ca8a04"/>
+        <text x="47" y="34" text-anchor="middle" font-size="10" font-weight="800" fill="#a16207">SOLAR PV</text>
+        <rect x="12" y="38" width="70" height="18" rx="2" fill="#fef08a" stroke="#ca8a04" stroke-width="0.8"/>
+        <line x1="35" y1="38" x2="35" y2="56" stroke="#ca8a04" stroke-width="0.8"/>
+        <line x1="58" y1="38" x2="58" y2="56" stroke="#ca8a04" stroke-width="0.8"/>
+        <text x="47" y="66" text-anchor="middle" font-size="8" font-weight="700" fill="#854d0e">Hosting Capacity</text>
+      </g>
+      <!-- Arrow Power Injection Upward -->
+      <polygon points="225,102 221,112 229,112" fill="#eab308"/>
+
+      <!-- Bus 3 + Lateral Branch to BESS Storage -->
+      <circle cx="330" cy="94" r="6" fill="#0284c7"/>
+      <text x="330" y="115" text-anchor="middle" font-size="9" font-weight="700" fill="#1e293b">Bus 3</text>
+      <line x1="330" y1="94" x2="330" y2="185" stroke="#64748b" stroke-width="1.8" stroke-dasharray="3 3"/>
+      <!-- BESS Battery Card (x: 283..377, width: 94) -->
+      <g transform="translate(283, 185)" filter="url(#shadow-card)">
+        <rect x="0" y="0" width="94" height="74" rx="6" fill="#f0fdf4" stroke="#22c55e" stroke-width="1.2"/>
+        <!-- Battery Icon -->
+        <rect x="33" y="11" width="24" height="11" rx="2" fill="none" stroke="#16a34a" stroke-width="1.2"/>
+        <rect x="57" y="14" width="2" height="5" rx="0.5" fill="#16a34a"/>
+        <rect x="36" y="13" width="7" height="7" rx="1" fill="#22c55e"/>
+        <rect x="45" y="13" width="7" height="7" rx="1" fill="#22c55e"/>
+        <text x="47" y="34" text-anchor="middle" font-size="10" font-weight="800" fill="#15803d">BESS</text>
+        <rect x="10" y="38" width="74" height="18" rx="2" fill="#dcfce7" stroke="#16a34a" stroke-width="0.8"/>
+        <text x="47" y="51" text-anchor="middle" font-size="8" font-weight="700" fill="#166534">Peak Shaving</text>
+        <text x="47" y="66" text-anchor="middle" font-size="8" font-weight="700" fill="#166534">Volt/VAR Support</text>
+      </g>
+      <!-- Bi-directional arrows -->
+      <polygon points="330,102 326,112 334,112" fill="#16a34a"/>
+
+      <!-- Bus 4 + Lateral to EV Fast-Charging Hub -->
+      <circle cx="435" cy="94" r="6" fill="#0284c7"/>
+      <text x="435" y="115" text-anchor="middle" font-size="9" font-weight="700" fill="#1e293b">Bus 4</text>
+      <line x1="435" y1="94" x2="435" y2="185" stroke="#64748b" stroke-width="1.8" stroke-dasharray="3 3"/>
+      <!-- EV Hub Card (x: 388..482, width: 94) -->
+      <g transform="translate(388, 185)" filter="url(#shadow-card)">
+        <rect x="0" y="0" width="94" height="74" rx="6" fill="#f5f3ff" stroke="#8b5cf6" stroke-width="1.2"/>
+        <!-- EV Plug Icon -->
+        <circle cx="47" cy="16" r="5" fill="#7c3aed"/>
+        <text x="47" y="34" text-anchor="middle" font-size="10" font-weight="800" fill="#6d28d9">EV CHARGING</text>
+        <rect x="10" y="38" width="74" height="18" rx="2" fill="#ede9fe" stroke="#7c3aed" stroke-width="0.8"/>
+        <text x="47" y="51" text-anchor="middle" font-size="8" font-weight="700" fill="#5b21b6">Fast Hubs (V2G)</text>
+        <text x="47" y="66" text-anchor="middle" font-size="8" font-weight="700" fill="#7c3aed">Demand Spikes</text>
+      </g>
+      <polygon points="435,178 431,168 439,168" fill="#7c3aed"/>
+
+      <!-- End of Feeder Bus 5 -->
+      <circle cx="490" cy="94" r="6" fill="#0284c7"/>
+      <text x="490" y="115" text-anchor="middle" font-size="9" font-weight="700" fill="#1e293b">Bus 5</text>
+
+      <!-- Engineering Mathematical Optimization Banner -->
+      <g transform="translate(18, 276)">
+        <rect x="0" y="0" width="500" height="88" rx="8" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1"/>
+        <text x="14" y="22" font-size="11" font-weight="800" fill="#0f172a">MATHEMATICAL PLANNING PARADIGMS:</text>
+        <text x="14" y="42" font-size="10.5" fill="#334155">• Formulations: <tspan font-weight="700" fill="#1d4ed8">MILP • MISOCP • MINLP • Heuristics • AI/RL</tspan></text>
+        <text x="14" y="60" font-size="10.5" fill="#334155">• Co-Optimization: <tspan font-weight="700" fill="#047857">CAPEX / OPEX, Losses, Reliability, Volt/VAR</tspan></text>
+        <text x="14" y="78" font-size="10.5" fill="#334155">• Benchmark Grids: <tspan font-weight="700" fill="#b45309">IEEE 33-Bus, 69-Bus, 123-Bus Test Feeders</tspan></text>
+      </g>
+    </g>
+
+    <!-- SECTION 1B: HETEROGENEOUS INGESTION PIPELINE (SOURCES) -->
+    <g transform="translate(18, 460)">
+      <rect x="0" y="0" width="536" height="360" rx="10" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
+      
+      <!-- Sub-panel Header -->
+      <rect x="0" y="0" width="536" height="32" rx="10" fill="#f8fafc"/>
+      <path d="M0,32 L536,32" stroke="#e2e8f0" stroke-width="1"/>
+      <text x="14" y="21" font-size="12" font-weight="700" fill="#1e293b">Heterogeneous Publisher Ingestion &amp; OpenAlex API</text>
+      <text x="442" y="21" font-size="10" font-weight="600" fill="#64748b">SLR Extraction</text>
+
+      <!-- Source 1: IEEE Xplore -->
+      <g transform="translate(18, 46)" filter="url(#shadow-card)">
+        <rect x="0" y="0" width="500" height="74" rx="8" fill="#f0f9ff" stroke="#0284c7" stroke-width="1.2"/>
+        <rect x="14" y="14" width="46" height="46" rx="6" fill="#0284c7" opacity="0.15"/>
+        <!-- Document SVG Glyph -->
+        <path d="M30,24 L42,24 L48,30 L48,50 L30,50 Z" fill="none" stroke="#0284c7" stroke-width="2"/>
+        <polyline points="42,24 42,30 48,30" fill="none" stroke="#0284c7" stroke-width="2"/>
+        <line x1="35" y1="36" x2="43" y2="36" stroke="#0284c7" stroke-width="1.5"/>
+        <line x1="35" y1="42" x2="43" y2="42" stroke="#0284c7" stroke-width="1.5"/>
+        <text x="74" y="34" font-size="13.5" font-weight="800" fill="#0369a1">IEEE Xplore Digital Library</text>
+        <text x="74" y="54" font-size="11" fill="#0c4a6e">Authoritative CSV metadata + paginated .bib + bulk PDF packages</text>
+        <rect x="410" y="14" width="76" height="22" rx="4" fill="#bae6fd"/>
+        <text x="448" y="29" text-anchor="middle" font-size="9.5" font-weight="700" fill="#075985">1,135 Papers</text>
+      </g>
+
+      <!-- Source 2: Elsevier / ScienceDirect -->
+      <g transform="translate(18, 134)" filter="url(#shadow-card)">
+        <rect x="0" y="0" width="500" height="74" rx="8" fill="#fff7ed" stroke="#ea580c" stroke-width="1.2"/>
+        <rect x="14" y="14" width="46" height="46" rx="6" fill="#ea580c" opacity="0.15"/>
+        <!-- Book SVG Glyph -->
+        <path d="M28,26 C33,24 40,24 45,26 L45,48 C40,46 33,46 28,48 Z" fill="none" stroke="#ea580c" stroke-width="2"/>
+        <path d="M45,26 C50,24 57,24 62,26 L62,48 C57,46 50,46 45,48 Z" fill="none" stroke="#ea580c" stroke-width="2"/>
+        <text x="74" y="34" font-size="13.5" font-weight="800" fill="#9a3412">Elsevier ScienceDirect</text>
+        <text x="74" y="54" font-size="11" fill="#7c2d12">Paginated BibTeX bibliographic exports (EPS, IJEPES, Applied Energy)</text>
+        <rect x="410" y="14" width="76" height="22" rx="4" fill="#fed7aa"/>
+        <text x="448" y="29" text-anchor="middle" font-size="9.5" font-weight="700" fill="#7c2d12">696 Papers</text>
+      </g>
+
+      <!-- Source 3: OpenAlex REST API -->
+      <g transform="translate(18, 222)" filter="url(#shadow-card)">
+        <rect x="0" y="0" width="500" height="74" rx="8" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.2"/>
+        <rect x="14" y="14" width="46" height="46" rx="6" fill="#16a34a" opacity="0.15"/>
+        <!-- Globe / API Network Glyph -->
+        <circle cx="37" cy="37" r="12" fill="none" stroke="#16a34a" stroke-width="2"/>
+        <ellipse cx="37" cy="37" rx="5" ry="12" fill="none" stroke="#16a34a" stroke-width="1.5"/>
+        <line x1="25" y1="37" x2="49" y2="37" stroke="#16a34a" stroke-width="1.5"/>
+        <text x="74" y="34" font-size="13.5" font-weight="800" fill="#15803d">OpenAlex REST API Backfill</text>
+        <text x="74" y="54" font-size="11" fill="#14532d">Automated cited-by counts, reference arrays &amp; venue normalization</text>
+        <rect x="410" y="14" width="76" height="22" rx="4" fill="#bbf7d0"/>
+        <text x="448" y="29" text-anchor="middle" font-size="9.5" font-weight="700" fill="#166534">Enrichment</text>
+      </g>
+
+      <!-- Connection Indicator to Center -->
+      <path d="M518,83 L545,83" stroke="#0284c7" stroke-width="2" marker-end="url(#arr-blue)"/>
+      <path d="M518,171 L545,171" stroke="#ea580c" stroke-width="2" marker-end="url(#arr-amber)"/>
+      <path d="M518,259 L545,259" stroke="#16a34a" stroke-width="2" marker-end="url(#arr-emerald)"/>
+    </g>
+  </g>
+
+  <!-- ==================================================================== -->
+  <!-- PILLAR 2: MEDALLION LAKE ENGINE (CENTER: x=642..1278, w=636)         -->
+  <!-- ==================================================================== -->
+  <g id="pillar-2" transform="translate(642, 140)">
+    <!-- Column Card Background -->
+    <rect x="0" y="0" width="636" height="840" rx="14" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5" filter="url(#shadow-elevated)"/>
+
+    <!-- Column Header -->
+    <path d="M0,0 L636,0 A14,14 0 0 1 636,46 L0,46 Z" fill="#0f172a"/>
+    <rect x="14" y="11" width="24" height="24" rx="5" fill="#38bdf8" opacity="0.2"/>
+    <!-- Stack Layers SVG Glyph -->
+    <polygon points="26,16 34,20 26,24 18,20" fill="#38bdf8"/>
+    <polygon points="26,21 34,25 26,29 18,25" fill="#38bdf8" opacity="0.7"/>
+    <polygon points="26,26 34,30 26,34 18,30" fill="#38bdf8" opacity="0.4"/>
+    <text x="46" y="28" font-size="14" font-weight="800" fill="#ffffff" letter-spacing="-0.2">MEDALLION DATA LAKE &amp; SEMANTIC ENGINE</text>
+    <rect x="448" y="11" width="174" height="24" rx="5" fill="#1e293b"/>
+    <text x="535" y="27" text-anchor="middle" font-size="10.5" font-weight="700" fill="#94a3b8">Multi-Project Isolation (lit_*)</text>
+
+    <!-- MEDALLION TIERS PROGRESSION -->
+    <g transform="translate(22, 62)">
+
+      <!-- TIER 4: GOLD (Top / Curated) -->
+      <g transform="translate(0, 0)" filter="url(#shadow-card)">
+        <rect x="0" y="0" width="592" height="106" rx="10" fill="#fefce8" stroke="#ca8a04" stroke-width="1.8"/>
+        <!-- Header Pill -->
+        <rect x="14" y="12" width="132" height="26" rx="5" fill="url(#grad-gold)"/>
+        <text x="80" y="29" text-anchor="middle" font-size="12" font-weight="900" fill="#ffffff">4. GOLD LAYER</text>
+        <text x="160" y="30" font-size="13" font-weight="800" fill="#854d0e">Curated Analytical Research Layer</text>
+        <!-- Table Badges -->
+        <rect x="430" y="12" width="148" height="24" rx="4" fill="#fef08a" stroke="#ca8a04" stroke-width="0.8"/>
+        <text x="504" y="28" text-anchor="middle" font-size="10" font-weight="700" fill="#713f12">gold.lit_articles • chunks</text>
+        <!-- Body Content -->
+        <text x="20" y="58" font-size="11.5" fill="#713f12">• <tspan font-weight="700">1,831 Curated Articles</tspan> after canonical DOI deduplication and non-article screening</text>
+        <text x="20" y="76" font-size="11.5" fill="#713f12">• <tspan font-weight="700">6,235 RAG Text Chunks</tspan> (Abstracts &amp; full-text sections with SHA-256 hash preservation)</text>
+        <text x="20" y="94" font-size="11.5" fill="#713f12">• <tspan font-weight="700">Audit Provenance:</tspan> Execution duration, status, and summary metrics in <tspan font-family="monospace" font-size="10.5">lit_pipeline_runs</tspan></text>
+      </g>
+
+      <!-- Upward Transition: Silver to Gold -->
+      <g transform="translate(296, 107)">
+        <line x1="0" y1="18" x2="0" y2="5" stroke="#2563eb" stroke-width="2.5"/>
+        <polygon points="0,0 -4,7 4,7" fill="#2563eb"/>
+      </g>
+
+      <!-- TIER 3: SILVER -->
+      <g transform="translate(0, 126)" filter="url(#shadow-card)">
+        <rect x="0" y="0" width="592" height="106" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.8"/>
+        <!-- Header Pill -->
+        <rect x="14" y="12" width="132" height="26" rx="5" fill="url(#grad-silver)"/>
+        <text x="80" y="29" text-anchor="middle" font-size="12" font-weight="900" fill="#ffffff">3. SILVER LAYER</text>
+        <text x="160" y="30" font-size="13" font-weight="800" fill="#1e40af">Deduplication &amp; SLR PRISMA Audit</text>
+        <!-- Table Badges -->
+        <rect x="424" y="12" width="154" height="24" rx="4" fill="#bfdbfe" stroke="#2563eb" stroke-width="0.8"/>
+        <text x="501" y="28" text-anchor="middle" font-size="10" font-weight="700" fill="#1e3a8a">silver.lit_articles • rejected</text>
+        <!-- Body Content -->
+        <text x="20" y="58" font-size="11.5" fill="#1e3a8a">• <tspan font-weight="700">Normalized DOI Canonical Keying</tspan> (strips https://doi.org/, whitespace, lowercase)</text>
+        <text x="20" y="76" font-size="11.5" fill="#1e3a8a">• <tspan font-weight="700">Fuzzy PDF Matching</tspan> (RapidFuzz token_set_ratio ≥ 85 against full-text repo)</text>
+        <text x="20" y="94" font-size="11.5" fill="#1e3a8a">• <tspan font-weight="700">PRISMA SLR Audit Log:</tspan> Dropped non-DOI rows immutably tracked in <tspan font-family="monospace" font-size="10.5">silver.lit_rejected</tspan></text>
+      </g>
+
+      <!-- Upward Transition: Bronze to Silver -->
+      <g transform="translate(296, 233)">
+        <line x1="0" y1="18" x2="0" y2="5" stroke="#d97706" stroke-width="2.5"/>
+        <polygon points="0,0 -4,7 4,7" fill="#d97706"/>
+      </g>
+
+      <!-- TIER 2: BRONZE -->
+      <g transform="translate(0, 252)" filter="url(#shadow-card)">
+        <rect x="0" y="0" width="592" height="106" rx="10" fill="#fffbeb" stroke="#d97706" stroke-width="1.8"/>
+        <!-- Header Pill -->
+        <rect x="14" y="12" width="132" height="26" rx="5" fill="url(#grad-bronze)"/>
+        <text x="80" y="29" text-anchor="middle" font-size="12" font-weight="900" fill="#ffffff">2. BRONZE LAYER</text>
+        <text x="160" y="30" font-size="13" font-weight="800" fill="#92400e">Cross-Source Schema Harmonization</text>
+        <!-- Table Badges -->
+        <rect x="430" y="12" width="148" height="24" rx="4" fill="#fde68a" stroke="#d97706" stroke-width="0.8"/>
+        <text x="504" y="28" text-anchor="middle" font-size="10" font-weight="700" fill="#78350f">bronze.lit_articles</text>
+        <!-- Body Content -->
+        <text x="20" y="58" font-size="11.5" fill="#78350f">• <tspan font-weight="700">Typed Union Schema:</tspan> Harmonizes IEEE CSVs and ScienceDirect BibTeX exports</text>
+        <text x="20" y="76" font-size="11.5" fill="#78350f">• <tspan font-weight="700">Natural Key Upsert:</tspan> Deduplicates within-source pagination clashes (source, source_id)</text>
+        <text x="20" y="94" font-size="11.5" fill="#78350f">• <tspan font-weight="700">Citation Backfill:</tspan> Ingests OpenAlex cited-by metrics via local enrichment cache</text>
+      </g>
+
+      <!-- Upward Transition: Raw to Bronze -->
+      <g transform="translate(296, 359)">
+        <line x1="0" y1="18" x2="0" y2="5" stroke="#059669" stroke-width="2.5"/>
+        <polygon points="0,0 -4,7 4,7" fill="#059669"/>
+      </g>
+
+      <!-- TIER 1: RAW -->
+      <g transform="translate(0, 378)" filter="url(#shadow-card)">
+        <rect x="0" y="0" width="592" height="106" rx="10" fill="#f0fdf4" stroke="#059669" stroke-width="1.8"/>
+        <!-- Header Pill -->
+        <rect x="14" y="12" width="132" height="26" rx="5" fill="url(#grad-raw)"/>
+        <text x="80" y="29" text-anchor="middle" font-size="12" font-weight="900" fill="#ffffff">1. RAW LAYER</text>
+        <text x="160" y="30" font-size="13" font-weight="800" fill="#065f46">Verbatim Immutable Ingestion</text>
+        <!-- Table Badges -->
+        <rect x="424" y="12" width="154" height="24" rx="4" fill="#a7f3d0" stroke="#059669" stroke-width="0.8"/>
+        <text x="501" y="28" text-anchor="middle" font-size="10" font-weight="700" fill="#064e3b">raw.lit_* (5 tables)</text>
+        <!-- Body Content -->
+        <text x="20" y="58" font-size="11.5" fill="#064e3b">• <tspan font-weight="700">SHA-256 Hash Manifest:</tspan> <tspan font-family="monospace" font-size="10.5">lit_source_files</tspan> skips unmutated files for idempotency</text>
+        <text x="20" y="76" font-size="11.5" fill="#064e3b">• <tspan font-weight="700">Raw Bibliographic Stores:</tspan> <tspan font-family="monospace" font-size="10.5">lit_bib_entries</tspan> (Elsevier &amp; IEEE), <tspan font-family="monospace" font-size="10.5">lit_ieee_csv_rows</tspan></text>
+        <text x="20" y="94" font-size="11.5" fill="#064e3b">• <tspan font-weight="700">Exact File Provenance:</tspan> Preserves original search query provenance (<tspan font-family="monospace" font-size="10.5">lit_config</tspan>)</text>
+      </g>
+    </g>
+
+    <!-- VECTOR EMBEDDINGS & CONTRASTIVE SCREENING CORE -->
+    <g transform="translate(22, 564)" filter="url(#shadow-card)">
+      <rect x="0" y="0" width="592" height="256" rx="10" fill="#f5f3ff" stroke="#8b5cf6" stroke-width="1.8"/>
+      
+      <!-- Sub-panel Header -->
+      <rect x="0" y="0" width="592" height="34" rx="10" fill="#ede9fe"/>
+      <text x="16" y="23" font-size="12.5" font-weight="800" fill="#5b21b6">VECTOR EMBEDDING (EMBED) &amp; CONTRASTIVE SCREENING (SEMANTIC)</text>
+
+      <!-- Embed Engine Block (Left) -->
+      <g transform="translate(18, 48)">
+        <rect x="0" y="0" width="268" height="192" rx="8" fill="#ffffff" stroke="#c4b5fd" stroke-width="1.2"/>
+        <!-- FastEmbed Bolt Icon -->
+        <path d="M14,18 L19,25 L16,25 L18,31 L12,24 L15,24 Z" fill="#7c3aed"/>
+        <text x="24" y="25" font-size="12" font-weight="800" fill="#6d28d9">FastEmbed ONNX Engine</text>
+        <text x="14" y="46" font-size="10.5" fill="#4c1d95">• Model: <tspan font-weight="700">BAAI/bge-small-en-v1.5</tspan></text>
+        <text x="14" y="64" font-size="10.5" fill="#4c1d95">• Dimensions: <tspan font-weight="700">384-dimensional dense vectors</tspan></text>
+        <text x="14" y="82" font-size="10.5" fill="#4c1d95">• Format: <tspan font-weight="700" fill="#059669">LargeBinary float32 (1,536 B)</tspan></text>
+        
+        <!-- Storage Optimization Pill -->
+        <rect x="14" y="96" width="240" height="42" rx="6" fill="#f0fdf4" stroke="#86efac" stroke-width="1"/>
+        <text x="24" y="114" font-size="10" font-weight="800" fill="#15803d">STORAGE FOOTPRINT: -82%</text>
+        <text x="24" y="129" font-size="9" fill="#166534">From 8.5 KB JSON → 1.5 KB native binary</text>
+
+        <text x="14" y="158" font-size="10" font-weight="600" fill="#6b21a8">• Zero-copy: <tspan font-family="monospace">np.frombuffer()</tspan></text>
+        <text x="14" y="176" font-size="10" font-weight="600" fill="#6b21a8">• Zero external cloud API dependency</text>
+      </g>
+
+      <!-- Semantic Screening Block (Right) -->
+      <g transform="translate(306, 48)">
+        <rect x="0" y="0" width="268" height="192" rx="8" fill="#ffffff" stroke="#c4b5fd" stroke-width="1.2"/>
+        <!-- Target / Crosshair Icon -->
+        <circle cx="20" cy="21" r="6" fill="none" stroke="#7c3aed" stroke-width="1.5"/>
+        <circle cx="20" cy="21" r="2.5" fill="#7c3aed"/>
+        <text x="32" y="25" font-size="12" font-weight="800" fill="#6d28d9">Contrastive Screening</text>
+        <text x="14" y="46" font-size="10" font-weight="700" fill="#4338ca">Resolving Lexical Polysemy:</text>
+        <text x="14" y="62" font-size="9.5" fill="#475569">"Distribution Planning" matches power grids</text>
+        <text x="14" y="76" font-size="9.5" fill="#475569">vs. supply-chain logistics (~9% noise).</text>
+
+        <!-- Margin Formula Box -->
+        <rect x="14" y="88" width="240" height="38" rx="6" fill="#eff6ff" stroke="#93c5fd" stroke-width="1"/>
+        <text x="134" y="103" text-anchor="middle" font-size="10" font-weight="800" fill="#1e40af">
+          Δ = cos(e_i, a_topic) - cos(e_i, a_logistics)
+        </text>
+        <text x="134" y="118" text-anchor="middle" font-size="9" font-weight="700" fill="#0284c7">
+          Criterion: Δ ≥ 0 (Power Grid) vs Δ &lt; 0 (Logistics)
+        </text>
+
+        <!-- KMeans Discovery -->
+        <text x="14" y="146" font-size="10" font-weight="700" fill="#4338ca">• KMeans: <tspan font-weight="400" fill="#475569">8 core thematic clusters</tspan></text>
+        <text x="14" y="162" font-size="10" font-weight="700" fill="#4338ca">• Projections: <tspan font-weight="400" fill="#475569">UMAP, t-SNE &amp; PCA-50</tspan></text>
+        <text x="14" y="178" font-size="10" font-weight="700" fill="#4338ca">• Deduplication: <tspan font-weight="400" fill="#475569">Cosine similarity S_c ≥ 0.95</tspan></text>
+      </g>
+    </g>
+  </g>
+
+  <!-- Flow Connector: Center to Right -->
+  <path d="M1278,280 L1306,280" stroke="#0284c7" stroke-width="2.5" marker-end="url(#arr-blue)"/>
+  <path d="M1278,560 L1306,560" stroke="#d97706" stroke-width="2.5" marker-end="url(#arr-amber)"/>
+  <path d="M1278,820 L1306,820" stroke="#8b5cf6" stroke-width="2.5" marker-end="url(#arr-slate)"/>
+
+  <!-- ==================================================================== -->
+  <!-- PILLAR 3: SCIENTOMETRIC COCKPIT (RIGHT: x=1308..1872, w=564)         -->
+  <!-- ==================================================================== -->
+  <g id="pillar-3" transform="translate(1308, 140)">
+    <!-- Column Card Background -->
+    <rect x="0" y="0" width="564" height="840" rx="14" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1.5" filter="url(#shadow-card)"/>
+
+    <!-- Column Header -->
+    <path d="M0,0 L564,0 A14,14 0 0 1 564,46 L0,46 Z" fill="#f1f5f9"/>
+    <rect x="14" y="11" width="24" height="24" rx="5" fill="#d97706" opacity="0.15"/>
+    <!-- Analytics Chart Glyph -->
+    <rect x="18" y="24" width="3" height="8" rx="0.8" fill="#d97706"/>
+    <rect x="23" y="19" width="3" height="13" rx="0.8" fill="#d97706"/>
+    <rect x="28" y="15" width="3" height="17" rx="0.8" fill="#d97706"/>
+    <text x="46" y="28" font-size="14" font-weight="800" fill="#0f172a" letter-spacing="-0.2">SCIENTOMETRIC &amp; ANALYTICAL COCKPIT</text>
+    <rect x="400" y="11" width="150" height="24" rx="5" fill="#e2e8f0"/>
+    <text x="475" y="27" text-anchor="middle" font-size="10.5" font-weight="700" fill="#475569">13 Streamlit Pages</text>
+
+    <!-- CARD 1: CALLON STRATEGIC DIAGRAM (DENSITY VS CENTRALITY) -->
+    <g transform="translate(18, 62)" filter="url(#shadow-card)">
+      <rect x="0" y="0" width="528" height="226" rx="10" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
+      
+      <!-- Card Title -->
+      <rect x="0" y="0" width="528" height="28" rx="10" fill="#f8fafc"/>
+      <path d="M0,28 L528,28" stroke="#e2e8f0" stroke-width="1"/>
+      <text x="12" y="19" font-size="11.5" font-weight="800" fill="#1e293b">Callon's Strategic Diagram (1991)</text>
+      <text x="410" y="19" font-size="10" font-weight="600" fill="#64748b">Centrality vs. Density</text>
+
+      <!-- 4-Quadrant Coordinate Grid -->
+      <g transform="translate(24, 42)">
+        <!-- Quadrant Backgrounds -->
+        <rect x="0" y="0" width="230" height="74" fill="#fefce8" opacity="0.6"/> <!-- Q2: Niche -->
+        <rect x="230" y="0" width="240" height="74" fill="#f0fdf4" opacity="0.6"/> <!-- Q1: Motor -->
+        <rect x="0" y="74" width="230" height="78" fill="#f8fafc" opacity="0.6"/> <!-- Q3: Emerging -->
+        <rect x="230" y="74" width="240" height="78" fill="#eff6ff" opacity="0.6"/> <!-- Q4: Basic -->
+
+        <!-- Axes -->
+        <line x1="0" y1="74" x2="470" y2="74" stroke="#94a3b8" stroke-width="1.5"/>
+        <line x1="230" y1="0" x2="230" y2="152" stroke="#94a3b8" stroke-width="1.5"/>
+
+        <!-- Quadrant Labels -->
+        <text x="350" y="18" text-anchor="middle" font-size="9.5" font-weight="800" fill="#15803d">Q1: MOTOR THEMES</text>
+        <text x="115" y="18" text-anchor="middle" font-size="9.5" font-weight="800" fill="#854d0e">Q2: HIGHLY DEVELOPED</text>
+        <text x="115" y="142" text-anchor="middle" font-size="9.5" font-weight="800" fill="#64748b">Q3: EMERGING / DECLINING</text>
+        <text x="350" y="142" text-anchor="middle" font-size="9.5" font-weight="800" fill="#1e40af">Q4: BASIC &amp; TRANSVERSAL</text>
+
+        <!-- Thematic Centroids (Data Points) -->
+        <!-- Motor: DER Planning -->
+        <circle cx="360" cy="38" r="8" fill="#16a34a" opacity="0.8"/>
+        <text x="374" y="42" font-size="9" font-weight="700" fill="#166534">DER &amp; Resiliency</text>
+
+        <!-- Motor: Renewable Hosting Capacity -->
+        <circle cx="410" cy="54" r="6.5" fill="#16a34a" opacity="0.8"/>
+        <text x="422" y="58" font-size="8.5" font-weight="700" fill="#166534">Hosting Cap.</text>
+
+        <!-- Niche: Inverter Control -->
+        <circle cx="110" cy="45" r="7" fill="#eab308" opacity="0.8"/>
+        <text x="124" y="49" font-size="8.5" font-weight="700" fill="#854d0e">Inverter Volt/VAR</text>
+
+        <!-- Emerging: AI & Deep RL Planning -->
+        <circle cx="130" cy="105" r="6" fill="#8b5cf6" opacity="0.8"/>
+        <text x="142" y="109" font-size="8.5" font-weight="700" fill="#6d28d9">AI / Deep RL</text>
+
+        <!-- Basic: Optimal Power Flow & Expansion -->
+        <circle cx="340" cy="100" r="9" fill="#2563eb" opacity="0.8"/>
+        <text x="355" y="104" font-size="9" font-weight="700" fill="#1e40af">OPF &amp; Expansion</text>
+      </g>
+      <!-- Axis Labels -->
+      <text x="260" y="214" text-anchor="middle" font-size="9" font-weight="700" fill="#64748b">Centrality (Degree of External Interaction) →</text>
+      <text x="14" y="125" transform="rotate(-90 14 125)" text-anchor="middle" font-size="9" font-weight="700" fill="#64748b">Density (Internal Maturity) →</text>
+    </g>
+
+    <!-- CARD 2: CITATION DYNAMICS & ECONOMETRICS (HEAVY-TAIL MLE) -->
+    <g transform="translate(18, 302)" filter="url(#shadow-card)">
+      <rect x="0" y="0" width="528" height="226" rx="10" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
+      
+      <!-- Card Title -->
+      <rect x="0" y="0" width="528" height="28" rx="10" fill="#f8fafc"/>
+      <path d="M0,28 L528,28" stroke="#e2e8f0" stroke-width="1"/>
+      <text x="12" y="19" font-size="11.5" font-weight="800" fill="#1e293b">Citation Dynamics &amp; Econometric Modeling</text>
+      <text x="400" y="19" font-size="10" font-weight="600" fill="#64748b">Heavy-Tail MLE Fitting</text>
+
+      <g transform="translate(38, 42)">
+        <!-- Axes -->
+        <line x1="0" y1="140" x2="450" y2="140" stroke="#94a3b8" stroke-width="1.5"/>
+        <line x1="0" y1="0" x2="0" y2="140" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="225" y="160" text-anchor="middle" font-size="9" font-weight="700" fill="#64748b">Years Since Publication (t) →</text>
+        <text x="-10" y="70" transform="rotate(-90 -10 70)" text-anchor="middle" font-size="9" font-weight="700" fill="#64748b">Citations C(t) →</text>
+
+        <!-- Prediction Uncertainty Cone (Expanding Error Band) -->
+        <path d="M220,95 L440,25 L440,130 L220,95 Z" fill="#bae6fd" opacity="0.4"/>
+
+        <!-- Fitted Heavy-Tail Log-Normal / Power-Law Curve -->
+        <path d="M0,138 Q 60,135 120,120 T 220,95 T 320,55 T 440,30" fill="none" stroke="#0284c7" stroke-width="3"/>
+
+        <!-- Baseline Linear Projection -->
+        <line x1="220" y1="95" x2="440" y2="78" stroke="#f59e0b" stroke-width="2" stroke-dasharray="4 4"/>
+
+        <!-- Scatter Points (Empirical Papers) -->
+        <circle cx="40" cy="136" r="3" fill="#0369a1"/>
+        <circle cx="80" cy="132" r="3" fill="#0369a1"/>
+        <circle cx="120" cy="120" r="3.5" fill="#0369a1"/>
+        <circle cx="160" cy="112" r="3" fill="#0369a1"/>
+        <circle cx="190" cy="102" r="4" fill="#0369a1"/>
+        <circle cx="220" cy="95" r="4.5" fill="#2563eb"/>
+        <circle cx="260" cy="74" r="3.5" fill="#0369a1"/>
+        <circle cx="310" cy="62" r="4" fill="#0369a1"/>
+        <circle cx="360" cy="46" r="5" fill="#0369a1"/>
+        <circle cx="410" cy="38" r="4" fill="#0369a1"/>
+
+        <!-- Legend Box -->
+        <g transform="translate(20, 10)">
+          <rect x="0" y="0" width="190" height="54" rx="5" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1"/>
+          <line x1="10" y1="16" x2="30" y2="16" stroke="#0284c7" stroke-width="3"/>
+          <text x="36" y="20" font-size="9" font-weight="700" fill="#0369a1">Log-Normal MLE Fit (R²=0.96)</text>
+          <line x1="10" y1="32" x2="30" y2="32" stroke="#f59e0b" stroke-width="2" stroke-dasharray="3 3"/>
+          <text x="36" y="36" font-size="9" font-weight="600" fill="#92400e">Poisson GLM Determinants</text>
+          <rect x="10" y="42" width="20" height="8" fill="#bae6fd" opacity="0.6"/>
+          <text x="36" y="49" font-size="8.5" font-weight="600" fill="#0284c7">90% Quantile Uncertainty Band</text>
+        </g>
+      </g>
+    </g>
+
+    <!-- CARD 3: 2D SEMANTIC MANIFOLD & THEMATIC CONSTELLATION -->
+    <g transform="translate(18, 542)" filter="url(#shadow-card)">
+      <rect x="0" y="0" width="528" height="186" rx="10" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
+      
+      <!-- Card Title -->
+      <rect x="0" y="0" width="528" height="28" rx="10" fill="#f8fafc"/>
+      <path d="M0,28 L528,28" stroke="#e2e8f0" stroke-width="1"/>
+      <text x="12" y="19" font-size="11.5" font-weight="800" fill="#1e293b">2D Semantic Topic Manifold (UMAP / t-SNE)</text>
+      <text x="408" y="19" font-size="10" font-weight="600" fill="#64748b">8 Discovered Themes</text>
+
+      <!-- Manifold Map Graphics -->
+      <g transform="translate(24, 38)">
+        <!-- Cluster 1: Renewable Integration & DER (Green) -->
+        <ellipse cx="110" cy="55" rx="55" ry="34" fill="#dcfce7" opacity="0.6" stroke="#86efac" stroke-width="1.2"/>
+        <circle cx="95" cy="48" r="3.5" fill="#16a34a"/>
+        <circle cx="115" cy="62" r="4.5" fill="#15803d"/>
+        <circle cx="130" cy="42" r="3.5" fill="#16a34a"/>
+        <text x="110" y="98" text-anchor="middle" font-size="8.5" font-weight="800" fill="#166534">Theme 1: DER &amp; Renewables</text>
+
+        <!-- Cluster 2: Network Reconfiguration (Blue) -->
+        <ellipse cx="250" cy="45" rx="50" ry="30" fill="#dbeafe" opacity="0.6" stroke="#93c5fd" stroke-width="1.2"/>
+        <circle cx="240" cy="40" r="4" fill="#2563eb"/>
+        <circle cx="260" cy="50" r="3.5" fill="#1d4ed8"/>
+        <text x="250" y="86" text-anchor="middle" font-size="8.5" font-weight="800" fill="#1e40af">Theme 2: Reconfiguration</text>
+
+        <!-- Cluster 3: Mathematical Optimization (Amber) -->
+        <ellipse cx="380" cy="60" rx="58" ry="36" fill="#fef3c7" opacity="0.6" stroke="#fde68a" stroke-width="1.2"/>
+        <circle cx="370" cy="55" r="5" fill="#d97706"/>
+        <circle cx="395" cy="70" r="3.5" fill="#b45309"/>
+        <text x="380" y="106" text-anchor="middle" font-size="8.5" font-weight="800" fill="#92400e">Theme 3: MILP / MINLP</text>
+
+        <!-- Cluster 4: Resilience & Microgrids (Purple) -->
+        <ellipse cx="180" cy="118" rx="46" ry="24" fill="#ede9fe" opacity="0.6" stroke="#c4b5fd" stroke-width="1.2"/>
+        <circle cx="175" cy="116" r="4" fill="#7c3aed"/>
+        <text x="180" y="132" text-anchor="middle" font-size="8" font-weight="800" fill="#6d28d9">Theme 4: Microgrids</text>
+
+        <!-- Discarded Logistics Cloud Across Decision Boundary -->
+        <line x1="430" y1="10" x2="480" y2="135" stroke="#ef4444" stroke-width="1.5" stroke-dasharray="4 3"/>
+        <text x="475" y="24" text-anchor="middle" font-size="8" font-weight="700" fill="#b91c1c">Margin Δ = 0</text>
+        <circle cx="460" cy="70" r="3" fill="#fca5a5"/>
+        <circle cx="475" cy="95" r="3" fill="#fca5a5"/>
+        <text x="466" y="118" text-anchor="middle" font-size="7.5" font-weight="700" fill="#991b1b">Logistics (Dropped)</text>
+      </g>
+    </g>
+
+    <!-- LIVE PLATFORM METRICS KPI ROW (Bottom of Pillar 3) -->
+    <g transform="translate(18, 742)">
+      <rect x="0" y="0" width="528" height="78" rx="8" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="1"/>
+      
+      <!-- KPI 1 -->
+      <g transform="translate(10, 10)">
+        <rect x="0" y="0" width="118" height="58" rx="6" fill="#ffffff" stroke="#e2e8f0" stroke-width="1"/>
+        <text x="59" y="24" text-anchor="middle" font-size="18" font-weight="900" fill="#0f172a">1,831</text>
+        <text x="59" y="44" text-anchor="middle" font-size="9.5" font-weight="700" fill="#64748b">Curated Articles</text>
+      </g>
+
+      <!-- KPI 2 -->
+      <g transform="translate(138, 10)">
+        <rect x="0" y="0" width="118" height="58" rx="6" fill="#ffffff" stroke="#e2e8f0" stroke-width="1"/>
+        <text x="59" y="24" text-anchor="middle" font-size="18" font-weight="900" fill="#0284c7">6,235</text>
+        <text x="59" y="44" text-anchor="middle" font-size="9.5" font-weight="700" fill="#64748b">RAG Text Chunks</text>
+      </g>
+
+      <!-- KPI 3 -->
+      <g transform="translate(266, 10)">
+        <rect x="0" y="0" width="118" height="58" rx="6" fill="#ffffff" stroke="#e2e8f0" stroke-width="1"/>
+        <text x="59" y="24" text-anchor="middle" font-size="18" font-weight="900" fill="#7c3aed">384-d</text>
+        <text x="59" y="44" text-anchor="middle" font-size="9.5" font-weight="700" fill="#64748b">Binary Vectors</text>
+      </g>
+
+      <!-- KPI 4 -->
+      <g transform="translate(394, 10)">
+        <rect x="0" y="0" width="124" height="58" rx="6" fill="#ffffff" stroke="#e2e8f0" stroke-width="1"/>
+        <text x="62" y="24" text-anchor="middle" font-size="18" font-weight="900" fill="#d97706">13 Pages</text>
+        <text x="62" y="44" text-anchor="middle" font-size="9.5" font-weight="700" fill="#64748b">Analytical Cockpit</text>
+      </g>
+    </g>
+  </g>
+
+  <!-- ==================== BOTTOM FOOTER (TECH STACK) ==================== -->
+  <g id="footer" transform="translate(48, 1000)">
+    <rect x="0" y="0" width="1824" height="44" rx="8" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1"/>
+    
+    <text x="24" y="27" font-size="11" font-weight="800" fill="#475569">ENGINEERING &amp; ANALYTICAL STACK:</text>
+    
+    <g transform="translate(240, 9)">
+      <!-- Tech Badge 1: Python -->
+      <rect x="0" y="0" width="110" height="26" rx="4" fill="#e0f2fe" stroke="#38bdf8" stroke-width="0.8"/>
+      <text x="55" y="17" text-anchor="middle" font-size="10" font-weight="700" fill="#0369a1">Python 3.13</text>
+
+      <!-- Tech Badge 2: MySQL -->
+      <rect x="120" y="0" width="146" height="26" rx="4" fill="#ccfbf1" stroke="#2dd4bf" stroke-width="0.8"/>
+      <text x="193" y="17" text-anchor="middle" font-size="10" font-weight="700" fill="#0f766e">MySQL Medallion Lake</text>
+
+      <!-- Tech Badge 3: Qdrant -->
+      <rect x="276" y="0" width="144" height="26" rx="4" fill="#e0e7ff" stroke="#818cf8" stroke-width="0.8"/>
+      <text x="348" y="17" text-anchor="middle" font-size="10" font-weight="700" fill="#3730a3">Qdrant Vector Store</text>
+
+      <!-- Tech Badge 4: Streamlit -->
+      <rect x="430" y="0" width="134" height="26" rx="4" fill="#fee2e2" stroke="#f87171" stroke-width="0.8"/>
+      <text x="497" y="17" text-anchor="middle" font-size="10" font-weight="700" fill="#991b1b">Streamlit Dashboard</text>
+
+      <!-- Tech Badge 5: FastEmbed -->
+      <rect x="574" y="0" width="140" height="26" rx="4" fill="#f3e8ff" stroke="#c084fc" stroke-width="0.8"/>
+      <text x="644" y="17" text-anchor="middle" font-size="10" font-weight="700" fill="#6b21a8">FastEmbed ONNX</text>
+
+      <!-- Tech Badge 6: SQLAlchemy -->
+      <rect x="724" y="0" width="130" height="26" rx="4" fill="#fef3c7" stroke="#fcd34d" stroke-width="0.8"/>
+      <text x="789" y="17" text-anchor="middle" font-size="10" font-weight="700" fill="#92400e">SQLAlchemy 2.0</text>
+
+      <!-- Tech Badge 7: Plotly -->
+      <rect x="864" y="0" width="116" height="26" rx="4" fill="#ffedd5" stroke="#fb923c" stroke-width="0.8"/>
+      <text x="922" y="17" text-anchor="middle" font-size="10" font-weight="700" fill="#9a3412">Plotly Graphs</text>
+
+      <!-- Tech Badge 8: 186 Tests -->
+      <rect x="990" y="0" width="130" height="26" rx="4" fill="#dcfce7" stroke="#4ade80" stroke-width="0.8"/>
+      <text x="1055" y="17" text-anchor="middle" font-size="10" font-weight="700" fill="#15803d">186 Tests Passed</text>
+    </g>
+
+    <text x="1800" y="27" text-anchor="end" font-size="10" font-weight="600" fill="#94a3b8">lake-research-map • MIT License</text>
+  </g>
+</svg>
+"""
+
+
+def main() -> int:
+    """Generate the hero SVG and render to high-resolution PNG."""
+    from config import REPO_ROOT
+
+    project_root = REPO_ROOT
+    images_dir = project_root / "src" / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+
+    svg_path = images_dir / "lake_research_map_hero.svg"
+    png_path = images_dir / "lake_research_map_hero.png"
+
+    print(f"Generating SVG: {svg_path}")
+    svg_content = generate_svg()
+    svg_path.write_text(svg_content, encoding="utf-8")
+    print(f"SVG generated ({len(svg_content):,} bytes).")
+
+    # Render target width/height: 1920x1080 (crisp high-DPI 16:9 banner)
+    print(f"Rendering high-resolution PNG: {png_path}")
+    try:
+        # Prefer rsvg-convert for exact, lightning-fast rendering
+        cmd = [
+            "rsvg-convert",
+            "-w",
+            "1920",
+            "-h",
+            "1080",
+            str(svg_path),
+            "-o",
+            str(png_path),
+        ]
+        subprocess.run(cmd, check=True)
+        print("Successfully rendered via rsvg-convert.")
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        print("rsvg-convert failed or not found, falling back to inkscape...")
+        cmd = [
+            "inkscape",
+            str(svg_path),
+            "-o",
+            str(png_path),
+            "--export-width=1920",
+            "--export-height=1080",
+        ]
+        subprocess.run(cmd, check=True)
+        print("Successfully rendered via inkscape.")
+
+    if png_path.exists():
+        size_kb = png_path.stat().st_size / 1024
+        print(f"PNG generated successfully: {png_path} ({size_kb:.1f} KB)")
+        return 0
+    else:
+        print(f"Error: PNG was not created at {png_path}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

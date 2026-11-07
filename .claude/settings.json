@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "f=$(jq -r '.tool_input.file_path // empty'); case \"$f\" in *src/lake_research_map/ingest/*|*src/lake_research_map/transform/*|*tests/*) cd \"${CLAUDE_PROJECT_DIR:-.}\" && uv run pytest -q;; esac; true",
+            "command": "f=$(jq -r '.tool_input.file_path // empty'); case \"$f\" in *src/ingest/*|*src/transform/*|*tests/*) cd \"${CLAUDE_PROJECT_DIR:-.}\" && uv run pytest -q;; esac; true",
             "statusMessage": "uv run pytest -q",
             "timeout": 60
           }

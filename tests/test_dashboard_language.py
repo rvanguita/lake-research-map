@@ -6,7 +6,7 @@ import re
 import tokenize
 from pathlib import Path
 
-DASHBOARD_ROOT = Path("src/lake_research_map/apps/dashboard")
+DASHBOARD_ROOT = Path("src/apps/dashboard")
 # Nouns and adjectives alone were not enough: the leftover that survived the
 # first sweep was "não como identidade confirmada", whose every word is a
 # common Portuguese function word rather than a domain term. The closed-class

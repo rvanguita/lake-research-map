@@ -8,10 +8,10 @@ from types import SimpleNamespace
 import pytest
 from test_retrieval_api import _embed, _publish
 
-from lake_research_map import pipeline
-from lake_research_map.apps.api import cli
-from lake_research_map.apps.api.api import Retriever
-from lake_research_map.apps.api.index import load_corpus
+import pipeline
+from apps.api import cli
+from apps.api.api import Retriever
+from apps.api.index import load_corpus
 
 
 @pytest.fixture
@@ -111,8 +111,8 @@ def test_evidence_pooling_runs_every_mode_and_names_the_ones_it_skips(
     import csv
     import logging
 
-    from lake_research_map.apps.api import api
-    from lake_research_map.db import engines
+    from apps.api import api
+    from db import engines
 
     _publish(gold_session, vector_store)
 
@@ -131,7 +131,7 @@ def test_evidence_pooling_runs_every_mode_and_names_the_ones_it_skips(
     monkeypatch.setattr(engines, "get_session", lambda layer: silver_session)
     output = tmp_path / "retrieval.csv"
 
-    with caplog.at_level(logging.INFO, logger="lake_research_map.pipeline"):
+    with caplog.at_level(logging.INFO, logger="pipeline"):
         pipeline._run_evidence_command(
             SimpleNamespace(evidence_action="retrieval", output=str(output), limit=3, seed=0)
         )

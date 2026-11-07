@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from lake_research_map.ingest.openalex import (
+from ingest.openalex import (
     fetch_openalex_observation,
     fetch_openalex_work,
 )

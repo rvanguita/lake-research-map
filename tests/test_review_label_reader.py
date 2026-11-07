@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import pandas as pd
 
-from lake_research_map.db.gold_models import ReviewLabel
-from lake_research_map.transform.review_workflows import (
+from db.gold_models import ReviewLabel
+from transform.review_workflows import (
     ADJUDICATED_REVIEWER,
     adjudicate,
     assign_dataset_articles,
@@ -19,7 +19,7 @@ from lake_research_map.transform.review_workflows import (
     collect_labels,
     ensure_protocol,
 )
-from lake_research_map.transform.screening_calibration import (
+from transform.screening_calibration import (
     label_set_digest,
     resolve_review_consensus,
     screening_model_digest,
@@ -49,7 +49,7 @@ def _round(session, subjects=("10.1000/a", "10.1000/b", "10.1000/c")):
 def _label(session, subject_id, reviewer_id, label, revision=1):
     from sqlalchemy import select
 
-    from lake_research_map.db.gold_models import ReviewAssignment
+    from db.gold_models import ReviewAssignment
 
     assignment = session.scalar(
         select(ReviewAssignment).where(
@@ -190,7 +190,7 @@ def test_a_stored_round_calibrates_end_to_end(gold_session):
     the whole ran nowhere, because the calibrator's only input was a browser
     upload.
     """
-    from lake_research_map.transform.screening_calibration import (
+    from transform.screening_calibration import (
         calibrate_screening_threshold,
         validate_review_labels,
     )
@@ -240,7 +240,7 @@ def test_a_reject_subject_is_reported_rather_than_silently_dropped(gold_session)
     evaluation, and the validation has to say so -- a round whose labels mostly
     vanish at this join otherwise looks like a round nobody labelled.
     """
-    from lake_research_map.transform.screening_calibration import validate_review_labels
+    from transform.screening_calibration import validate_review_labels
 
     _round(gold_session, subjects=["10.1000/a", "reject::ieee::991"])
     _label(gold_session, "10.1000/a", "ana", "include")
@@ -260,8 +260,8 @@ def test_the_calibrate_command_prints_both_digests_and_applies_nothing(
     """Exercise the CLI handler itself, not only the functions beneath it."""
     import argparse
 
-    from lake_research_map import pipeline as pipeline_module
-    from lake_research_map.db.gold_models import DatasetSemantics
+    import pipeline as pipeline_module
+    from db.gold_models import DatasetSemantics
 
     subjects = [f"10.1000/{index:03d}" for index in range(60)]
     _round(gold_session, subjects=subjects)
@@ -306,8 +306,8 @@ def test_calibrate_refuses_a_version_that_has_no_contrastive_margin(gold_session
 
     import pytest
 
-    from lake_research_map import pipeline as pipeline_module
-    from lake_research_map.db.gold_models import DatasetSemantics
+    import pipeline as pipeline_module
+    from db.gold_models import DatasetSemantics
 
     _round(gold_session, subjects=["10.1000/a"])
     _label(gold_session, "10.1000/a", "ana", "include")

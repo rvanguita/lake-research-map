@@ -8,9 +8,9 @@ import json
 import pytest
 from test_retrieval_api import _embed, _publish
 
-from lake_research_map.apps.api import mcp_server
-from lake_research_map.apps.api.api import Retriever
-from lake_research_map.apps.api.index import load_corpus
+from apps.api import mcp_server
+from apps.api.api import Retriever
+from apps.api.index import load_corpus
 
 
 @pytest.fixture

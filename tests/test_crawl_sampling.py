@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections import Counter
 
-from lake_research_map.ingest.openalex import (
+from ingest.openalex import (
     interleave_by_registrant,
     registrant_label,
     registrant_prefix,

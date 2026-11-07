@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from lake_research_map.transform.screening_calibration import (
+from transform.screening_calibration import (
     calibrate_screening_threshold,
     evaluate_screening_threshold,
     find_optimal_screening_threshold,

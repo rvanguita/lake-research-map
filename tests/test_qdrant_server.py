@@ -15,7 +15,7 @@ import uuid
 import numpy as np
 import pytest
 
-from lake_research_map.db.vector_store import (
+from db.vector_store import (
     PAYLOAD_INDEXES,
     VectorPoint,
     collection_name,

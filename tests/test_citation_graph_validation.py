@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import select
 
-from lake_research_map.db.bronze_models import (
+from db.bronze_models import (
     AccessObservation,
     CitationEdge,
     CitationYearCount,
@@ -20,7 +20,7 @@ from lake_research_map.db.bronze_models import (
     ExternalWork,
     ReferenceWork,
 )
-from lake_research_map.ingest import openalex
+from ingest import openalex
 
 NOW = datetime(2026, 9, 23, tzinfo=UTC).replace(tzinfo=None)
 URL = "https://openalex.org/"
@@ -433,7 +433,7 @@ def test_validation_is_unavailable_rather_than_passing_when_nothing_is_comparabl
 
 
 def test_an_observation_never_lowers_a_curated_count_to_zero():
-    from lake_research_map.ingest.enrichment import merge_enrichment
+    from ingest.enrichment import merge_enrichment
 
     merged = merge_enrichment(
         {"10.1/a": {"citation_count": 5, "reference_count": 42}},
@@ -450,7 +450,7 @@ def test_an_observation_never_lowers_a_curated_count_to_zero():
 
 
 def test_a_zero_contradicted_by_a_crossref_deposit_is_not_known_empty(bronze_session):
-    from lake_research_map.db.bronze_models import CrossrefReferenceList
+    from db.bronze_models import CrossrefReferenceList
 
     _work(bronze_session, "W1", "10.1/a")
     _work(bronze_session, "W2", "10.1/b")

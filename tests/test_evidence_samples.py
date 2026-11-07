@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from lake_research_map.transform.evidence_samples import (
+from transform.evidence_samples import (
     PDF_MATCH_THRESHOLD,
     RETRIEVAL_QUERIES,
     author_ambiguity_pairs,
@@ -126,7 +126,7 @@ def test_taxonomy_sample_populates_real_classes_and_an_unclassified_stratum():
 
 def test_taxonomy_strata_are_the_classifier_s_own_classes():
     """A stratum the dashboard does not recognise is not reviewable evidence."""
-    from lake_research_map.apps.dashboard.analytics import OPTIMIZATION_METHOD_PATTERNS
+    from apps.dashboard.analytics import OPTIMIZATION_METHOD_PATTERNS
 
     frame = pd.DataFrame(
         {
@@ -145,7 +145,7 @@ def test_retrieval_sampling_fails_loudly_when_every_query_errors():
     Swallowing it produced "0 judgements" with nothing to explain it, which is
     exactly how an unusable sample reaches a reviewer.
     """
-    from lake_research_map.transform.evidence_samples import retrieval_candidates
+    from transform.evidence_samples import retrieval_candidates
 
     def broken(_text, _depth):
         raise AttributeError("module has no attribute 'hybrid_search'")

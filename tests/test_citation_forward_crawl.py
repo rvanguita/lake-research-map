@@ -14,8 +14,8 @@ from datetime import UTC, datetime
 
 from sqlalchemy import select
 
-from lake_research_map.db.bronze_models import CitationEdge, ExternalWork
-from lake_research_map.ingest.openalex import citation_graph_coverage
+from db.bronze_models import CitationEdge, ExternalWork
+from ingest.openalex import citation_graph_coverage
 
 OBSERVED = datetime(2026, 9, 22, tzinfo=UTC).replace(tzinfo=None)
 
@@ -57,11 +57,11 @@ def _patch_crawl(monkeypatch, results, calls):
             answered[work_id] = {"throttled": False, "error": None, **result}
         return answered
 
-    monkeypatch.setattr("lake_research_map.ingest.openalex.fetch_openalex_citing_batch", _batch)
+    monkeypatch.setattr("ingest.openalex.fetch_openalex_citing_batch", _batch)
 
 
 def test_a_second_run_advances_instead_of_recrawling(bronze_session, monkeypatch):
-    from lake_research_map import pipeline as pipeline_module
+    import pipeline as pipeline_module
 
     for work_id in ("W1", "W2", "W3", "W4"):
         _work(bronze_session, work_id)
@@ -84,7 +84,7 @@ def test_a_second_run_advances_instead_of_recrawling(bronze_session, monkeypatch
 
 def test_a_work_nobody_cites_is_not_retried_forever(bronze_session, monkeypatch):
     """Zero citing works is an answer, not a missing result."""
-    from lake_research_map import pipeline as pipeline_module
+    import pipeline as pipeline_module
 
     _work(bronze_session, "W1")
     calls: list[str] = []
@@ -101,7 +101,7 @@ def test_a_work_nobody_cites_is_not_retried_forever(bronze_session, monkeypatch)
 
 
 def test_truncation_is_recorded_on_the_work(bronze_session, monkeypatch):
-    from lake_research_map import pipeline as pipeline_module
+    import pipeline as pipeline_module
 
     _work(bronze_session, "W1")
     _patch_crawl(

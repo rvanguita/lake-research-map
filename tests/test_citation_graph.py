@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from lake_research_map.db.bronze_models import CitationEdge
-from lake_research_map.ingest.openalex import (
+from db.bronze_models import CitationEdge
+from ingest.openalex import (
     CITING_PAGE_SIZE,
     citation_graph_coverage,
     fetch_openalex_citing_works,

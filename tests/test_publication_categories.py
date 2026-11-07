@@ -1,4 +1,4 @@
-from lake_research_map.transform.publication_categories import (
+from transform.publication_categories import (
     classify_publication,
     preferred_classification,
 )

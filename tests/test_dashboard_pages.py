@@ -13,7 +13,7 @@ from __future__ import annotations
 import pytest
 from streamlit.testing.v1 import AppTest
 
-from lake_research_map.apps.dashboard.app import PAGE_GROUPS, PAGES
+from apps.dashboard.app import PAGE_GROUPS, PAGES
 
 PAGE_IDS = [url_path for _render, _title, _icon, url_path in PAGES]
 
@@ -21,7 +21,7 @@ PAGE_IDS = [url_path for _render, _title, _icon, url_path in PAGES]
 _FIXTURE = """
 import numpy as np
 import pandas as pd
-from lake_research_map.apps.dashboard import loaders
+from apps.dashboard import loaders
 
 rng = np.random.default_rng(0)
 n = 40
@@ -100,7 +100,7 @@ loaders.search_configs = lambda: _empty
 loaders.semantic_novelty_scores = lambda *a, **k: _empty
 loaders.semantic_stability = lambda *a, **k: None
 loaders.source_changes = lambda: _empty
-from lake_research_map.apps.dashboard.forecasting import fit_and_forecast, yearly_counts
+from apps.dashboard.forecasting import fit_and_forecast, yearly_counts
 _forecast = fit_and_forecast(yearly_counts(articles))
 loaders.volume_forecast = lambda *a, **k: _forecast
 """
@@ -108,7 +108,7 @@ loaders.volume_forecast = lambda *a, **k: _forecast
 _EMPTY_FIXTURE = """
 import pandas as pd
 import streamlit as st
-from lake_research_map.apps.dashboard import loaders
+from apps.dashboard import loaders
 
 def _stop():
     st.warning("No data found in the medallion layers yet.")
@@ -144,7 +144,7 @@ loaders.search_configs = lambda: empty
 loaders.semantic_novelty_scores = lambda *a, **k: empty
 loaders.semantic_stability = lambda *a, **k: None
 loaders.source_changes = lambda: empty
-from lake_research_map.apps.dashboard.forecasting import fit_and_forecast
+from apps.dashboard.forecasting import fit_and_forecast
 _forecast = fit_and_forecast(pd.Series(dtype=float))
 loaders.volume_forecast = lambda *a, **k: _forecast
 """
@@ -163,7 +163,7 @@ def _script(fixture: str, url_path: str) -> str:
         "quality": "quality",
         "pipeline-layers": "pipeline_layers",
     }[url_path]
-    return f"{fixture}\nfrom lake_research_map.apps.dashboard.pages import {module}\n{module}.render()\n"
+    return f"{fixture}\nfrom apps.dashboard.pages import {module}\n{module}.render()\n"
 
 
 def test_registry_is_flat_and_unique():

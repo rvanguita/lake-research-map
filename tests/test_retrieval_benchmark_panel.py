@@ -14,8 +14,8 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from lake_research_map.apps.api.api import BENCHMARK_MODES, RetrievalUnavailable
-from lake_research_map.apps.dashboard.pages import quality
+from apps.api.api import BENCHMARK_MODES, RetrievalUnavailable
+from apps.dashboard.pages import quality
 
 
 def _judgements(reviewer: str) -> pd.DataFrame:

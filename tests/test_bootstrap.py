@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from sqlalchemy import create_engine, inspect
 
-from lake_research_map.db import bronze_models, gold_models, raw_models, silver_models
-from lake_research_map.db.bootstrap import _ADDITIVE_COLUMNS
+from db import bronze_models, gold_models, raw_models, silver_models
+from db.bootstrap import _ADDITIVE_COLUMNS
 
 VALID_LAYERS = {"raw", "bronze", "silver", "gold"}
 

@@ -1,0 +1,533 @@
+"""Executable, persisted data contracts for medallion publication gates."""
+
+from __future__ import annotations
+
+import hashlib
+import math
+from dataclasses import dataclass, field
+from pathlib import PurePosixPath
+from typing import Any
+
+import numpy as np
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from db.bronze_models import Article as BronzeArticle
+from db.gold_models import (
+    DatasetArticle,
+    DatasetChunk,
+    DatasetDuplicatePair,
+    DatasetSemantics,
+    QualityResult,
+)
+from db.raw_models import (
+    BibEntry,
+    Config,
+    DatasetSourceFile,
+    IeeeCsvRow,
+    PdfFile,
+    SourceFile,
+)
+from db.silver_models import Article as SilverArticle
+from db.silver_models import RejectedArticle
+from db.vector_store import (
+    BATCH_SIZE,
+    QdrantVectorStore,
+    VectorStoreUnavailable,
+    collection_name,
+    point_id,
+)
+from transform.bronze_articles import normalize_doi
+from transform.embeddings import (
+    EMBED_DIMENSION,
+    EMBED_MODEL_NAME,
+    EMBED_MODEL_REVISION,
+)
+from transform.publication_categories import PUBLICATION_CATEGORIES
+
+
+@dataclass(frozen=True, slots=True)
+class CheckResult:
+    check_id: str
+    severity: str
+    passed: bool
+    observed: Any
+    expected: Any
+    details: dict[str, Any] = field(default_factory=dict)
+
+
+class ContractViolation(RuntimeError):
+    def __init__(self, stage: str, failures: list[CheckResult]):
+        self.stage = stage
+        self.failures = failures
+        super().__init__(
+            f"{stage} contract failed: " + ", ".join(result.check_id for result in failures)
+        )
+
+
+def _result(
+    check_id: str,
+    passed: bool,
+    observed: Any,
+    expected: Any,
+    *,
+    severity: str = "error",
+    details: dict[str, Any] | None = None,
+) -> CheckResult:
+    return CheckResult(check_id, severity, passed, observed, expected, details or {})
+
+
+def raw_contract(session: Session, version_id: str) -> list[CheckResult]:
+    manifest = session.scalars(select(SourceFile)).all()
+    configs = session.scalars(select(Config)).all()
+    version_rows = session.scalars(
+        select(DatasetSourceFile).where(DatasetSourceFile.dataset_version_id == version_id)
+    ).all()
+    paths = {row.path for row in manifest}
+    child_paths = {
+        *(row.source_file for row in configs),
+        *(row.source_file for row in session.scalars(select(BibEntry)).all()),
+        *(row.source_file for row in session.scalars(select(IeeeCsvRow)).all()),
+        *(row.path for row in session.scalars(select(PdfFile)).all()),
+    }
+    uniform = {row.dataset_version_id for row in manifest}
+    input_directories = {
+        (row.source, str(PurePosixPath(row.path).parent))
+        for row in manifest
+        if row.kind in {"bib", "csv"}
+    }
+    provenance_directories = {
+        (row.source, str(PurePosixPath(row.source_file).parent))
+        for row in configs
+        if "todo" not in row.raw_text.casefold()
+    }
+    # ``data/config.csv`` is the legacy ScienceDirect report for files in
+    # ``data/elsevier``. It must not cover the newer Science Direct directory.
+    if any(
+        row.source == "elsevier"
+        and row.source_file == "data/config.csv"
+        and "todo" not in row.raw_text.casefold()
+        for row in configs
+    ):
+        provenance_directories.add(("elsevier", "data/elsevier"))
+    missing_provenance = sorted(input_directories - provenance_directories)
+    return [
+        _result("raw.non_empty_manifest", bool(manifest), len(manifest), "> 0"),
+        _result(
+            "raw.snapshot_coverage",
+            len(version_rows) == len(manifest),
+            len(version_rows),
+            len(manifest),
+        ),
+        _result(
+            "raw.version_uniformity",
+            uniform == {version_id},
+            sorted(str(v) for v in uniform),
+            [version_id],
+        ),
+        _result(
+            "raw.child_source_references",
+            child_paths <= paths,
+            len(child_paths - paths),
+            0,
+            details={"orphan_paths": sorted(child_paths - paths)[:20]},
+        ),
+        _result(
+            "raw.search_provenance_coverage",
+            not missing_provenance,
+            len(input_directories) - len(missing_provenance),
+            len(input_directories),
+            severity="warning",
+            details={"missing_source_directories": missing_provenance},
+        ),
+    ]
+
+
+def bronze_contract(
+    raw_session: Session, bronze_session: Session, version_id: str
+) -> list[CheckResult]:
+    rows = bronze_session.scalars(select(BronzeArticle)).all()
+    keys = [(row.source, row.source_id) for row in rows]
+    raw_bib_ids = set(raw_session.scalars(select(BibEntry.id)).all())
+    raw_csv_ids = set(raw_session.scalars(select(IeeeCsvRow.id)).all())
+    broken_refs = [
+        row.id
+        for row in rows
+        if (row.raw_bib_id is not None and row.raw_bib_id not in raw_bib_ids)
+        or (row.raw_csv_id is not None and row.raw_csv_id not in raw_csv_ids)
+    ]
+    versions = {row.dataset_version_id for row in rows}
+    invalid_categories = [
+        row.id
+        for row in rows
+        if row.publication_category not in PUBLICATION_CATEGORIES
+        or not row.publication_category_basis
+    ]
+    return [
+        _result("bronze.non_empty", bool(rows), len(rows), "> 0"),
+        _result(
+            "bronze.natural_key_unique", len(keys) == len(set(keys)), len(keys) - len(set(keys)), 0
+        ),
+        _result(
+            "bronze.raw_references",
+            not broken_refs,
+            len(broken_refs),
+            0,
+            details={"row_ids": broken_refs[:20]},
+        ),
+        _result(
+            "bronze.version_uniformity",
+            versions == {version_id},
+            sorted(str(v) for v in versions),
+            [version_id],
+        ),
+        _result(
+            "bronze.publication_categories",
+            not invalid_categories,
+            len(invalid_categories),
+            0,
+            details={"row_ids": invalid_categories[:20]},
+        ),
+    ]
+
+
+def silver_contract(
+    bronze_session: Session, silver_session: Session, raw_session: Session, version_id: str
+) -> list[CheckResult]:
+    bronze_rows = bronze_session.scalars(select(BronzeArticle)).all()
+    rows = silver_session.scalars(select(SilverArticle)).all()
+    rejected = silver_session.scalars(select(RejectedArticle)).all()
+    dois = [row.doi for row in rows]
+    represented = {int(value) for row in rows for value in (row.bronze_ids or [])}
+    rejected_ids = {row.bronze_id for row in rejected}
+    expected_ids = {row.id for row in bronze_rows}
+    pdf_paths = {row.archive_path or row.path for row in raw_session.scalars(select(PdfFile)).all()}
+    invalid_pdf = [row.doi for row in rows if row.has_pdf and row.pdf_path not in pdf_paths]
+    normalized = all(doi and normalize_doi(doi) == doi for doi in dois)
+    versions = {row.dataset_version_id for row in rows} | {
+        row.dataset_version_id for row in rejected
+    }
+    invalid_categories = [
+        row.doi
+        for row in rows
+        if row.publication_category not in PUBLICATION_CATEGORIES
+        or not row.publication_category_basis
+    ]
+    return [
+        _result("silver.doi_unique", len(dois) == len(set(dois)), len(dois) - len(set(dois)), 0),
+        _result(
+            "silver.doi_normalized", normalized, sum(normalize_doi(doi) != doi for doi in dois), 0
+        ),
+        _result(
+            "silver.bronze_partition",
+            represented.isdisjoint(rejected_ids) and represented | rejected_ids == expected_ids,
+            {"represented": len(represented), "rejected": len(rejected_ids)},
+            {"bronze": len(expected_ids), "overlap": 0},
+        ),
+        _result(
+            "silver.pdf_references",
+            not invalid_pdf,
+            len(invalid_pdf),
+            0,
+            details={"dois": invalid_pdf[:20]},
+        ),
+        _result(
+            "silver.version_uniformity",
+            versions <= {version_id},
+            sorted(str(v) for v in versions),
+            [version_id],
+        ),
+        _result(
+            "silver.publication_categories",
+            not invalid_categories,
+            len(invalid_categories),
+            0,
+            details={"dois": invalid_categories[:20]},
+        ),
+    ]
+
+
+def gold_contract(session: Session, version_id: str) -> list[CheckResult]:
+    articles = session.scalars(
+        select(DatasetArticle).where(DatasetArticle.dataset_version_id == version_id)
+    ).all()
+    chunks = session.scalars(
+        select(DatasetChunk).where(DatasetChunk.dataset_version_id == version_id)
+    ).all()
+    dois = [row.doi for row in articles]
+    doi_set = set(dois)
+    keys = [(row.doi, row.chunk_type, row.seq) for row in chunks]
+    orphans = [row.id for row in chunks if row.doi not in doi_set]
+    bad_lengths = [row.id for row in chunks if row.char_len != len(row.text)]
+    invalid_categories = [
+        row.doi
+        for row in articles
+        if row.publication_category not in PUBLICATION_CATEGORIES
+        or not row.publication_category_basis
+    ]
+    return [
+        _result("gold.non_empty", bool(articles), len(articles), "> 0"),
+        _result("gold.doi_unique", len(dois) == len(doi_set), len(dois) - len(doi_set), 0),
+        _result(
+            "gold.chunk_key_unique", len(keys) == len(set(keys)), len(keys) - len(set(keys)), 0
+        ),
+        _result(
+            "gold.chunk_parent_integrity",
+            not orphans,
+            len(orphans),
+            0,
+            details={"chunk_ids": orphans[:20]},
+        ),
+        _result(
+            "gold.chunk_lengths",
+            not bad_lengths,
+            len(bad_lengths),
+            0,
+            details={"chunk_ids": bad_lengths[:20]},
+        ),
+        _result(
+            "gold.publication_categories",
+            not invalid_categories,
+            len(invalid_categories),
+            0,
+            details={"dois": invalid_categories[:20]},
+        ),
+    ]
+
+
+def embed_contract(
+    session: Session, version_id: str, store: QdrantVectorStore
+) -> list[CheckResult]:
+    """Every Gold chunk has exactly one valid vector in the version's collection.
+
+    The vectors live in Qdrant (ADR-08) but the evidence of what they should be
+    lives in Gold: each point is checked against its chunk row -- the pinned
+    model and revision on both sides, the dimension, a finite unit-norm vector,
+    and a text hash that matches the row's current text. Points with no chunk
+    behind them fail too: a search must never return a chunk the version lacks.
+    """
+    rows = session.execute(
+        select(
+            DatasetChunk.id,
+            DatasetChunk.doi,
+            DatasetChunk.chunk_type,
+            DatasetChunk.seq,
+            DatasetChunk.text,
+            DatasetChunk.text_sha256,
+            DatasetChunk.embed_model,
+            DatasetChunk.embed_revision,
+            DatasetChunk.embedding_dim,
+            DatasetChunk.embedding_dtype,
+            DatasetChunk.embedding_normalized,
+        )
+        .where(DatasetChunk.dataset_version_id == version_id)
+        .order_by(DatasetChunk.id)
+    ).all()
+    collection = collection_name(version_id)
+    try:
+        exists = store.has_collection(version_id)
+    except VectorStoreUnavailable as exc:
+        return [
+            _result(
+                "embed.store_reachable",
+                False,
+                str(exc),
+                "reachable",
+                details={"collection": collection},
+            )
+        ]
+    missing: list[int] = []
+    incompatible: list[int] = []
+    stale: list[int] = []
+    non_finite: list[int] = []
+    orphans = 0
+    if exists:
+        for start in range(0, len(rows), BATCH_SIZE):
+            batch = {
+                point_id(row.doi, row.chunk_type, row.seq): row
+                for row in rows[start : start + BATCH_SIZE]
+            }
+            points = store.fetch(
+                version_id,
+                list(batch),
+                with_vectors=True,
+                payload_fields=["text_sha256", "embed_model", "embed_revision"],
+            )
+            for key, row in batch.items():
+                point = points.get(key)
+                if point is None or point.vector is None:
+                    missing.append(row.id)
+                    continue
+                vector = point.vector
+                if (
+                    vector.size != EMBED_DIMENSION
+                    or point.payload.get("embed_model") != EMBED_MODEL_NAME
+                    or point.payload.get("embed_revision") != EMBED_MODEL_REVISION
+                    or row.embed_model != EMBED_MODEL_NAME
+                    or row.embed_revision != EMBED_MODEL_REVISION
+                    or row.embedding_dim != EMBED_DIMENSION
+                    or row.embedding_dtype != "float32"
+                    or row.embedding_normalized is not True
+                ):
+                    incompatible.append(row.id)
+                    continue
+                expected_hash = hashlib.sha256(row.text.encode("utf-8")).hexdigest()
+                if row.text_sha256 != expected_hash or point.payload.get("text_sha256") != (
+                    expected_hash
+                ):
+                    stale.append(row.id)
+                    continue
+                if not np.isfinite(vector).all():
+                    non_finite.append(row.id)
+                    continue
+                if not np.isclose(np.linalg.norm(vector), 1.0, atol=1e-3):
+                    incompatible.append(row.id)
+        orphans = max(store.count(version_id) - (len(rows) - len(missing)), 0)
+    else:
+        missing = [row.id for row in rows]
+    repair = (
+        {"hint": f"run `lake-research-map vectors rebuild --version {version_id}`"}
+        if missing or stale
+        else {}
+    )
+    return [
+        _result(
+            "embed.store_reachable",
+            True,
+            "reachable",
+            "reachable",
+            details={"collection": collection},
+        ),
+        _result(
+            "embed.complete",
+            not missing,
+            len(missing),
+            0,
+            details={"chunk_ids": missing[:20], "collection": collection, **repair},
+        ),
+        _result(
+            "embed.compatible",
+            not incompatible,
+            len(incompatible),
+            0,
+            details={"chunk_ids": incompatible[:20]},
+        ),
+        _result(
+            "embed.finite",
+            not non_finite,
+            len(non_finite),
+            0,
+            details={"chunk_ids": non_finite[:20]},
+        ),
+        _result(
+            "embed.text_hash",
+            not stale,
+            len(stale),
+            0,
+            details={"chunk_ids": stale[:20], **repair},
+        ),
+        _result("embed.orphans", orphans == 0, orphans, 0, details={"collection": collection}),
+    ]
+
+
+def semantic_contract(session: Session, version_id: str) -> list[CheckResult]:
+    abstracts = session.scalars(
+        select(DatasetChunk)
+        .where(DatasetChunk.dataset_version_id == version_id)
+        .where(DatasetChunk.chunk_type == "abstract")
+    ).all()
+    rows = session.scalars(
+        select(DatasetSemantics).where(DatasetSemantics.dataset_version_id == version_id)
+    ).all()
+    pairs = session.scalars(
+        select(DatasetDuplicatePair).where(DatasetDuplicatePair.dataset_version_id == version_id)
+    ).all()
+    semantic_dois = [row.doi for row in rows]
+    expected_dois = {row.doi for row in abstracts}
+    finite = all(
+        all(math.isfinite(value) for value in (row.relevance_score, row.map_x, row.map_y))
+        and (row.offtopic_score is None or math.isfinite(row.offtopic_score))
+        for row in rows
+    )
+    ranges = all(
+        -1 <= row.relevance_score <= 1
+        and (row.offtopic_score is None or -1 <= row.offtopic_score <= 1)
+        for row in rows
+    )
+    pair_keys = [(row.doi_a, row.doi_b) for row in pairs]
+    invalid_pairs = [key for key in pair_keys if key[0] >= key[1] or not set(key) <= expected_dois]
+    return [
+        _result(
+            "semantic.coverage",
+            set(semantic_dois) == expected_dois,
+            len(semantic_dois),
+            len(expected_dois),
+        ),
+        _result(
+            "semantic.doi_unique",
+            len(semantic_dois) == len(set(semantic_dois)),
+            len(semantic_dois) - len(set(semantic_dois)),
+            0,
+        ),
+        _result("semantic.finite", finite, finite, True),
+        _result("semantic.score_ranges", ranges, ranges, True),
+        _result(
+            "semantic.duplicate_pairs",
+            not invalid_pairs and len(pair_keys) == len(set(pair_keys)),
+            len(invalid_pairs) + len(pair_keys) - len(set(pair_keys)),
+            0,
+        ),
+    ]
+
+
+def publication_contract(
+    session: Session, version_id: str, store: QdrantVectorStore
+) -> list[CheckResult]:
+    """Return the blocking contracts required before Gold materialization.
+
+    The pipeline records stage-specific results before calling the publisher,
+    but `materialize_version()` is also a public service boundary used by the
+    CLI reactivation command and recovery tooling. Re-evaluating the candidate
+    here prevents a caller from bypassing the publication gate by invoking the
+    materializer directly.
+    """
+    return [
+        *gold_contract(session, version_id),
+        *embed_contract(session, version_id, store),
+        *semantic_contract(session, version_id),
+    ]
+
+
+def persist_results(
+    session: Session,
+    *,
+    execution_id: str,
+    stage_run_id: int,
+    dataset_version_id: str,
+    stage: str,
+    results: list[CheckResult],
+) -> None:
+    session.add_all(
+        [
+            QualityResult(
+                execution_id=execution_id,
+                stage_run_id=stage_run_id,
+                dataset_version_id=dataset_version_id,
+                stage=stage,
+                check_id=result.check_id,
+                severity=result.severity,
+                passed=result.passed,
+                observed=result.observed,
+                expected=result.expected,
+                details=result.details,
+            )
+            for result in results
+        ]
+    )
+    session.flush()
+
+
+def assert_contract(stage: str, results: list[CheckResult]) -> None:
+    failures = [result for result in results if result.severity == "error" and not result.passed]
+    if failures:
+        raise ContractViolation(stage, failures)

@@ -1,6 +1,6 @@
 ---
 name: streamlit-dashboard
-description: Conventions for the lake-research-map Streamlit dashboard (src/lake_research_map/apps/dashboard/) — page contract, chart contract, theme tokens, aggregation rules, and data pitfalls. Use whenever adding or editing a dashboard page, chart, or shared helper.
+description: Conventions for the lake-research-map Streamlit dashboard (src/apps/dashboard/) — page contract, chart contract, theme tokens, aggregation rules, and data pitfalls. Use whenever adding or editing a dashboard page, chart, or shared helper.
 ---
 
 # lake-research-map Streamlit dashboard

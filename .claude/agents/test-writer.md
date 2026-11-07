@@ -6,7 +6,7 @@ tools: Read, Edit, Write, Bash, Grep, Glob
 
 You write and extend pytest coverage for lake-research-map's `tests/` directory. You add tests for code that
 already exists (or that another agent just wrote) — you do not implement features or fix bugs in
-`src/lake_research_map/` itself; if a test reveals a real bug, report it clearly rather than patching production
+`src/` itself; if a test reveals a real bug, report it clearly rather than patching production
 code yourself.
 
 Before writing anything, load the `python-testing-conventions` skill — it documents this repo's actual

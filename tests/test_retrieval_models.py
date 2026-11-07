@@ -6,13 +6,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from lake_research_map.apps.api import models
-from lake_research_map.apps.api.models import (
+from apps.api import models
+from apps.api.models import (
     RERANK_MODEL_FILES,
     RERANK_MODEL_REVISION,
     resolved_rerank_revision,
 )
-from lake_research_map.transform.embeddings import model_content_digest
+from transform.embeddings import model_content_digest
 
 
 def _snapshot(root, name: str, *, weights: bytes = b"weights"):

@@ -1,7 +1,7 @@
 """Shared fixtures: one in-memory SQLite session per medallion layer, plus Qdrant.
 
 Each layer is already an independent SQLAlchemy `Base`/database in the real
-system (see `src/lake_research_map/db/*_models.py`), and nothing in the
+system (see `src/db/*_models.py`), and nothing in the
 transform code is MySQL-specific, so a separate in-memory SQLite engine per
 layer is a faithful, dependency-free stand-in for the real MySQL databases.
 """
@@ -12,7 +12,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from lake_research_map.db import bronze_models, gold_models, raw_models, silver_models
+from db import bronze_models, gold_models, raw_models, silver_models
 
 
 def _sqlite_session(base):
@@ -59,7 +59,7 @@ def vector_store():
     """
     from qdrant_client import QdrantClient
 
-    from lake_research_map.db.vector_store import QdrantVectorStore
+    from db.vector_store import QdrantVectorStore
 
     client = QdrantClient(":memory:")
     yield QdrantVectorStore(client)

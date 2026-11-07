@@ -1,7 +1,7 @@
-from lake_research_map.db.gold_models import Article as GoldArticle
-from lake_research_map.db.gold_models import Chunk, DuplicateOverride
-from lake_research_map.db.silver_models import Article as SilverArticle
-from lake_research_map.transform.gold_articles import (
+from db.gold_models import Article as GoldArticle
+from db.gold_models import Chunk, DuplicateOverride
+from db.silver_models import Article as SilverArticle
+from transform.gold_articles import (
     CHUNK_MAX_CHARS,
     CHUNK_OVERLAP_CHARS,
     _build_abstract_text,
@@ -296,7 +296,7 @@ def test_keep_and_undo_restore_duplicate_on_next_gold_build(silver_session, gold
 
 
 def test_chunk_text_breaks_on_sentences_once_lines_are_reflowed():
-    from lake_research_map.transform.pdf_text import reflow_lines
+    from transform.pdf_text import reflow_lines
 
     # pypdf's shape: every sentence ends at a line end and there is no blank line.
     raw = "\n".join(f"Sentence {i} discusses distribution feeder planning." for i in range(60))
@@ -310,7 +310,7 @@ def test_chunk_text_breaks_on_sentences_once_lines_are_reflowed():
 def _fake_pdf(monkeypatch, text: str) -> None:
     from types import SimpleNamespace
 
-    from lake_research_map.transform import gold_articles
+    from transform import gold_articles
 
     page = SimpleNamespace(extract_text=lambda: text)
     monkeypatch.setattr(gold_articles, "PdfReader", lambda _path: SimpleNamespace(pages=[page]))
@@ -319,7 +319,7 @@ def _fake_pdf(monkeypatch, text: str) -> None:
 def test_extract_pdf_text_cleans_the_text_and_counts_what_changed(monkeypatch):
     from collections import Counter
 
-    from lake_research_map.transform.gold_articles import _extract_pdf_text
+    from transform.gold_articles import _extract_pdf_text
 
     body = "\n".join(f"Line {i} of the body about distri-\nbution planning." for i in range(30))
     _fake_pdf(monkeypatch, body + "\n12\nREFERENCES\n[1] A cited work.")
@@ -339,9 +339,9 @@ def test_extract_pdf_text_cleans_the_text_and_counts_what_changed(monkeypatch):
 
 
 def test_both_gold_builders_report_the_pdf_cleaning(silver_session, gold_session, monkeypatch):
-    from lake_research_map.db.gold_models import DatasetVersion
-    from lake_research_map.transform.gold_articles import PDF_CLEANING_STATS
-    from lake_research_map.transform.versioned_gold import build_dataset_gold
+    from db.gold_models import DatasetVersion
+    from transform.gold_articles import PDF_CLEANING_STATS
+    from transform.versioned_gold import build_dataset_gold
 
     _fake_pdf(monkeypatch, "Body sentence.\n" * 300 + "References\n[1] Cited.")
     silver_session.add_all(

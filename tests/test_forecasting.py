@@ -11,7 +11,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from lake_research_map.apps.dashboard.forecasting import (
+from apps.dashboard.forecasting import (
     FORECAST_YEARS,
     HOLDOUT_YEAR,
     _fit_model,
@@ -160,7 +160,7 @@ def test_yearly_counts_filters_by_source():
 
 
 def test_fit_bass_diffusion_nls():
-    from lake_research_map.apps.dashboard.forecasting import fit_bass_diffusion_nls
+    from apps.dashboard.forecasting import fit_bass_diffusion_nls
 
     years = np.arange(2010, 2021)
     # S-curve adoption pattern
@@ -216,7 +216,7 @@ def test_horizon_backtests_score_each_forecast_year_separately():
     """
     import numpy as np
 
-    from lake_research_map.apps.dashboard.forecasting import fit_and_forecast
+    from apps.dashboard.forecasting import fit_and_forecast
 
     years = list(range(2010, 2026))
     series = pd.Series([10 + 3 * i for i in range(len(years))], index=years, dtype=float)
@@ -236,7 +236,7 @@ def test_rolling_origin_cv_hides_the_forecast_window_at_longer_horizons():
     """A 2-step fold must not see the year immediately before its target."""
     import numpy as np
 
-    from lake_research_map.apps.dashboard.forecasting import _rolling_origin_cv
+    from apps.dashboard.forecasting import _rolling_origin_cv
 
     years = np.arange(2010, 2024)
     # Flat through 2020, then a jump in 2021. Scoring 2022 one step ahead
@@ -257,7 +257,7 @@ def test_bass_diffusion_reports_parameter_uncertainty():
     """`curve_fit` returns a covariance; the peak year must not be a bare point."""
     import numpy as np
 
-    from lake_research_map.apps.dashboard.forecasting import fit_bass_diffusion_nls
+    from apps.dashboard.forecasting import fit_bass_diffusion_nls
 
     years = np.arange(2005, 2026)
     steps = np.arange(len(years))

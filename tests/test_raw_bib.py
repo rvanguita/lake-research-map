@@ -12,8 +12,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from lake_research_map.db.raw_models import BibEntry
-from lake_research_map.ingest.raw_bib import _load_bib_dir
+from db.raw_models import BibEntry
+from ingest.raw_bib import _load_bib_dir
 
 
 def _write_bib(tmp_path: Path, name: str, content: str) -> Path:

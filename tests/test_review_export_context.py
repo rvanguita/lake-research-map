@@ -12,12 +12,12 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
-from lake_research_map.db.bronze_models import Article as BronzeArticle
-from lake_research_map.db.gold_models import DatasetArticle
-from lake_research_map.db.raw_models import PdfFile
-from lake_research_map.db.silver_models import Article as SilverArticle
-from lake_research_map.transform.evidence_samples import SUBJECT_COLUMNS, describe_subjects
-from lake_research_map.transform.review_workflows import (
+from db.bronze_models import Article as BronzeArticle
+from db.gold_models import DatasetArticle
+from db.raw_models import PdfFile
+from db.silver_models import Article as SilverArticle
+from transform.evidence_samples import SUBJECT_COLUMNS, describe_subjects
+from transform.review_workflows import (
     assign_dataset_articles,
     ensure_protocol,
     export_assignments,
@@ -241,7 +241,7 @@ def test_export_still_works_without_any_context_session(gold_session, tmp_path):
 
 def test_an_enriched_queue_still_imports(gold_session, bronze_session, tmp_path):
     """The added columns must not break the path the reviewer's file comes back on."""
-    from lake_research_map.transform.review_workflows import collect_labels, import_labels
+    from transform.review_workflows import collect_labels, import_labels
 
     protocol = ensure_protocol(
         gold_session, workflow="screening", protocol_version="v2", instructions="criteria"

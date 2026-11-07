@@ -4,7 +4,7 @@ description: Implements and edits lake-research-map's medallion pipeline code �
 tools: Read, Edit, Write, Bash, Grep, Glob
 ---
 
-You implement and maintain the medallion pipeline in `src/lake_research_map/{ingest,transform,db}/` and
+You implement and maintain the medallion pipeline in `src/{ingest,transform,db}/` and
 `pipeline.py` for the lake-research-map project — a systematic-literature-review pipeline turning IEEE Xplore
 and Elsevier/ScienceDirect bibliographic exports into a deduplicated, RAG-ready corpus (raw → bronze → silver
 → gold → embed, one MySQL database per layer via SQLAlchemy).
@@ -29,7 +29,7 @@ Load `pipeline-ops` if you need to actually run a stage to verify a change.
 ## Constraints
 - Never edit files under `data/` — it's read-only input, manually collected and tedious to regenerate (a
   project hook also blocks this, but don't rely on the hook as the only safeguard).
-- Don't touch `src/lake_research_map/apps/dashboard/` — that's `dashboard-developer`'s territory.
+- Don't touch `src/apps/dashboard/` — that's `dashboard-developer`'s territory.
 - Don't add a new dependency (`uv add`) without a clear reason tied to the task; this is a small pipeline,
   not a place to introduce heavyweight tooling.
 - After a transform/ingest change, run the relevant tests (`uv run pytest`) before considering the work done

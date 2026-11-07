@@ -3,9 +3,9 @@
 [![Python 3.13](https://img.shields.io/badge/python-3.13-blue.svg)](https://www.python.org/downloads/)
 [![Tests: 490 passed](https://img.shields.io/badge/tests-490%20passed-brightgreen.svg)](tests/)
 [![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
-[![Streamlit Dashboard](https://img.shields.io/badge/dashboard-Streamlit-FF4B4B.svg)](src/lake_research_map/apps/dashboard/)
+[![Streamlit Dashboard](https://img.shields.io/badge/dashboard-Streamlit-FF4B4B.svg)](src/apps/dashboard/)
 [![Vector Store: Qdrant](https://img.shields.io/badge/vectors-Qdrant-DC244C.svg)](docker-compose.yml)
-[![Database: MySQL Medallion](https://img.shields.io/badge/lake-MySQL%20Medallion-00758F.svg)](src/lake_research_map/db/)
+[![Database: MySQL Medallion](https://img.shields.io/badge/lake-MySQL%20Medallion-00758F.svg)](src/db/)
 [![Code Style: Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
@@ -113,7 +113,7 @@ for hit in hits:
 
 ## 📊 Interactive Analytical Dashboard (10 Pages)
 
-The Streamlit dashboard (`src/lake_research_map/apps/dashboard/`) is partitioned into **10 workflow-oriented pages**. A fixed dark theme, responsive containers (`width="stretch"`), English interface text, and global publication-category filtering keep the interface consistent.
+The Streamlit dashboard (`src/apps/dashboard/`) is partitioned into **10 workflow-oriented pages**. A fixed dark theme, responsive containers (`width="stretch"`), English interface text, and global publication-category filtering keep the interface consistent.
 
 | Page | Analytical Scope & Dedicated Tabs |
 |---|---|
@@ -228,7 +228,7 @@ uv run lake-research-map screen "distribution expansion planning" --off-subject 
 claude mcp add lake-research-map -- uv run --directory "$PWD" lake-research-map mcp
 
 # Schema bootstrap & additive column migration
-uv run python -m lake_research_map.db.bootstrap
+uv run python -m db.bootstrap
 ```
 
 ### Streamlit Dashboard
@@ -280,7 +280,7 @@ uv tool install pre-commit
 pre-commit install
 ```
 - **Gitleaks**: Scans staged diffs for hardcoded passwords, tokens, and private keys.
-- **Block Docs on Main** (`src/lake_research_map/devtools/docs_branch_guard.py`): Prevents direct documentation commits to `main`, requiring dedicated feature or `docs/*` branches.
+- **Block Docs on Main** (`src/devtools/docs_branch_guard.py`): Prevents direct documentation commits to `main`, requiring dedicated feature or `docs/*` branches.
 
 ---
 
@@ -288,12 +288,12 @@ pre-commit install
 
 ```
 lake-research-map/
-├── src/images/                   # README illustrations (not part of the package)
-│   ├── lake_research_map_hero.png # High-resolution hero illustration (white background)
-│   ├── lake_research_map_hero.svg # Vector source for hero illustration
-│   ├── architecture.svg          # Legacy pipeline architecture diagram
-│   └── medallion_architecture.svg # Modern white-background medallion architecture diagram
-├── src/lake_research_map/
+├── src/                          # Top-level packages/modules, no wrapping package
+│   ├── images/                   # README illustrations (not shipped in the wheel)
+│   │   ├── lake_research_map_hero.png # High-resolution hero illustration (white background)
+│   │   ├── lake_research_map_hero.svg # Vector source for hero illustration
+│   │   ├── architecture.svg      # Legacy pipeline architecture diagram
+│   │   └── medallion_architecture.svg # Modern white-background medallion architecture diagram
 │   ├── config.py                 # Pydantic environment & database configuration
 │   ├── pipeline.py               # Medallion CLI controller (run_raw, run_bronze, etc.)
 │   ├── db/                       # SQLAlchemy 2.0 multi-database models

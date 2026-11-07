@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from lake_research_map.db.raw_models import BibEntry, Config, DatasetSourceFile, SourceFile
-from lake_research_map.ingest import raw_config
-from lake_research_map.quality import raw_contract
+from db.raw_models import BibEntry, Config, DatasetSourceFile, SourceFile
+from ingest import raw_config
+from quality import raw_contract
 
 
 def test_multiple_search_reports_from_one_publisher_are_preserved(

@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from lake_research_map.transform.semantics import (
+from transform.semantics import (
     compute_semantic_novelty,
     compute_temporal_drift,
     project_pca_2d,

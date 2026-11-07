@@ -12,8 +12,8 @@ import argparse
 
 import pytest
 
-from lake_research_map.ingest.openalex import DEFAULT_USER_AGENT, _user_agent
-from lake_research_map.pipeline import _require_openalex_identity
+from ingest.openalex import DEFAULT_USER_AGENT, _user_agent
+from pipeline import _require_openalex_identity
 
 
 def test_a_contact_address_alone_is_enough(monkeypatch):
@@ -50,7 +50,7 @@ def test_the_user_agent_carries_a_real_address_or_none_at_all(monkeypatch):
 
 
 def test_the_citation_crawl_refuses_a_bronze_layer_with_nothing_to_crawl(bronze_session):
-    from lake_research_map.pipeline import _refresh_citation_edges
+    from pipeline import _refresh_citation_edges
 
     args = argparse.Namespace(max_works=10, delay=0.0, max_pages=1)
     with pytest.raises(ValueError, match="refresh-openalex"):
@@ -67,9 +67,9 @@ def test_the_citation_crawl_persists_edges_and_counts_truncation(bronze_session,
     """
     from datetime import UTC, datetime
 
-    from lake_research_map import pipeline as pipeline_module
-    from lake_research_map.db.bronze_models import CitationEdge, ExternalWork
-    from lake_research_map.ingest.openalex import citation_graph_coverage
+    import pipeline as pipeline_module
+    from db.bronze_models import CitationEdge, ExternalWork
+    from ingest.openalex import citation_graph_coverage
 
     for work_id in ("W1", "W2"):
         bronze_session.add(
@@ -88,7 +88,7 @@ def test_the_citation_crawl_persists_edges_and_counts_truncation(bronze_session,
         "W2": {"citing_work_ids": ["W7"], "truncated": True, "pages": 5},
     }
     monkeypatch.setattr(
-        "lake_research_map.ingest.openalex.fetch_openalex_citing_batch",
+        "ingest.openalex.fetch_openalex_citing_batch",
         lambda work_ids, **kwargs: {
             work_id: {"throttled": False, "error": None, **crawled[work_id]} for work_id in work_ids
         },

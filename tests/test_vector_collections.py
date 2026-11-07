@@ -10,23 +10,23 @@ import numpy as np
 import pytest
 from sqlalchemy import select
 
-from lake_research_map import pipeline
-from lake_research_map.apps.qdrant import cli as qdrant_cli
-from lake_research_map.db.gold_models import (
+import pipeline
+from apps.qdrant import cli as qdrant_cli
+from db.gold_models import (
     DatasetArticle,
     DatasetChunk,
     DatasetVersion,
     PublicationState,
 )
-from lake_research_map.db.vector_store import (
+from db.vector_store import (
     QdrantVectorStore,
     VectorPoint,
     point_id,
 )
-from lake_research_map.quality import embed_contract
-from lake_research_map.transform.embeddings import EMBED_MODEL_NAME, EMBED_MODEL_REVISION
-from lake_research_map.transform.vector_payloads import chunk_payload
-from lake_research_map.transform.versioned_gold import (
+from quality import embed_contract
+from transform.embeddings import EMBED_MODEL_NAME, EMBED_MODEL_REVISION
+from transform.vector_payloads import chunk_payload
+from transform.versioned_gold import (
     build_dataset_embeddings,
     fill_vector_collection,
     publish_vector_alias,
@@ -113,7 +113,7 @@ def test_embed_stage_writes_vectors_to_qdrant_and_only_provenance_to_gold(
 
 def test_payloads_survive_the_commit_between_batches(gold_session, vector_store, monkeypatch):
     """Each batch commits and expunges; nothing loaded before the loop may detach."""
-    from lake_research_map.transform import versioned_gold
+    from transform import versioned_gold
 
     monkeypatch.setattr(versioned_gold, "EMBED_BATCH_SIZE", 1)
     _version(
@@ -334,9 +334,7 @@ def test_rebuild_restores_a_lost_active_collection(monkeypatch, capsys, gold_ses
     _publish(gold_session, "v1")
     vector_store.drop_collection("v1")
     _patch_cli(monkeypatch, gold_session, vector_store)
-    monkeypatch.setattr(
-        "lake_research_map.transform.versioned_gold._default_embed_fn", lambda: CountingEmbedder()
-    )
+    monkeypatch.setattr("transform.versioned_gold._default_embed_fn", lambda: CountingEmbedder())
 
     qdrant_cli.run(SimpleNamespace(vectors_action="rebuild", version_id=None))
 

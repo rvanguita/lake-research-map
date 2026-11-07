@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import select
 
-from lake_research_map.db.bronze_models import (
+from db.bronze_models import (
     CitationEdge,
     CrossrefReference,
     CrossrefReferenceList,
@@ -15,7 +15,7 @@ from lake_research_map.db.bronze_models import (
     ExternalWork,
     ReferenceWork,
 )
-from lake_research_map.ingest import crossref
+from ingest import crossref
 
 NOW = datetime(2026, 9, 23, tzinfo=UTC).replace(tzinfo=None)
 URL = "https://openalex.org/"

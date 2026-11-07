@@ -4,17 +4,17 @@ from __future__ import annotations
 
 import pytest
 
-from lake_research_map import pipeline
-from lake_research_map.apps.dashboard import data as dashboard_data
-from lake_research_map.db.gold_models import (
+import pipeline
+from apps.dashboard import data as dashboard_data
+from db.gold_models import (
     DatasetDuplicatePair,
     DatasetVersion,
     DuplicateOverride,
     DuplicatePair,
     PublicationState,
 )
-from lake_research_map.db.silver_models import Article as SilverArticle
-from lake_research_map.transform.duplicate_resolution import (
+from db.silver_models import Article as SilverArticle
+from transform.duplicate_resolution import (
     DuplicateResolutionError,
     build_merge_plan,
     list_review_rows,

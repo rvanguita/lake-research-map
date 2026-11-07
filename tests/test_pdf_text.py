@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from lake_research_map.transform.pdf_text import (
+from transform.pdf_text import (
     clean_pdf_text,
     dehyphenate,
     drop_page_number_lines,

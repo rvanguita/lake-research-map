@@ -30,11 +30,27 @@ dependencies = [
 ]
 
 [project.scripts]
-lake-research-map = "lake_research_map:main"
+lake-research-map = "pipeline:main"
 
 [build-system]
-requires = ["uv_build>=0.12.0,<0.13.0"]
-build-backend = "uv_build"
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+# The code sits directly under src/ as several top-level packages and modules
+# rather than one lake_research_map package. uv_build only packages directories,
+# not single-file modules such as config.py, hence hatchling.
+sources = ["src"]
+only-include = [
+    "src/apps",
+    "src/db",
+    "src/devtools",
+    "src/ingest",
+    "src/transform",
+    "src/config.py",
+    "src/pipeline.py",
+    "src/quality.py",
+]
 
 [dependency-groups]
 dev = [

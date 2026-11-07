@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from lake_research_map.apps.dashboard import loaders
+from apps.dashboard import loaders
 
 
 def _render(status, *, shown, total, published="2026-09-21 23:19"):

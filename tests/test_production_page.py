@@ -7,8 +7,8 @@ def test_production_page_renders_three_sections_and_reconciled_metrics():
     script = """
 import pandas as pd
 
-from lake_research_map.apps.dashboard import loaders
-from lake_research_map.apps.dashboard.pages import production
+from apps.dashboard import loaders
+from apps.dashboard.pages import production
 
 articles = pd.DataFrame(
     {

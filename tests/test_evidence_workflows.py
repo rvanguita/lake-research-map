@@ -3,22 +3,22 @@ from __future__ import annotations
 import csv
 from datetime import datetime
 
-from lake_research_map.db.bronze_models import (
+from db.bronze_models import (
     AccessObservation,
     CitationEdge,
     CitationYearCount,
     EnrichmentObservation,
     ExternalWork,
 )
-from lake_research_map.db.gold_models import (
+from db.gold_models import (
     DatasetArticle,
     ReviewAdjudication,
     ReviewAssignment,
     ReviewLabel,
 )
-from lake_research_map.ingest.enrichment import load_enrichment_observations
-from lake_research_map.ingest.openalex import _persist_openalex_evidence
-from lake_research_map.transform.review_workflows import (
+from ingest.enrichment import load_enrichment_observations
+from ingest.openalex import _persist_openalex_evidence
+from transform.review_workflows import (
     adjudicate,
     assign_dataset_articles,
     ensure_protocol,
@@ -179,7 +179,7 @@ def test_subject_file_scopes_the_assignment_to_the_sample(tmp_path):
     assign the whole dataset version, so a stratified sample had nowhere to go."""
     import csv
 
-    from lake_research_map.pipeline import _read_subject_file
+    from pipeline import _read_subject_file
 
     path = tmp_path / "sample.csv"
     with path.open("w", newline="", encoding="utf-8") as handle:
@@ -200,7 +200,7 @@ def test_subject_file_scopes_the_assignment_to_the_sample(tmp_path):
 def test_subject_file_refuses_a_csv_it_cannot_use(tmp_path):
     import pytest
 
-    from lake_research_map.pipeline import _read_subject_file
+    from pipeline import _read_subject_file
 
     wrong = tmp_path / "wrong.csv"
     wrong.write_text("doi,label\n10.1/a,include\n", encoding="utf-8")

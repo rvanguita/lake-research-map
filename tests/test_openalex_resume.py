@@ -13,8 +13,8 @@ from datetime import UTC, datetime
 
 import pytest
 
-from lake_research_map.db.bronze_models import CitationYearCount, EnrichmentObservation
-from lake_research_map.ingest import openalex
+from db.bronze_models import CitationYearCount, EnrichmentObservation
+from ingest import openalex
 
 
 @pytest.fixture

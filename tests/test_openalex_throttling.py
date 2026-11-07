@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import argparse
 
-from lake_research_map.db.bronze_models import EnrichmentObservation, ExternalWork
-from lake_research_map.ingest import openalex
-from lake_research_map.ingest.openalex import (
+from db.bronze_models import EnrichmentObservation, ExternalWork
+from ingest import openalex
+from ingest.openalex import (
     CONSECUTIVE_FAILURE_LIMIT,
     MAX_RETRY_AFTER_SECONDS,
     backoff_seconds,
@@ -192,7 +192,7 @@ def test_a_persistently_throttled_work_is_reported_as_truncated(bronze_session):
 def test_the_citing_batch_halts_after_five_throttled_works(bronze_session, monkeypatch):
     from datetime import UTC, datetime
 
-    from lake_research_map import pipeline as pipeline_module
+    import pipeline as pipeline_module
 
     now = datetime.now(UTC).replace(tzinfo=None)
     for index in range(20):
@@ -216,9 +216,7 @@ def test_the_citing_batch_halts_after_five_throttled_works(bronze_session, monke
             for work_id in work_ids
         }
 
-    monkeypatch.setattr(
-        "lake_research_map.ingest.openalex.fetch_openalex_citing_batch", _all_throttled
-    )
+    monkeypatch.setattr("ingest.openalex.fetch_openalex_citing_batch", _all_throttled)
 
     stats = pipeline_module._refresh_citation_edges(
         bronze_session,
@@ -244,7 +242,7 @@ def test_a_wait_longer_than_the_cap_skips_retrying_entirely(monkeypatch):
     per DOI is what would make the circuit breaker take fifteen minutes to fire
     instead of five requests.
     """
-    from lake_research_map.ingest.openalex import retrying_is_futile
+    from ingest.openalex import retrying_is_futile
 
     assert retrying_is_futile(_Response(headers={"Retry-After": "19587"})) is True
     assert retrying_is_futile(_Response(headers={"Retry-After": "5"})) is False

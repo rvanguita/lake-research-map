@@ -10,7 +10,7 @@ import itertools
 
 import numpy as np
 
-from lake_research_map.transform.semantics import (
+from transform.semantics import (
     discover_themes,
     near_duplicate_pairs,
     project_2d,
@@ -248,8 +248,8 @@ def test_theme_labels_fall_back_to_numbers_without_a_vocabulary():
 def test_build_semantics_end_to_end_with_injected_anchors(gold_session):
     """build_semantics runs to completion with injected anchor vectors,
     bypassing the fastembed model entirely."""
-    from lake_research_map.db.gold_models import Chunk, DuplicateOverride, DuplicatePair, Semantics
-    from lake_research_map.transform.semantics import build_semantics
+    from db.gold_models import Chunk, DuplicateOverride, DuplicatePair, Semantics
+    from transform.semantics import build_semantics
 
     rng = np.random.default_rng(42)
     n = 12
@@ -312,7 +312,7 @@ def test_theme_sweep_keeps_the_losing_candidates():
     """
     import numpy as np
 
-    from lake_research_map.transform.semantics import MAX_THEMES, MIN_THEMES, theme_sweep
+    from transform.semantics import MAX_THEMES, MIN_THEMES, theme_sweep
 
     rng = np.random.default_rng(0)
     matrix = np.vstack([rng.normal(centre, 0.4, (40, 6)) for centre in (-5, 0, 5, 10)])
@@ -335,7 +335,7 @@ def test_projection_measures_separate_invented_from_lost_neighbours():
     """Trustworthiness alone cannot fail a projection that tears a cluster apart."""
     import numpy as np
 
-    from lake_research_map.apps.dashboard.analytics import semantic_stability_diagnostics
+    from apps.dashboard.analytics import semantic_stability_diagnostics
 
     rng = np.random.default_rng(7)
     matrix = np.vstack([rng.normal(-3, 0.1, (20, 4)), rng.normal(3, 0.1, (20, 4))])

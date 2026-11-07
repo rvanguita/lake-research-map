@@ -7,23 +7,23 @@ import json
 import numpy as np
 import pytest
 
-from lake_research_map.apps.api.api import (
+from apps.api.api import (
     BENCHMARK_MODES,
     RetrievalUnavailable,
     Retriever,
     mode_runner,
 )
-from lake_research_map.apps.api.filters import ArticleFilters
-from lake_research_map.apps.api.index import load_corpus
-from lake_research_map.db.gold_models import (
+from apps.api.filters import ArticleFilters
+from apps.api.index import load_corpus
+from db.gold_models import (
     DatasetArticle,
     DatasetChunk,
     DatasetSemantics,
     DatasetVersion,
     PublicationState,
 )
-from lake_research_map.db.vector_store import VectorPoint, point_id
-from lake_research_map.transform.vector_payloads import chunk_payload
+from db.vector_store import VectorPoint, point_id
+from transform.vector_payloads import chunk_payload
 
 LONG = "a sufficiently long abstract text so the abstract does not count as missing. "
 

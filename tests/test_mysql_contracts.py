@@ -6,8 +6,8 @@ import pytest
 from sqlalchemy import inspect, text
 from sqlalchemy.exc import IntegrityError
 
-from lake_research_map.db.bootstrap import _migrate_config_uniqueness
-from lake_research_map.db.engines import get_engine
+from db.bootstrap import _migrate_config_uniqueness
+from db.engines import get_engine
 
 pytestmark = pytest.mark.mysql
 

@@ -1,7 +1,7 @@
-from lake_research_map.db.bronze_models import Article as BronzeArticle
-from lake_research_map.db.raw_models import PdfFile
-from lake_research_map.db.silver_models import Article as SilverArticle
-from lake_research_map.transform.silver_articles import (
+from db.bronze_models import Article as BronzeArticle
+from db.raw_models import PdfFile
+from db.silver_models import Article as SilverArticle
+from transform.silver_articles import (
     _merge_group,
     build_silver_articles,
     normalize_title,

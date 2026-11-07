@@ -1,6 +1,6 @@
-from lake_research_map.db.bronze_models import Article as BronzeArticle
-from lake_research_map.db.raw_models import BibEntry
-from lake_research_map.transform.bronze_articles import (
+from db.bronze_models import Article as BronzeArticle
+from db.raw_models import BibEntry
+from transform.bronze_articles import (
     _split_bibtex_authors,
     _split_ieee_csv_authors,
     _to_int,

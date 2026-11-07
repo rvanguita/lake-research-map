@@ -12,8 +12,8 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 
-from lake_research_map.db.gold_models import PipelineExecution, PipelineRun
-from lake_research_map.pipeline import recover_abandoned_executions
+from db.gold_models import PipelineExecution, PipelineRun
+from pipeline import recover_abandoned_executions
 
 NOW = datetime.now(UTC).replace(tzinfo=None)
 
@@ -103,9 +103,9 @@ def test_the_status_command_reports_progress_and_the_disagreement_queue(gold_ses
 
     from sqlalchemy import select as sa_select
 
-    from lake_research_map import pipeline as pipeline_module
-    from lake_research_map.db.gold_models import ReviewAssignment, ReviewLabel
-    from lake_research_map.transform.review_workflows import (
+    import pipeline as pipeline_module
+    from db.gold_models import ReviewAssignment, ReviewLabel
+    from transform.review_workflows import (
         assign_dataset_articles,
         ensure_protocol,
     )
@@ -179,7 +179,7 @@ def test_the_execution_being_continued_is_not_recovered(gold_session):
 def test_only_commands_that_change_published_inputs_take_the_lock():
     import argparse
 
-    from lake_research_map.pipeline import _mutates_published_inputs
+    from pipeline import _mutates_published_inputs
 
     def ns(**kw):
         return argparse.Namespace(**kw)

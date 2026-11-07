@@ -7,9 +7,9 @@ also the polite way to ask: the same data for a sixtieth of the load.
 
 from __future__ import annotations
 
-from lake_research_map.db.bronze_models import EnrichmentObservation
-from lake_research_map.ingest import openalex
-from lake_research_map.ingest.openalex import OPENALEX_FILTER_BATCH, fetch_openalex_batch
+from db.bronze_models import EnrichmentObservation
+from ingest import openalex
+from ingest.openalex import OPENALEX_FILTER_BATCH, fetch_openalex_batch
 
 
 class _Ok:

@@ -6,8 +6,8 @@ from streamlit.testing.v1 import AppTest
 def test_screening_calibration_panel_empty_state():
     script = """
 import pandas as pd
-from lake_research_map.apps.dashboard.pages.semantics import _screening_calibration_panel
-from lake_research_map.apps.dashboard.pages.pipeline_layers import _render_contract_status
+from apps.dashboard.pages.semantics import _screening_calibration_panel
+from apps.dashboard.pages.pipeline_layers import _render_contract_status
 
 scored = pd.DataFrame({
     "doi": [f"10.1000/{i}" for i in range(8)],
@@ -60,7 +60,7 @@ def test_citation_determinants_panel_renders_family_and_age_sensitivity():
     script = """
 import numpy as np
 import pandas as pd
-from lake_research_map.apps.dashboard.pages.highlights import _citation_determinants_glm_view
+from apps.dashboard.pages.highlights import _citation_determinants_glm_view
 
 rng = np.random.default_rng(3)
 n = 80

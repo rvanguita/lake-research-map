@@ -7,20 +7,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 `lake-research-map` — a systematic-literature-review pipeline over bibliographic exports on the topic
 *"distribution system planning"* (electric power distribution networks). The corpus is assembled by hand from
 publisher search UIs (IEEE Xplore + Elsevier/ScienceDirect), then consolidated by a medallion pipeline
-(`src/lake_research_map/`) into MySQL and explored through a Streamlit dashboard (`src/lake_research_map/apps/dashboard/`).
+(`src/`) into MySQL and explored through a Streamlit dashboard (`src/apps/dashboard/`).
 
 `README.md` is the project overview; `docs/PRD.md` (why) and `docs/SDD.md` (how) go deeper. This file is the
 canonical reference for **source-data quirks** — the other docs cross-reference it rather than repeat it.
 
 ## Commands
 
-Managed by [uv](https://docs.astral.sh/uv/) (Python 3.13, `uv_build` backend, src layout).
+Managed by [uv](https://docs.astral.sh/uv/) (Python 3.13, `hatchling` backend). The code sits directly under `src/` as
+top-level packages (`apps`, `db`, `ingest`, `transform`, `devtools`) and modules (`config`, `pipeline`, `quality`),
+so imports read `from db.engines import get_session`; there is no `lake_research_map` package any more.
 
 ```bash
 uv sync                                          # create/refresh .venv from uv.lock
 uv run lake-research-map --stage all             # full pipeline (default stage)
 uv run lake-research-map --stage <stage>         # raw | bronze | silver | gold | embed | semantic
-uv run python -m lake_research_map.db.bootstrap  # create the 4 databases + tables only, no ingestion
+uv run python -m db.bootstrap  # create the 4 databases + tables only, no ingestion
 uv run streamlit run main.py                     # dashboard at http://localhost:8501
 docker compose up -d                             # the read-only dashboard (:${DASHBOARD_PORT:-8501}); reads .env
 docker compose --profile qdrant up -d qdrant     # vector store (:6333) -- embed/semantic/search need it
@@ -412,5 +414,5 @@ one place that decides this, and pinning a literal instead silently deletes thos
 - `.claude/settings.json` hooks run on every edit: `ruff check --fix` + `ruff format` on any `.py`, and
   `uv run pytest -q` after touching `ingest/`, `transform/` or `tests/`. Recursive deletion of `data/`,
   force-pushes and hard resets are blocked at the Bash tool.
-- `pre-commit` (gitleaks + `lake_research_map.devtools.docs_branch_guard`) blocks docs-only commits made directly on
+- `pre-commit` (gitleaks + `devtools.docs_branch_guard`) blocks docs-only commits made directly on
   `main` — put documentation changes on a `docs/<topic>` branch. `main` is protected on GitHub.

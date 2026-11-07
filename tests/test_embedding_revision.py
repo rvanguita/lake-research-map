@@ -6,8 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from lake_research_map.transform import embeddings
-from lake_research_map.transform.embeddings import (
+from transform import embeddings
+from transform.embeddings import (
     EMBED_MODEL_REVISION,
     MODEL_DEFINING_FILES,
     model_content_digest,

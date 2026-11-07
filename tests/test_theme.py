@@ -16,7 +16,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from lake_research_map.apps.dashboard.theme import (
+from apps.dashboard.theme import (
     _DARK_TOKENS,
     CHART_PAPER_BG,
     _active_theme_type,
@@ -72,7 +72,7 @@ def test_polish_figure_layout_preserves_heatmap_textfont() -> None:
 
 
 def test_page_header_accepts_two_and_three_args(monkeypatch) -> None:
-    from lake_research_map.apps.dashboard.components import page_header
+    from apps.dashboard.components import page_header
 
     recorded = []
 
@@ -91,7 +91,7 @@ def test_page_header_accepts_two_and_three_args(monkeypatch) -> None:
 
 
 def test_all_dashboard_pages_importable_and_render_callable() -> None:
-    from lake_research_map.apps.dashboard.app import PAGES
+    from apps.dashboard.app import PAGES
 
     assert len(PAGES) == 10
     for render_fn, title, icon, url_path in PAGES:
@@ -102,11 +102,11 @@ def test_all_dashboard_pages_importable_and_render_callable() -> None:
 
 
 def test_retired_dashboard_controllers_are_not_registered() -> None:
-    from lake_research_map.apps.dashboard.app import PAGES
+    from apps.dashboard.app import PAGES
 
     slugs = {url_path for _, _, _, url_path in PAGES}
     assert slugs.isdisjoint({"frontiers", "strategic", "search-config"})
-    pages_dir = Path(__file__).parents[1] / "src/lake_research_map/apps/dashboard/pages"
+    pages_dir = Path(__file__).parents[1] / "src/apps/dashboard/pages"
     for page in pages_dir.glob("*.py"):
         source = page.read_text(encoding="utf-8")
         assert "@st.cache_data" not in source, page.name
@@ -117,7 +117,7 @@ def test_retired_dashboard_controllers_are_not_registered() -> None:
 def test_polar_figure_gets_transparent_background() -> None:
     import plotly.graph_objects as go
 
-    from lake_research_map.apps.dashboard.theme import CHART_PAPER_BG, polish_figure_layout
+    from apps.dashboard.theme import CHART_PAPER_BG, polish_figure_layout
 
     fig = go.Figure(data=go.Scatterpolar(r=[10, 20, 30], theta=["A", "B", "C"]))
     polish_figure_layout(fig)

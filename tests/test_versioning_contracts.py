@@ -12,10 +12,10 @@ import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
-from lake_research_map import pipeline
-from lake_research_map.db import bronze_models, gold_models, raw_models, silver_models
-from lake_research_map.db.bronze_models import Article as BronzeArticle
-from lake_research_map.db.gold_models import (
+import pipeline
+from db import bronze_models, gold_models, raw_models, silver_models
+from db.bronze_models import Article as BronzeArticle
+from db.gold_models import (
     Article,
     Chunk,
     DatasetArticle,
@@ -26,26 +26,26 @@ from lake_research_map.db.gold_models import (
     SemanticRun,
     Semantics,
 )
-from lake_research_map.db.raw_models import BibEntry, IeeeCsvRow
-from lake_research_map.db.silver_models import Article as SilverArticle
-from lake_research_map.db.vector_store import VectorPoint, point_id
-from lake_research_map.ingest.snapshots import (
+from db.raw_models import BibEntry, IeeeCsvRow
+from db.silver_models import Article as SilverArticle
+from db.vector_store import VectorPoint, point_id
+from ingest.snapshots import (
     ScannedSource,
     VersionFingerprint,
     build_fingerprint,
     diff_manifests,
     scan_sources,
 )
-from lake_research_map.quality import (
+from quality import (
     ContractViolation,
     assert_contract,
     embed_contract,
     semantic_contract,
 )
-from lake_research_map.transform.bronze_articles import build_bronze_articles
-from lake_research_map.transform.embeddings import EMBED_MODEL_NAME, EMBED_MODEL_REVISION
-from lake_research_map.transform.vector_payloads import chunk_payload
-from lake_research_map.transform.versioned_gold import (
+from transform.bronze_articles import build_bronze_articles
+from transform.embeddings import EMBED_MODEL_NAME, EMBED_MODEL_REVISION
+from transform.vector_payloads import chunk_payload
+from transform.versioned_gold import (
     build_dataset_embeddings,
     build_dataset_gold,
     build_dataset_semantics,
@@ -297,8 +297,8 @@ def test_versioned_gold_build_does_not_mutate_live_publication(
 def test_semantic_run_persists_the_diagnostics_that_produced_its_map(
     gold_session, monkeypatch, vector_store
 ):
-    from lake_research_map.apps.dashboard import analytics
-    from lake_research_map.transform import semantics, versioned_gold
+    from apps.dashboard import analytics
+    from transform import semantics, versioned_gold
 
     gold_session.add(DatasetVersion(version_id="v1", status="candidate"))
     vectors = [
@@ -681,8 +681,8 @@ def test_full_pipeline_correlates_stages_and_publishes_only_after_gates(monkeypa
 
 def test_golden_corpus_add_edit_rename_remove_and_reactivate(monkeypatch, tmp_path, vector_store):
     """Exercise reconciliation and publication over a complete mutation sequence."""
-    from lake_research_map.ingest import hashing, raw_bib, raw_config, raw_csv, raw_pdfs
-    from lake_research_map.transform import bronze_articles
+    from ingest import hashing, raw_bib, raw_config, raw_csv, raw_pdfs
+    from transform import bronze_articles
 
     data = _write_source_tree(tmp_path)
     (data / "articles" / "paper.pdf").unlink()
@@ -890,7 +890,7 @@ def test_recover_stale_clears_executions_with_no_heartbeat(monkeypatch, gold_ses
     execution killed before its first batch (and every one predating the
     column), which is exactly the population it exists to clear.
     """
-    from lake_research_map.db.gold_models import PipelineExecution, PipelineRun
+    from db.gold_models import PipelineExecution, PipelineRun
 
     stale_start = datetime.now(UTC).replace(tzinfo=None) - timedelta(hours=6)
     gold_session.add(
@@ -951,10 +951,10 @@ def test_new_enrichment_observations_mint_a_new_version(tmp_path):
 
 
 def test_a_presentation_only_edit_does_not_mint_a_new_version(tmp_path):
-    from lake_research_map.ingest.snapshots import code_fingerprint
+    from ingest.snapshots import code_fingerprint
 
-    page = tmp_path / "src/lake_research_map/apps/dashboard/pages/overview.py"
-    analytics = tmp_path / "src/lake_research_map/apps/dashboard/analytics.py"
+    page = tmp_path / "src/apps/dashboard/pages/overview.py"
+    analytics = tmp_path / "src/apps/dashboard/analytics.py"
     page.parent.mkdir(parents=True)
     page.write_text("CAPTION = 'a'\n")
     analytics.write_text("K = 1\n")

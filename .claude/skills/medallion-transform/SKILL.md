@@ -5,7 +5,7 @@ description: Conventions for adding/editing pipeline code under ingest/, transfo
 
 # lake-research-map medallion pipeline
 
-This is the authoring-side skill for the pipeline itself (`src/lake_research_map/{ingest,transform,db}/`
+This is the authoring-side skill for the pipeline itself (`src/{ingest,transform,db}/`
 and `pipeline.py`) — how to actually *run* it is the `pipeline-ops` skill instead.
 Dashboard code (`apps/dashboard/`) has its own `streamlit-dashboard` skill.
 
