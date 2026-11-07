@@ -35,6 +35,54 @@ from db.vector_store import ACTIVE_ALIAS, QdrantVectorStore
 
 logger = logging.getLogger(__name__)
 
+# A version in either state has been served to readers and must never be
+# rewritten: `materialize_version` leaves `published_at` set when a later
+# publication supersedes a version, so a superseded snapshot is exactly as
+# published as the active one -- and exact rollback (`versions activate`)
+# depends on it still being what readers saw.
+PUBLISHED_STATUSES = frozenset({"active", "superseded"})
+
+
+class PublishedVersionError(ValueError):
+    """A write was aimed at a version that has already been published."""
+
+
+def is_published(version: DatasetVersion) -> bool:
+    """Whether `version` has ever been served to readers.
+
+    Either signal is enough on its own: a legacy import is `active` with no
+    timestamp, and a status nobody expects with `published_at` set still
+    names a snapshot readers once saw.
+    """
+    return version.published_at is not None or version.status in PUBLISHED_STATUSES
+
+
+def is_mutable(version: DatasetVersion | None) -> bool:
+    """Whether a builder may rewrite the version's `lit_dataset_*` rows.
+
+    The one predicate behind every refusal -- the Gold, embed and semantic
+    builders, the working-version lookup, the raw stage's fingerprint reuse
+    and the failure bookkeeping all ask this and nothing else, so a snapshot
+    cannot be mutable for one of them and immutable for another. A version id
+    with no row is a candidate nothing has published.
+    """
+    return version is None or not is_published(version)
+
+
+def activate_hint(version_id: str) -> str:
+    """The command that serves a published version again, as every refusal names it."""
+    return f"`lake-research-map versions activate --version-id {version_id}`"
+
+
+def published_version_error(version: DatasetVersion) -> PublishedVersionError:
+    """The error every write refused by `is_mutable` raises, naming the way out."""
+    return PublishedVersionError(
+        f"dataset version {version.version_id} is already published (status "
+        f"{version.status}); published snapshots are immutable. Run the complete pipeline "
+        "to build a new candidate from changed inputs, or use "
+        f"{activate_hint(version.version_id)} to serve this one again"
+    )
+
 
 def _state(session: Session) -> PublicationState:
     state = session.get(PublicationState, 1)

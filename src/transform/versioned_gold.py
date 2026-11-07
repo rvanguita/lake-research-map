@@ -50,7 +50,6 @@ from transform.embeddings import (
     embedding_model,
 )
 from transform.gold_articles import (
-    PDF_CLEANING_STATS,
     _desired_chunks,
     _merge_silver_group,
 )
@@ -85,13 +84,14 @@ def _assert_mutable_candidate(session: Session, dataset_version_id: str) -> None
     A curation or source change must first produce a new fingerprint through
     the Raw stage.  Rebuilding derived rows in-place would make the version ID
     stop describing immutable evidence and would also corrupt exact rollback.
+    Superseded versions count: this used to check `status == "active"` only,
+    so a stage pointed at a superseded version (its execution id, or its
+    fingerprint minted again) deleted and rebuilt the snapshot that
+    `versions activate` promises to restore exactly.
     """
     version = session.get(DatasetVersion, dataset_version_id)
-    if version is not None and version.status == "active":
-        raise ValueError(
-            f"dataset version {dataset_version_id} is already published; "
-            "run the complete pipeline to create a new candidate version"
-        )
+    if not is_mutable(version):
+        raise published_version_error(version)
 
 
 def build_dataset_gold(
@@ -215,7 +215,7 @@ def build_dataset_gold(
         "chunks_invalidated": changed,
         "duplicate_records_merged": len(merged_duplicates),
         "duplicate_overrides_inactive": merge_plan.inactive_overrides,
-        **{key: pdf_stats[key] for key in PDF_CLEANING_STATS},
+        **{key: pdf_stats[key] for key in PDF_STATS},
     }
 
 
@@ -312,8 +312,11 @@ def fill_vector_collection(
     deleted, so the collection never answers with a chunk the version lacks.
 
     `write_provenance=False` is the repair path (`vectors backfill`/`rebuild`):
-    it only writes Qdrant, never the Gold rows of a published snapshot.
+    it only writes Qdrant, never the Gold rows of a published snapshot -- which
+    is why only the provenance-writing path is held to `is_mutable`.
     """
+    if write_provenance:
+        _assert_mutable_candidate(gold_session, dataset_version_id)
     rows = gold_session.execute(
         select(
             DatasetChunk.id,
@@ -510,8 +513,8 @@ def build_dataset_embeddings(
     Only one batch of ORM objects and vectors is kept in memory, and each
     batch is committed before the next starts, so a rerun skips work that
     already reached the store even if the original process was terminated.
+    `fill_vector_collection` refuses a published version on this path.
     """
-    _assert_mutable_candidate(gold_session, dataset_version_id)
     return fill_vector_collection(
         gold_session,
         store,

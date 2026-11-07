@@ -5,15 +5,41 @@ services:
     build: .
     ports:
       - "127.0.0.1:${DASHBOARD_PORT:-8501}:8501"
-    env_file:
-      - .env
+    # No `env_file`: the read-only dashboard gets only the variables it reads
+    # (config.py, apps/dashboard, apps/api, transform/embeddings.py), never the
+    # OpenAlex/Crossref contacts or anything else .env holds. A bare name passes
+    # the value from the shell or .env when it is set and leaves it unset
+    # otherwise, so the code's own default applies -- `${VAR:-}` would set it to
+    # "" instead, which int() rejects (QDRANT_TIMEOUT, the year overrides) and
+    # which would replace a pinned model revision with nothing.
     environment:
+      # The container reuses .env's MYSQL_HOST when it names a LAN/remote server.
+      # When MySQL runs on this host, that value is 127.0.0.1 -- which inside the
+      # container is the container itself -- so set DASHBOARD_MYSQL_HOST to
+      # host.docker.internal (the host, via `extra_hosts` below; MySQL must then
+      # listen on the docker bridge address). DASHBOARD_MYSQL_HOST always wins.
+      MYSQL_HOST: ${DASHBOARD_MYSQL_HOST:-${MYSQL_HOST:-host.docker.internal}}
+      MYSQL_PORT:
+      MYSQL_USER:
+      MYSQL_PASSWORD:
       # inside the compose network the vector store is reachable by name;
       # .env's own QDRANT_URL is the host's (ADR-08)
       QDRANT_URL: http://qdrant:6333
+      QDRANT_API_KEY:
+      QDRANT_TIMEOUT:
+      LAKE_RESEARCH_MAP_COMPLETE_YEAR:
+      LAKE_RESEARCH_MAP_CITATION_OBSERVATION_YEAR:
+      # the query embedder and the reranker are pinned like the pipeline's
+      LAKE_RESEARCH_MAP_EMBED_REVISION:
+      LAKE_RESEARCH_MAP_EMBED_CONTENT_SHA256:
+      LAKE_RESEARCH_MAP_EMBED_THREADS:
+      LAKE_RESEARCH_MAP_RERANK_REVISION:
+      LAKE_RESEARCH_MAP_RERANK_CONTENT_SHA256:
       # fastembed's default cache is under /tmp: a fresh container would
       # re-download the models on every start
       FASTEMBED_CACHE_PATH: /opt/model-cache
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - model_cache:/opt/model-cache
     depends_on:

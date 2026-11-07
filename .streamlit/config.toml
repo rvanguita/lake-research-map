@@ -17,6 +17,11 @@ borderColor = "#27384B"
 
 [server]
 headless = true
+# Loopback for a host run (`uv run streamlit run main.py`): the dashboard reads the
+# corpus databases and must not be reachable from the LAN. The container overrides
+# this with `--server.address=0.0.0.0` (a CLI flag outranks this file) and publishes
+# the port on 127.0.0.1 only (docker-compose.yml).
+address = "127.0.0.1"
 
 [browser]
 gatherUsageStats = false

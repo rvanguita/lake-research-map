@@ -17,9 +17,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "f=$(jq -r '.tool_input.file_path // empty'); case \"$f\" in *src/ingest/*|*src/transform/*|*tests/*) cd \"${CLAUDE_PROJECT_DIR:-.}\" && uv run pytest -q;; esac; true",
+            "command": "f=$(jq -r '.tool_input.file_path // empty'); case \"$f\" in *src/*.py|*tests/*) cd \"${CLAUDE_PROJECT_DIR:-.}\" && out=$(uv run pytest -q -p no:cacheprovider 2>&1); rc=$?; tail=$(printf '%s\\n' \"$out\" | tail -3); if [ \"$rc\" -ne 0 ]; then echo \"PYTEST FAILED: $tail\"; else printf '%s\\n' \"$tail\"; fi;; esac; true",
             "statusMessage": "uv run pytest -q",
-            "timeout": 60
+            "timeout": 180
           }
         ]
       }

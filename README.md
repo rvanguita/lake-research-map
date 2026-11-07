@@ -252,6 +252,9 @@ docker compose --profile qdrant up -d   # or set COMPOSE_PROFILES=qdrant in .env
 
 Both host ports are set in `.env` (`DASHBOARD_PORT`, `QDRANT_PORT`; defaults 8501 and 6333) for when another project already holds one; keep `QDRANT_URL` on the same port as `QDRANT_PORT`.
 
+- **Reaching MySQL from the container**: the dashboard does not use `.env`'s `MYSQL_HOST` (that is the host's view; `127.0.0.1` inside the container is the container). It connects to `DASHBOARD_MYSQL_HOST`, default `host.docker.internal` (this host, via compose's `host-gateway`), which works only when MySQL listens on the docker bridge address and not just on `127.0.0.1`. For a LAN or remote server, set `DASHBOARD_MYSQL_HOST` to its address; the other options are `network_mode: host` or running the dashboard on the host (`.env.example` explains all three).
+- **Scoped environment**: the container does not load `.env` wholesale. `docker-compose.yml` passes only the variables the read-only dashboard reads (MySQL credentials, the Qdrant settings, the year overrides, the embedder/reranker pins), so the OpenAlex and Crossref contacts never enter it. The image runs as an unprivileged `app` user from a digest-pinned base image.
+
 ---
 
 ## 🧪 Testing & Quality Assurance
