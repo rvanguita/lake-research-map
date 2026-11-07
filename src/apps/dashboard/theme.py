@@ -55,6 +55,11 @@ OTHER_COLOR = "#9a9a94"
 TREND_UP_COLOR = "#1baf7a"
 TREND_DOWN_COLOR = "#4a3aa7"
 
+# A boolean flag on a scatter (anomaly, top-5% hit): the flagged points take the
+# palette's red slot, the rest its first slot, so "flagged" reads the same on
+# every page that marks one.
+FLAG_COLORS = {True: CATEGORICAL_PALETTE[7], False: CATEGORICAL_PALETTE[0]}
+
 # "Total" needs to visually pop against both IEEE blue and Elsevier orange on
 # every chart that shows all three series together -- a neutral gray used to
 # sit here and nearly disappeared next to the two saturated brand colors.
@@ -71,7 +76,8 @@ CHART_HEIGHT = 420  # consistent height for side-by-side chart pairs
 # `chart_bg` stays a solid token, for the things that need a real color to
 # stand on: the gauge track in `quality.py` and the "partial year" marker halo
 # in `forecasting.py`.
-CHART_PAPER_BG = "rgba(0,0,0,0)"
+TRANSPARENT = "rgba(0,0,0,0)"
+CHART_PAPER_BG = TRANSPARENT
 
 _CHART_FONT_FAMILY = "Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
 
@@ -117,9 +123,17 @@ _DARK_TOKENS = {
     "legend_border": "rgba(94, 169, 255, 0.35)",
     "heatmap_zero": "#0b1725",
     "heatmap_mid": "#0b1725",
-    "reference_line": "rgba(255, 255, 255, 0.75)",
-    "reference_line_subtle": "rgba(255, 255, 255, 0.35)",
+    # No `reference_line*` tokens: the chart contract forbids reference and
+    # guide lines, and the last ones that used them were removed on 2026-11-06.
     "point_border": "#ffffff",
+    # A translucent ring that separates overlapping markers on the dark canvas.
+    "marker_outline": "rgba(255, 255, 255, 0.4)",
+    # Leader line from a fixed label to its point.
+    "annotation_arrow": "rgba(148, 163, 184, 0.5)",
+    "sankey_node_border": "rgba(255, 255, 255, 0.15)",
+    # Single-article co-authorship edges: present but recessive, so the
+    # recurrent (weighted, palette-colored) edges carry the reading.
+    "network_edge": "rgba(94, 169, 255, 0.20)",
 }
 
 

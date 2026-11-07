@@ -310,7 +310,7 @@ def _render_objectives_tab(df: pd.DataFrame) -> None:
                 x=temporal_multiobj["year"],
                 y=temporal_multiobj["mono_objective"],
                 name="Single-objective",
-                marker={"color": "#636EFA"},
+                marker={"color": CATEGORICAL_PALETTE[0]},
             )
         )
         fig_mo.add_trace(
@@ -318,7 +318,7 @@ def _render_objectives_tab(df: pd.DataFrame) -> None:
                 x=temporal_multiobj["year"],
                 y=temporal_multiobj["multi_objective"],
                 name="Multi-objective (≥2 criteria)",
-                marker={"color": "#00CC96"},
+                marker={"color": CATEGORICAL_PALETTE[2]},
             )
         )
         fig_mo.add_trace(
@@ -328,7 +328,7 @@ def _render_objectives_tab(df: pd.DataFrame) -> None:
                 yaxis="y2",
                 mode="lines+markers",
                 name="% multi-objective",
-                line={"color": "#FFA15A", "width": 2.5},
+                line={"color": CATEGORICAL_PALETTE[1], "width": 2.5},
             )
         )
         fig_mo.update_layout(

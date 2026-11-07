@@ -19,6 +19,7 @@ import pandas as pd
 import streamlit as st
 from sqlalchemy.exc import SQLAlchemyError
 
+from apps.api.filters import ArticleFilters, article_filter_mask
 from apps.dashboard import qualis
 from apps.dashboard.data import (
     active_dataset_version,
@@ -347,23 +348,23 @@ def filter_articles(
     if min_margin is not None:
         scored = with_semantics(df)
         # `relevance_margin` needs `offtopic_score`, which a database whose
-        # last `semantic` run predates the contrastive anchor doesn't have.
-        column = "relevance_margin" if "relevance_margin" in scored.columns else "relevance_score"
-        if column in scored.columns:
-            df = scored[scored[column].isna() | scored[column].ge(min_margin)]
-    filtered = df.copy()
-    if year_range and "year" in filtered.columns:
-        if isinstance(year_range, (int, float)):
-            year_range = (int(year_range), int(year_range))
-        years = pd.to_numeric(filtered["year"], errors="coerce")
-        filtered = filtered.loc[years.ge(year_range[0]) & years.le(year_range[1])]
-    if sources and "source" in filtered.columns:
-        filtered = filtered[filtered["source"].isin(sources)]
-    if venues and "venue" in filtered.columns:
-        filtered = filtered[filtered["venue"].isin(venues)]
-    if publication_categories and "publication_category" in filtered.columns:
-        filtered = filtered[filtered["publication_category"].isin(publication_categories)]
-    return filtered.reset_index(drop=True)
+        # last `semantic` run predates the contrastive anchor doesn't have;
+        # `article_filter_mask` then falls back to `relevance_score` itself.
+        if {"relevance_margin", "relevance_score"} & set(scored.columns):
+            df = scored
+    # One filter definition (`apps.api.filters`), shared with search, the CLI
+    # and the MCP tools. The sidebar has no non-article or abstract toggle, so
+    # neither rule applies here: the dashboard shows the whole corpus.
+    filters = ArticleFilters(
+        year_range=year_range or None,
+        sources=tuple(sources),
+        venues=tuple(venues),
+        publication_categories=tuple(publication_categories),
+        min_margin=min_margin,
+        exclude_non_articles=False,
+        require_abstract=False,
+    )
+    return df.loc[article_filter_mask(df, filters)].reset_index(drop=True)
 
 
 def filtered_articles() -> tuple[str, pd.DataFrame]:

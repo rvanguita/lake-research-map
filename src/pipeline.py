@@ -169,6 +169,28 @@ def _pipeline_lock(execution_id: str):
         lock_session.close()
 
 
+@contextlib.contextmanager
+def _layer_sessions(*layers: str):
+    """Open one session per layer and close every one of them on exit.
+
+    The stage functions used to open their sessions and then call
+    `_working_version`, `_ensure_execution` and `_begin_stage` before entering
+    their `try/finally`, so an exception there (no working version, an
+    execution bound to another version, a failed commit) leaked every session
+    already open. Each session is registered for closing the moment it is
+    opened, so a failure anywhere after -- including a later `get_session` --
+    still closes the ones before it. Sessions are opened through the
+    module-level `get_session`, the injection point the tests monkeypatch.
+    """
+    with contextlib.ExitStack() as stack:
+        sessions = []
+        for layer in layers:
+            session = get_session(layer)
+            stack.callback(session.close)
+            sessions.append(session)
+        yield tuple(sessions)
+
+
 _STAGE_SEQUENCE = {stage: index for index, stage in enumerate(STAGES[:-1], start=1)}
 
 
@@ -478,232 +500,213 @@ def run_raw(
     sources, version_id, already_active = _prepare_raw_version(
         execution_id, workflow, trigger, source_policy
     )
-    gold_session = get_session("gold")
-    raw_session = get_session("raw")
-    run_id, started = _begin_stage(gold_session, "raw", execution_id, version_id)
-    try:
-        if already_active and workflow == "all":
-            return _complete_skipped_stage(
-                gold_session, run_id, started, execution_id, version_id, "raw"
+    with _layer_sessions("gold", "raw") as (gold_session, raw_session):
+        run_id, started = _begin_stage(gold_session, "raw", execution_id, version_id)
+        try:
+            if already_active and workflow == "all":
+                return _complete_skipped_stage(
+                    gold_session, run_id, started, execution_id, version_id, "raw"
+                )
+            previous = active_manifest(raw_session)
+            removed = (
+                remove_absent_sources(raw_session, {source.path for source in sources})
+                if source_policy == "snapshot"
+                else 0
             )
-        previous = active_manifest(raw_session)
-        removed = (
-            remove_absent_sources(raw_session, {source.path for source in sources})
-            if source_policy == "snapshot"
-            else 0
-        )
-        stats = {
-            "source_policy": source_policy,
-            "config": load_configs(raw_session),
-            "ieee_csv_rows": load_ieee_csv(raw_session),
-            "bib_entries": load_bib_entries(raw_session),
-            "pdf_files": load_pdf_inventory(raw_session),
-        }
-        changes = persist_snapshot(
-            raw_session,
-            sources,
-            version_id=version_id,
-            execution_id=execution_id,
-            previous=previous,
-        )
-        stats.update(changes)
-        stats["removed_active_paths"] = removed
-        results = raw_contract(raw_session, version_id)
-        _record_results(
-            gold_session,
-            execution_id=execution_id,
-            run_id=run_id,
-            version_id=version_id,
-            stage="raw",
-            results=results,
-        )
-        gold_session.commit()
-        assert_contract("raw", results)
-        raw_session.commit()
-        _finish_stage(gold_session, run_id, started, stats=stats, status="success")
-        if workflow != "all":
-            _finalize_execution(gold_session, execution_id, "success")
-        gold_session.commit()
-        print(f"[raw] {stats}")
-        return stats
-    except Exception as exc:
-        raw_session.rollback()
-        _handle_stage_failure(gold_session, run_id, started, execution_id, exc)
-        raise
-    finally:
-        raw_session.close()
-        gold_session.close()
+            stats = {
+                "source_policy": source_policy,
+                "config": load_configs(raw_session),
+                "ieee_csv_rows": load_ieee_csv(raw_session),
+                "bib_entries": load_bib_entries(raw_session),
+                "pdf_files": load_pdf_inventory(raw_session),
+            }
+            changes = persist_snapshot(
+                raw_session,
+                sources,
+                version_id=version_id,
+                execution_id=execution_id,
+                previous=previous,
+            )
+            stats.update(changes)
+            stats["removed_active_paths"] = removed
+            results = raw_contract(raw_session, version_id)
+            _record_results(
+                gold_session,
+                execution_id=execution_id,
+                run_id=run_id,
+                version_id=version_id,
+                stage="raw",
+                results=results,
+            )
+            gold_session.commit()
+            assert_contract("raw", results)
+            raw_session.commit()
+            _finish_stage(gold_session, run_id, started, stats=stats, status="success")
+            if workflow != "all":
+                _finalize_execution(gold_session, execution_id, "success")
+            gold_session.commit()
+            print(f"[raw] {stats}")
+            return stats
+        except Exception as exc:
+            raw_session.rollback()
+            _handle_stage_failure(gold_session, run_id, started, execution_id, exc)
+            raise
 
 
 def run_bronze(*, execution_id: str, workflow: str = "bronze", trigger: str = "cli") -> dict:
-    gold_session = get_session("gold")
-    version_id = _working_version(gold_session, execution_id)
-    _ensure_execution(
-        gold_session, execution_id, workflow=workflow, trigger=trigger, version_id=version_id
-    )
-    gold_session.commit()
-    run_id, started = _begin_stage(gold_session, "bronze", execution_id, version_id)
-    raw_session = get_session("raw")
-    bronze_session = get_session("bronze")
-    try:
-        if _is_unchanged_full_run(gold_session, version_id, workflow):
-            return _complete_skipped_stage(
-                gold_session, run_id, started, execution_id, version_id, "bronze"
-            )
-        stats = build_bronze_articles(raw_session, bronze_session, version_id)
-        results = bronze_contract(raw_session, bronze_session, version_id)
-        _record_results(
-            gold_session,
-            execution_id=execution_id,
-            run_id=run_id,
-            version_id=version_id,
-            stage="bronze",
-            results=results,
+    with _layer_sessions("gold", "raw", "bronze") as (gold_session, raw_session, bronze_session):
+        version_id = _working_version(gold_session, execution_id)
+        _ensure_execution(
+            gold_session, execution_id, workflow=workflow, trigger=trigger, version_id=version_id
         )
         gold_session.commit()
-        assert_contract("bronze", results)
-        bronze_session.commit()
-        _finish_stage(gold_session, run_id, started, stats=stats, status="success")
-        if workflow != "all":
-            _finalize_execution(gold_session, execution_id, "success")
-        gold_session.commit()
-        print(f"[bronze] {stats}")
-        return stats
-    except Exception as exc:
-        bronze_session.rollback()
-        _handle_stage_failure(gold_session, run_id, started, execution_id, exc)
-        raise
-    finally:
-        raw_session.close()
-        bronze_session.close()
-        gold_session.close()
+        run_id, started = _begin_stage(gold_session, "bronze", execution_id, version_id)
+        try:
+            if _is_unchanged_full_run(gold_session, version_id, workflow):
+                return _complete_skipped_stage(
+                    gold_session, run_id, started, execution_id, version_id, "bronze"
+                )
+            stats = build_bronze_articles(raw_session, bronze_session, version_id)
+            results = bronze_contract(raw_session, bronze_session, version_id)
+            _record_results(
+                gold_session,
+                execution_id=execution_id,
+                run_id=run_id,
+                version_id=version_id,
+                stage="bronze",
+                results=results,
+            )
+            gold_session.commit()
+            assert_contract("bronze", results)
+            bronze_session.commit()
+            _finish_stage(gold_session, run_id, started, stats=stats, status="success")
+            if workflow != "all":
+                _finalize_execution(gold_session, execution_id, "success")
+            gold_session.commit()
+            print(f"[bronze] {stats}")
+            return stats
+        except Exception as exc:
+            bronze_session.rollback()
+            _handle_stage_failure(gold_session, run_id, started, execution_id, exc)
+            raise
 
 
 def run_silver(*, execution_id: str, workflow: str = "silver", trigger: str = "cli") -> dict:
-    gold_session = get_session("gold")
-    version_id = _working_version(gold_session, execution_id)
-    _ensure_execution(
-        gold_session, execution_id, workflow=workflow, trigger=trigger, version_id=version_id
-    )
-    gold_session.commit()
-    run_id, started = _begin_stage(gold_session, "silver", execution_id, version_id)
-    raw_session = get_session("raw")
-    bronze_session = get_session("bronze")
-    silver_session = get_session("silver")
-    try:
-        if _is_unchanged_full_run(gold_session, version_id, workflow):
-            return _complete_skipped_stage(
-                gold_session, run_id, started, execution_id, version_id, "silver"
-            )
-        stats = build_silver_articles(bronze_session, silver_session, raw_session, version_id)
-        results = silver_contract(bronze_session, silver_session, raw_session, version_id)
-        _record_results(
-            gold_session,
-            execution_id=execution_id,
-            run_id=run_id,
-            version_id=version_id,
-            stage="silver",
-            results=results,
+    with _layer_sessions("gold", "raw", "bronze", "silver") as (
+        gold_session,
+        raw_session,
+        bronze_session,
+        silver_session,
+    ):
+        version_id = _working_version(gold_session, execution_id)
+        _ensure_execution(
+            gold_session, execution_id, workflow=workflow, trigger=trigger, version_id=version_id
         )
         gold_session.commit()
-        assert_contract("silver", results)
-        silver_session.commit()
-        _finish_stage(gold_session, run_id, started, stats=stats, status="success")
-        if workflow != "all":
-            _finalize_execution(gold_session, execution_id, "success")
-        gold_session.commit()
-        print(f"[silver] {stats}")
-        return stats
-    except Exception as exc:
-        silver_session.rollback()
-        _handle_stage_failure(gold_session, run_id, started, execution_id, exc)
-        raise
-    finally:
-        raw_session.close()
-        bronze_session.close()
-        silver_session.close()
-        gold_session.close()
+        run_id, started = _begin_stage(gold_session, "silver", execution_id, version_id)
+        try:
+            if _is_unchanged_full_run(gold_session, version_id, workflow):
+                return _complete_skipped_stage(
+                    gold_session, run_id, started, execution_id, version_id, "silver"
+                )
+            stats = build_silver_articles(bronze_session, silver_session, raw_session, version_id)
+            results = silver_contract(bronze_session, silver_session, raw_session, version_id)
+            _record_results(
+                gold_session,
+                execution_id=execution_id,
+                run_id=run_id,
+                version_id=version_id,
+                stage="silver",
+                results=results,
+            )
+            gold_session.commit()
+            assert_contract("silver", results)
+            silver_session.commit()
+            _finish_stage(gold_session, run_id, started, stats=stats, status="success")
+            if workflow != "all":
+                _finalize_execution(gold_session, execution_id, "success")
+            gold_session.commit()
+            print(f"[silver] {stats}")
+            return stats
+        except Exception as exc:
+            silver_session.rollback()
+            _handle_stage_failure(gold_session, run_id, started, execution_id, exc)
+            raise
 
 
 def run_gold(*, execution_id: str, workflow: str = "gold", trigger: str = "cli") -> dict:
-    gold_session = get_session("gold")
-    version_id = _working_version(gold_session, execution_id)
-    _ensure_execution(
-        gold_session, execution_id, workflow=workflow, trigger=trigger, version_id=version_id
-    )
-    gold_session.commit()
-    run_id, started = _begin_stage(gold_session, "gold", execution_id, version_id)
-    silver_session = get_session("silver")
-    try:
-        if _is_unchanged_full_run(gold_session, version_id, workflow):
-            return _complete_skipped_stage(
-                gold_session, run_id, started, execution_id, version_id, "gold"
-            )
-        stats = build_dataset_gold(silver_session, gold_session, version_id)
-        results = gold_contract(gold_session, version_id)
-        _record_results(
-            gold_session,
-            execution_id=execution_id,
-            run_id=run_id,
-            version_id=version_id,
-            stage="gold",
-            results=results,
+    with _layer_sessions("gold", "silver") as (gold_session, silver_session):
+        version_id = _working_version(gold_session, execution_id)
+        _ensure_execution(
+            gold_session, execution_id, workflow=workflow, trigger=trigger, version_id=version_id
         )
         gold_session.commit()
-        assert_contract("gold", results)
-        _finish_stage(gold_session, run_id, started, stats=stats, status="success")
-        if workflow != "all":
-            _finalize_execution(gold_session, execution_id, "success")
-        gold_session.commit()
-        print(f"[gold] {stats}")
-        return stats
-    except Exception as exc:
-        _handle_stage_failure(gold_session, run_id, started, execution_id, exc)
-        raise
-    finally:
-        silver_session.close()
-        gold_session.close()
+        run_id, started = _begin_stage(gold_session, "gold", execution_id, version_id)
+        try:
+            if _is_unchanged_full_run(gold_session, version_id, workflow):
+                return _complete_skipped_stage(
+                    gold_session, run_id, started, execution_id, version_id, "gold"
+                )
+            stats = build_dataset_gold(silver_session, gold_session, version_id)
+            results = gold_contract(gold_session, version_id)
+            _record_results(
+                gold_session,
+                execution_id=execution_id,
+                run_id=run_id,
+                version_id=version_id,
+                stage="gold",
+                results=results,
+            )
+            gold_session.commit()
+            assert_contract("gold", results)
+            _finish_stage(gold_session, run_id, started, stats=stats, status="success")
+            if workflow != "all":
+                _finalize_execution(gold_session, execution_id, "success")
+            gold_session.commit()
+            print(f"[gold] {stats}")
+            return stats
+        except Exception as exc:
+            _handle_stage_failure(gold_session, run_id, started, execution_id, exc)
+            raise
 
 
 def run_embed(*, execution_id: str, workflow: str = "embed", trigger: str = "cli") -> dict:
-    gold_session = get_session("gold")
-    version_id = _working_version(gold_session, execution_id)
-    _ensure_execution(
-        gold_session, execution_id, workflow=workflow, trigger=trigger, version_id=version_id
-    )
-    gold_session.commit()
-    run_id, started = _begin_stage(gold_session, "embed", execution_id, version_id)
-    try:
-        if _is_unchanged_full_run(gold_session, version_id, workflow):
-            return _complete_skipped_stage(
-                gold_session, run_id, started, execution_id, version_id, "embed"
-            )
-        gold_session.info["execution_id"] = execution_id
-        # Resolved after the skip check: an unchanged run never needs Qdrant.
-        store = get_vector_store()
-        stats = build_dataset_embeddings(gold_session, version_id, store=store)
-        results = embed_contract(gold_session, version_id, store)
-        _record_results(
-            gold_session,
-            execution_id=execution_id,
-            run_id=run_id,
-            version_id=version_id,
-            stage="embed",
-            results=results,
+    with _layer_sessions("gold") as (gold_session,):
+        version_id = _working_version(gold_session, execution_id)
+        _ensure_execution(
+            gold_session, execution_id, workflow=workflow, trigger=trigger, version_id=version_id
         )
         gold_session.commit()
-        assert_contract("embed", results)
-        _finish_stage(gold_session, run_id, started, stats=stats, status="success")
-        if workflow != "all":
-            _finalize_execution(gold_session, execution_id, "success")
-        gold_session.commit()
-        print(f"[embed] {stats}")
-        return stats
-    except Exception as exc:
-        _handle_stage_failure(gold_session, run_id, started, execution_id, exc)
-        raise
-    finally:
-        gold_session.close()
+        run_id, started = _begin_stage(gold_session, "embed", execution_id, version_id)
+        try:
+            if _is_unchanged_full_run(gold_session, version_id, workflow):
+                return _complete_skipped_stage(
+                    gold_session, run_id, started, execution_id, version_id, "embed"
+                )
+            gold_session.info["execution_id"] = execution_id
+            # Resolved after the skip check: an unchanged run never needs Qdrant.
+            store = get_vector_store()
+            stats = build_dataset_embeddings(gold_session, version_id, store=store)
+            results = embed_contract(gold_session, version_id, store)
+            _record_results(
+                gold_session,
+                execution_id=execution_id,
+                run_id=run_id,
+                version_id=version_id,
+                stage="embed",
+                results=results,
+            )
+            gold_session.commit()
+            assert_contract("embed", results)
+            _finish_stage(gold_session, run_id, started, stats=stats, status="success")
+            if workflow != "all":
+                _finalize_execution(gold_session, execution_id, "success")
+            gold_session.commit()
+            print(f"[embed] {stats}")
+            return stats
+        except Exception as exc:
+            _handle_stage_failure(gold_session, run_id, started, execution_id, exc)
+            raise
 
 
 def _version_ready(session, version_id: str) -> bool:
@@ -737,46 +740,44 @@ def _version_ready(session, version_id: str) -> bool:
 
 
 def run_semantic(*, execution_id: str, workflow: str = "semantic", trigger: str = "cli") -> dict:
-    gold_session = get_session("gold")
-    version_id = _working_version(gold_session, execution_id)
-    _ensure_execution(
-        gold_session, execution_id, workflow=workflow, trigger=trigger, version_id=version_id
-    )
-    gold_session.commit()
-    run_id, started = _begin_stage(gold_session, "semantic", execution_id, version_id)
-    try:
-        if _is_unchanged_full_run(gold_session, version_id, workflow):
-            return _complete_skipped_stage(
-                gold_session, run_id, started, execution_id, version_id, "semantic"
-            )
-        store = get_vector_store()
-        stats = build_dataset_semantics(gold_session, version_id, store=store)
-        results = semantic_contract(gold_session, version_id)
-        _record_results(
-            gold_session,
-            execution_id=execution_id,
-            run_id=run_id,
-            version_id=version_id,
-            stage="semantic",
-            results=results,
+    with _layer_sessions("gold") as (gold_session,):
+        version_id = _working_version(gold_session, execution_id)
+        _ensure_execution(
+            gold_session, execution_id, workflow=workflow, trigger=trigger, version_id=version_id
         )
         gold_session.commit()
-        assert_contract("semantic", results)
-        _finish_stage(gold_session, run_id, started, stats=stats, status="success")
-        gold_session.flush()
-        if not _version_ready(gold_session, version_id):
-            raise ContractViolation("publication", [])
-        materialize_version(gold_session, version_id, execution_id, store=store)
-        _finalize_execution(gold_session, execution_id, "success")
-        gold_session.commit()
-        publish_vector_alias(store, version_id)
-        print(f"[semantic] {stats}")
-        return stats
-    except Exception as exc:
-        _handle_stage_failure(gold_session, run_id, started, execution_id, exc)
-        raise
-    finally:
-        gold_session.close()
+        run_id, started = _begin_stage(gold_session, "semantic", execution_id, version_id)
+        try:
+            if _is_unchanged_full_run(gold_session, version_id, workflow):
+                return _complete_skipped_stage(
+                    gold_session, run_id, started, execution_id, version_id, "semantic"
+                )
+            store = get_vector_store()
+            stats = build_dataset_semantics(gold_session, version_id, store=store)
+            results = semantic_contract(gold_session, version_id)
+            _record_results(
+                gold_session,
+                execution_id=execution_id,
+                run_id=run_id,
+                version_id=version_id,
+                stage="semantic",
+                results=results,
+            )
+            gold_session.commit()
+            assert_contract("semantic", results)
+            _finish_stage(gold_session, run_id, started, stats=stats, status="success")
+            gold_session.flush()
+            if not _version_ready(gold_session, version_id):
+                raise ContractViolation("publication", [])
+            materialize_version(gold_session, version_id, execution_id, store=store)
+            _finalize_execution(gold_session, execution_id, "success")
+            gold_session.commit()
+            publish_vector_alias(store, version_id)
+            print(f"[semantic] {stats}")
+            return stats
+        except Exception as exc:
+            _handle_stage_failure(gold_session, run_id, started, execution_id, exc)
+            raise
 
 
 def run_all(
@@ -1178,25 +1179,21 @@ def _run_review_command(args: argparse.Namespace) -> None:
             # Each workflow reviews a different object, so the context comes
             # from a different layer: rejected records live in Bronze, author
             # spellings in Silver, PDF filenames in Raw. They are opened here
-            # and closed in the `finally` below, because transform builders
-            # take sessions and never open their own.
-            context_sessions = {
-                "silver_session": get_session("silver"),
-                "bronze_session": get_session("bronze"),
-                "raw_session": get_session("raw"),
-            }
-            try:
+            # and closed when the block exits, because transform builders take
+            # sessions and never open their own. `_layer_sessions` also closes
+            # the first ones if a later open fails, which the dict literal
+            # this replaced did not.
+            with _layer_sessions("silver", "bronze", "raw") as (silver, bronze, raw):
                 count = export_assignments(
                     session,
                     workflow=args.workflow,
                     dataset_version_id=args.version_id,
                     reviewer_id=args.reviewer,
                     output_path=Path(args.output),
-                    **context_sessions,
+                    silver_session=silver,
+                    bronze_session=bronze,
+                    raw_session=raw,
                 )
-            finally:
-                for context_session in context_sessions.values():
-                    context_session.close()
             print(f"Exported {count} assignments to {args.output}.")
         elif args.review_action == "import":
             count = import_labels(
@@ -1342,9 +1339,7 @@ def _run_crossref_references(args: argparse.Namespace) -> None:
     from ingest.crossref import collect_crossref_references
 
     bootstrap()
-    gold = get_session("gold")
-    bronze = get_session("bronze")
-    try:
+    with _layer_sessions("gold", "bronze") as (gold, bronze):
         state = gold.get(PublicationState, 1)
         if state is None or not state.active_version_id:
             raise ValueError("no active dataset version")
@@ -1360,9 +1355,6 @@ def _run_crossref_references(args: argparse.Namespace) -> None:
                 f"Stopped early ({stats['stopped_early']}). Everything fetched is committed; "
                 "re-run to continue from where this run stopped."
             )
-    finally:
-        bronze.close()
-        gold.close()
 
 
 def _run_enrichment_command(args: argparse.Namespace) -> None:
@@ -1374,9 +1366,7 @@ def _run_enrichment_command(args: argparse.Namespace) -> None:
         return
     _require_openalex_identity()
     bootstrap()
-    gold_session = get_session("gold")
-    bronze_session = get_session("bronze")
-    try:
+    with _layer_sessions("gold", "bronze") as (gold_session, bronze_session):
         # The forward crawl reads Bronze only. Requiring an active Gold version
         # for it would fail with "no active dataset version", which says
         # nothing about the command the operator actually ran.
@@ -1441,9 +1431,6 @@ def _run_enrichment_command(args: argparse.Namespace) -> None:
                 f"{stats['remaining']} DOIs still unobserved. Re-run the same command to "
                 "continue; it resumes from where this run stopped."
             )
-    finally:
-        bronze_session.close()
-        gold_session.close()
 
 
 def _refresh_citation_edges(bronze_session, args: argparse.Namespace) -> dict:

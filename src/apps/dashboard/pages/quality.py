@@ -33,6 +33,7 @@ from apps.dashboard.retrieval_eval import (
 )
 from apps.dashboard.theme import (
     CATEGORICAL_PALETTE,
+    FLAG_COLORS,
     CHART_HEIGHT,
     SOURCE_COLORS,
     TREND_DOWN_COLOR,
@@ -438,6 +439,13 @@ def _pdf_selection_bias(articles_df: pd.DataFrame) -> None:
     finite["Metrics"] = finite["metric"].map(labels)
     finite["error_upper"] = finite["ci_high"] - finite["smd"]
     finite["error_lower"] = finite["smd"] - finite["ci_low"]
+    # |SMD| < 0.1 is the conventional "negligible" band. It used to be drawn
+    # as a shaded band with a zero line; the chart contract forbids guide
+    # lines, so the band is carried by the marker color, the hover and the
+    # caption instead.
+    finite["magnitude"] = finite["smd"].abs().ge(0.1).map(
+        {True: "|SMD| ≥ 0.1, not negligible", False: "|SMD| < 0.1, negligible"}
+    )
     colors = [
         TREND_DOWN_COLOR if abs(value) >= 0.1 else CATEGORICAL_PALETTE[0] for value in finite["smd"]
     ]
@@ -453,15 +461,13 @@ def _pdf_selection_bias(articles_df: pd.DataFrame) -> None:
                 "arrayminus": finite["error_lower"],
                 "visible": True,
             },
-            customdata=finite[["n_pdf", "n_no_pdf", "transform"]],
+            customdata=finite[["n_pdf", "n_no_pdf", "transform", "magnitude"]],
             hovertemplate=(
-                "<b>%{y}</b><br>SMD: %{x:.2f}<br>With PDF: %{customdata[0]} "
+                "<b>%{y}</b><br>SMD: %{x:.2f} (%{customdata[3]})<br>With PDF: %{customdata[0]} "
                 "<br>No PDF: %{customdata[1]}<br>Transformation: %{customdata[2]}<extra></extra>"
             ),
         )
     )
-    fig.add_vline(x=0, line_color=theme_tokens()["grid"], line_width=1)
-    fig.add_vrect(x0=-0.1, x1=0.1, fillcolor=CATEGORICAL_PALETTE[0], opacity=0.08, line_width=0)
     fig.update_layout(
         title="Standardized difference: articles with PDF less articles without PDF",
         xaxis_title="Standardized mean difference (95% bootstrap CI)",
@@ -470,9 +476,10 @@ def _pdf_selection_bias(articles_df: pd.DataFrame) -> None:
     )
     render_chart(
         fig,
-        caption="Positive values indicate a higher mean in the subset with PDF. "
-        "The comparison is descriptive: PDF availability depends "
-        "of the source and does not support causal interpretation.",
+        caption="Zero means no difference; positive values indicate a higher mean in the subset "
+        "with PDF. Blue points fall inside the conventional negligible band (|SMD| < 0.1); "
+        "purple points fall outside it. The comparison is descriptive: PDF availability "
+        "depends on the source and does not support causal interpretation.",
     )
 
     audit = bias[
@@ -894,7 +901,7 @@ def _bibliometric_anomalies_audit(articles_df: pd.DataFrame) -> None:
                 f"{n_anomalies / max(len(anomalies_df), 1):.1%} of the collection",
             ),
             ("🎯 Contamination", "3.0%", "Statistical threshold"),
-            ("🔍 Algoritmo", "Isolation Forest", "100 estimators/trees"),
+            ("🔍 Algorithm", "Isolation Forest", "100 estimators/trees"),
         ]
     )
 
@@ -903,7 +910,7 @@ def _bibliometric_anomalies_audit(articles_df: pd.DataFrame) -> None:
         x="year",
         y="citation_count",
         color="is_anomaly",
-        color_discrete_map={True: "#e34948", False: "#2a78d6"},
+        color_discrete_map=FLAG_COLORS,
         hover_data=["title", "venue", "anomaly_reason", "anomaly_score"],
         labels={
             "year": "Year of Publication",

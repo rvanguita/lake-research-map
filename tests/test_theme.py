@@ -10,6 +10,8 @@ dashboard's navy page. These assert the keys reach the serialized figure, where
 Streamlit looks for them.
 """
 
+import ast
+import re
 from pathlib import Path
 
 import pandas as pd
@@ -122,3 +124,60 @@ def test_polar_figure_gets_transparent_background() -> None:
     fig = go.Figure(data=go.Scatterpolar(r=[10, 20, 30], theta=["A", "B", "C"]))
     polish_figure_layout(fig)
     assert fig.layout.polar.bgcolor == CHART_PAPER_BG
+
+
+# A color written as a literal outside theme.py is a color one edit to the
+# theme cannot move. Continuous data color scales are the documented exception
+# (they color marks by value, not chrome), so only those keyword arguments are
+# exempt; docstrings are not code and are skipped too.
+_COLOR_LITERAL = re.compile(r"#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3})\b|\brgba?\(")
+_DATA_SCALE_KEYWORDS = {"color_continuous_scale", "colorscale"}
+_DASHBOARD_ROOT = Path(__file__).parents[1] / "src/apps/dashboard"
+
+
+def _color_literals(source: str) -> list[tuple[int, str]]:
+    tree = ast.parse(source)
+    exempt: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.keyword) and node.arg in _DATA_SCALE_KEYWORDS:
+            exempt.update(id(child) for child in ast.walk(node.value))
+        elif isinstance(node, ast.Dict):
+            for key, value in zip(node.keys, node.values, strict=True):
+                if isinstance(key, ast.Constant) and key.value in _DATA_SCALE_KEYWORDS:
+                    exempt.update(id(child) for child in ast.walk(value))
+        elif (
+            isinstance(node, ast.Expr)
+            and isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, str)
+        ):
+            exempt.add(id(node.value))
+    return [
+        (node.lineno, node.value)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and id(node) not in exempt
+        and _COLOR_LITERAL.search(node.value)
+    ]
+
+
+def test_color_literal_detector_flags_chrome_but_not_data_scales() -> None:
+    source = (
+        'fig.update_traces(marker={"color": "#2a78d6"})\n'
+        'px.scatter(df, color_continuous_scale=["#4a3aa7", "#eda100"])\n'
+        'go.Scatter(marker={"colorscale": ["#000000", "#ffffff"]})\n'
+        'go.Scatter(line=dict(color="rgba(255,255,255,0.4)"))\n'
+        'label = f"<span style=\'color:#888;\'>x</span>"\n'
+        'community = f"#{index + 1}"\n'
+    )
+    assert sorted(line for line, _ in _color_literals(source)) == [1, 4, 5]
+
+
+def test_dashboard_colors_come_from_theme_tokens() -> None:
+    failures = []
+    for path in sorted(_DASHBOARD_ROOT.rglob("*.py")):
+        if path.name == "theme.py":
+            continue
+        for line, value in _color_literals(path.read_text(encoding="utf-8")):
+            failures.append(f"{path.relative_to(_DASHBOARD_ROOT)}:{line}: {value[:60]!r}")
+    assert not failures, "Use a theme.py token or constant instead:\n" + "\n".join(failures)

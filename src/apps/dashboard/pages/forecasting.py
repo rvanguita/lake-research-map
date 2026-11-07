@@ -30,6 +30,7 @@ from apps.dashboard.theme import (
     SOURCE_COLORS,
     SOURCE_LABELS,
     TOTAL_COLOR,
+    TRANSPARENT,
     hex_to_rgba,
     theme_tokens,
 )
@@ -298,7 +299,7 @@ def _render_series_forecast(label: str, color: str, result: ForecastResult) -> N
             y=list(result.forecast_upper) + list(result.forecast_lower[::-1]),
             fill="toself",
             fillcolor=hex_to_rgba(TOTAL_COLOR, 0.18),
-            line=dict(color="rgba(0,0,0,0)"),
+            line=dict(color=TRANSPARENT),
             hoverinfo="skip",
             name="Confidence interval (~95%)",
             showlegend=True,

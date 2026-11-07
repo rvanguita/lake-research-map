@@ -22,6 +22,7 @@ from apps.dashboard.theme import (
     SOURCE_LABELS,
     TOTAL_COLOR,
     hex_to_rgba,
+    theme_tokens,
 )
 
 LAYER_ORDER = ("raw", "bronze", "silver", "gold")
@@ -323,7 +324,7 @@ def _sankey_funnel(funnel_df: pd.DataFrame) -> None:
                 pad=18,
                 thickness=16,
                 color=CATEGORICAL_PALETTE[0],
-                line=dict(color="rgba(255,255,255,0.15)", width=0.5),
+                line=dict(color=theme_tokens()["sankey_node_border"], width=0.5),
             ),
             link=dict(
                 source=sources,

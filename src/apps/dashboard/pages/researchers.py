@@ -42,7 +42,7 @@ from apps.dashboard.components import (
     page_header,
     render_chart,
 )
-from apps.dashboard.theme import CATEGORICAL_PALETTE, theme_tokens
+from apps.dashboard.theme import CATEGORICAL_PALETTE, hex_to_rgba, theme_tokens
 
 TOP_AUTHORS = 25
 MIN_PAPERS_FOR_NETWORK = 4
@@ -349,22 +349,14 @@ def _render_scientific_leadership_tab(articles_df: pd.DataFrame) -> None:
         st.markdown("### 🎯 h-index vs. g-index (Egghe) dispersion")
         max_val = max(auth_df["g_index"].max(), auth_df["h_index"].max()) + 2
 
-        t = theme_tokens()
-        ref_line = t.get("reference_line_subtle", "rgba(180, 180, 180, 0.6)")
-        border_color = t.get("point_border", "#FFFFFF")
+        border_color = theme_tokens()["point_border"]
 
+        # The g = h diagonal used to be drawn as a dashed reference trace; the
+        # chart contract forbids guide lines, and the distance from it is
+        # already the marker color (g - h), so it moves to the hover and caption.
         fig_hg = go.Figure()
-        fig_hg.add_trace(
-            go.Scatter(
-                x=[0, max_val],
-                y=[0, max_val],
-                mode="lines",
-                name="g = h (Uniform Production)",
-                line={"dash": "dash", "color": ref_line, "width": 1.5},
-            )
-        )
         hover_hg = [
-            f"<b>{r['author']}</b><br>• g-index: {r['g_index']}<br>• h-index: {r['h_index']}<br>• Articles: {r['papers']}<br>• Citations: {r['total_citations']:,}<br>• e-index: {r['e_index']}"
+            f"<b>{r['author']}</b><br>• g-index: {r['g_index']}<br>• h-index: {r['h_index']}<br>• g - h: {r['g_h_diff']} ({'uniform production' if r['g_h_diff'] == 0 else 'above the g = h diagonal'})<br>• Articles: {r['papers']}<br>• Citations: {r['total_citations']:,}<br>• e-index: {r['e_index']}"
             for _, r in auth_df.iterrows()
         ]
         fig_hg.add_trace(
@@ -390,8 +382,15 @@ def _render_scientific_leadership_tab(articles_df: pd.DataFrame) -> None:
             yaxis_title="g-index (Egghe) - impact with blockbusters",
             height=480,
             margin={"l": 20, "r": 20, "t": 30, "b": 30},
+            xaxis_range=[0, max_val],
+            yaxis_range=[0, max_val],
         )
-        render_chart(fig_hg)
+        render_chart(
+            fig_hg,
+            caption="g ≥ h by definition. An author with g = h (g − h = 0, the darkest color) "
+            "has uniform production; the further above that diagonal (brighter color), the "
+            "more the citations concentrate in a few highly cited articles.",
+        )
 
     with col_ebar:
         st.markdown("#### 🚀 Top 12 by citation excess (Zhang e-index)")
@@ -759,8 +758,7 @@ def _production_heatmap(author_rows: pd.DataFrame) -> None:
     pivot = scoped.groupby(["author_display", "year"]).size().unstack(fill_value=0)
     pivot = pivot.reindex(top_authors)
 
-    t = theme_tokens()
-    zero_color = t.get("heatmap_zero", "#0b1725")
+    zero_color = theme_tokens()["heatmap_zero"]
     fig = px.imshow(
         pivot,
         aspect="auto",
@@ -775,7 +773,7 @@ def _production_heatmap(author_rows: pd.DataFrame) -> None:
     render_chart(
         fig,
         caption="Rows with recent activity indicate active researchers; rows concentrated in earlier years "
-        "old ones indicate who stopped publishing in this line of research.",
+        "indicate who stopped publishing in this line of research.",
     )
 
 
@@ -1284,7 +1282,7 @@ def _coauthorship_network(author_rows: pd.DataFrame) -> None:
                     y=[y0, y1],
                     mode="lines",
                     line=dict(
-                        color="rgba(94,169,255,0.20)",
+                        color=theme_tokens()["network_edge"],
                         width=1.2,
                     ),
                     hoverinfo="skip",
@@ -1304,7 +1302,7 @@ def _coauthorship_network(author_rows: pd.DataFrame) -> None:
                     y=[y0, y1],
                     mode="lines",
                     line=dict(
-                        color="rgba(235,104,52,0.80)",
+                        color=hex_to_rgba(CATEGORICAL_PALETTE[1], 0.80),
                         width=2.5 + 4 * (w / max_w),
                     ),
                     hoverinfo="skip",
@@ -1324,9 +1322,9 @@ def _coauthorship_network(author_rows: pd.DataFrame) -> None:
                 mode="markers",
                 marker=dict(
                     size=7,
-                    color="#eb6834",
+                    color=CATEGORICAL_PALETTE[1],
                     symbol="diamond",
-                    line=dict(width=1, color="white"),
+                    line=dict(width=1, color=theme_tokens()["point_border"]),
                 ),
                 customdata=recurrent_custom,
                 hovertemplate=(
@@ -1372,7 +1370,7 @@ def _coauthorship_network(author_rows: pd.DataFrame) -> None:
             marker=dict(
                 size=[10 + 4 * degree[a] for a in nodes],
                 color=node_colors,
-                line=dict(width=1.5, color="rgba(255,255,255,0.4)"),
+                line=dict(width=1.5, color=theme_tokens()["marker_outline"]),
             ),
             customdata=customdata,
             hovertemplate=(

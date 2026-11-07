@@ -41,8 +41,10 @@ from apps.dashboard.qualis import (
 )
 from apps.dashboard.theme import (
     CATEGORICAL_PALETTE,
+    FLAG_COLORS,
     TREND_DOWN_COLOR,
     TREND_UP_COLOR,
+    theme_tokens,
     venue_color_map,
 )
 
@@ -347,39 +349,39 @@ def _zipf_analysis(articles_df: pd.DataFrame) -> None:
 
     plot_df = pd.DataFrame(
         {
-            "posto": zipf_res["ranks"],
-            "frequencia": zipf_res["frequencies"],
-            "ajuste": zipf_res["expected_zipf"],
-            "termo": zipf_res["words"],
+            "rank": zipf_res["ranks"],
+            "frequency": zipf_res["frequencies"],
+            "fit": zipf_res["expected_zipf"],
+            "term": zipf_res["words"],
         }
     )
 
     fig = go.Figure()
     fig.add_trace(
         go.Scatter(
-            x=plot_df["posto"],
-            y=plot_df["frequencia"],
+            x=plot_df["rank"],
+            y=plot_df["frequency"],
             mode="markers",
-            name="Real Frequency",
-            text=plot_df["termo"],
-            marker=dict(size=6, color="#2a78d6", opacity=0.7),
-            hovertemplate="<b>%{text}</b><br>Post: %{x}<br>Frequence: %{y:,}<extra></extra>",
+            name="Observed frequency",
+            text=plot_df["term"],
+            marker=dict(size=6, color=CATEGORICAL_PALETTE[0], opacity=0.7),
+            hovertemplate="<b>%{text}</b><br>Rank: %{x}<br>Frequency: %{y:,}<extra></extra>",
         )
     )
     fig.add_trace(
         go.Scatter(
-            x=plot_df["posto"],
-            y=plot_df["ajuste"],
+            x=plot_df["rank"],
+            y=plot_df["fit"],
             mode="lines",
             name=f"Zipf regression (γ = {zipf_res['gamma']:.2f})",
-            line=dict(color="#eb6834", width=2.5, dash="dash"),
+            line=dict(color=CATEGORICAL_PALETTE[1], width=2.5, dash="dash"),
             hoverinfo="skip",
         )
     )
     fig.update_layout(
         xaxis=dict(type="log", title="Term rank (log r)"),
-        yaxis=dict(type="log", title="Frequency of Occurrence (log f)"),
-        title="Vocabulary Post-Frequence Distribution (Log-Log Scale)",
+        yaxis=dict(type="log", title="Frequency of occurrence (log f)"),
+        title="Vocabulary rank-frequency distribution (log-log scale)",
         height=480,
     )
     render_chart(
@@ -639,8 +641,8 @@ def _first_appearance(kw_year: pd.DataFrame) -> None:
         },
     )
     fig.update_traces(
-        marker=dict(size=10, line=dict(width=1, color="rgba(255,255,255,0.4)")),
-        hovertemplate="<b>%{hovertext}</b><br>1a mention: %{x}<br>%{y:,} total mentions<extra></extra>",
+        marker=dict(size=10, line=dict(width=1, color=theme_tokens()["marker_outline"])),
+        hovertemplate="<b>%{hovertext}</b><br>First mention: %{x}<br>%{y:,} total mentions<extra></extra>",
     )
     fig.update_layout(coloraxis_showscale=False)
 
@@ -654,7 +656,7 @@ def _first_appearance(kw_year: pd.DataFrame) -> None:
             text=row["keyword"],
             showarrow=True,
             arrowhead=0,
-            arrowcolor="rgba(148,163,184,0.5)",
+            arrowcolor=theme_tokens()["annotation_arrow"],
             ax=0,
             ay=-22 if idx % 2 == 0 else 22,
             font=dict(size=10),
@@ -1078,7 +1080,7 @@ def _conceptual_atypicality_tab(articles_df: pd.DataFrame) -> None:
         y="min_z",
         color="is_hit",
         hover_data=["title", "citations", "year"],
-        color_discrete_map={True: "#e34948", False: "#2a78d6"},
+        color_discrete_map=FLAG_COLORS,
         labels={
             "median_z": "Conventionality (median Z)",
             "min_z": "Atypicality (Minimum Z)",
@@ -1137,28 +1139,29 @@ def _structural_breaks_tab(articles_df: pd.DataFrame) -> None:
     years = valid_counts.index.to_numpy()
     vals = valid_counts.to_numpy()
 
+    # The two regime means used to be drawn as dashed horizontal traces over
+    # the bars; the chart contract forbids guide lines, so each bar takes its
+    # regime's color instead, and the means move to the legend, the hover and
+    # the caption. `break_year` is the first year of the second regime.
+    pre = years < break_yr
+    regimes = (
+        (pre, "Regime 1", f"before {break_yr}", res["pre_mean"]),
+        (~pre, "Regime 2", f"{break_yr} on", res["post_mean"]),
+    )
     fig = go.Figure()
-    fig.add_trace(go.Bar(x=years, y=vals, name="Publications / Year", marker_color="#2a78d6"))
-    # Pre-break mean
-    fig.add_trace(
-        go.Scatter(
-            x=[years[0], break_yr],
-            y=[res["pre_mean"], res["pre_mean"]],
-            mode="lines",
-            name=f"Regime 1 ({res['pre_mean']:.1f}/year)",
-            line=dict(color="#f39c12", width=3, dash="dash"),
+    for slot, (in_regime, regime, span, mean) in enumerate(regimes):
+        fig.add_trace(
+            go.Bar(
+                x=years[in_regime],
+                y=vals[in_regime],
+                name=f"{regime} ({span}; mean {mean:.1f}/year)",
+                marker_color=CATEGORICAL_PALETTE[slot],
+                hovertemplate=(
+                    f"Year %{{x}}<br>%{{y:,}} articles<br>{regime} mean: {mean:.1f}/year"
+                    "<extra></extra>"
+                ),
+            )
         )
-    )
-    # Post-break mean
-    fig.add_trace(
-        go.Scatter(
-            x=[break_yr, years[-1]],
-            y=[res["post_mean"], res["post_mean"]],
-            mode="lines",
-            name=f"Regime 2 ({res['post_mean']:.1f}/year)",
-            line=dict(color="#27ae60", width=3, dash="dash"),
-        )
-    )
     fig.update_layout(
         title=f"Structural break in the publication time series (break year: {break_yr})",
         xaxis_title="Year",
@@ -1166,5 +1169,8 @@ def _structural_breaks_tab(articles_df: pd.DataFrame) -> None:
     )
     render_chart(
         fig,
-        caption=f"The regime transition in {break_yr} reflects accelerated scientific production in the field.",
+        caption=f"Bars are colored by regime: before {break_yr} the mean was "
+        f"{res['pre_mean']:.1f} articles/year, from {break_yr} on {res['post_mean']:.1f}. "
+        f"The regime transition in {break_yr} reflects accelerated scientific production "
+        "in the field.",
     )

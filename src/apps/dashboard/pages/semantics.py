@@ -380,29 +380,39 @@ def _legacy_relevance_screening(scored: pd.DataFrame) -> None:
         ]
     )
 
+    # The percentile cut used to be a dashed vertical line; the chart contract
+    # forbids guide lines, so the bars on either side of it take their own
+    # color and the cut value moves to the legend and the caption. px shares
+    # one set of bins across the color groups, so the split stays aligned.
+    below_label = f"Below percentile {LOW_RELEVANCE_PERCENTILE} (< {threshold:.3f})"
+    above_label = f"At or above percentile {LOW_RELEVANCE_PERCENTILE}"
+    histogram_df = scored.assign(
+        screening=np.where(scored["relevance_score"] < threshold, below_label, above_label)
+    )
     fig = px.histogram(
-        scored,
+        histogram_df,
         x="relevance_score",
+        color="screening",
         nbins=60,
         title="How close to the theme of the review is each article",
-        labels={"relevance_score": "Relevance score (cosine)", "count": "Articles"},
-        color_discrete_sequence=[CATEGORICAL_PALETTE[0]],
-    )
-    fig.add_vline(
-        x=threshold,
-        line_dash="dash",
-        line_color=TREND_DOWN_COLOR,
-        annotation_text=f"percentile {LOW_RELEVANCE_PERCENTILE}",
+        labels={
+            "relevance_score": "Relevance score (cosine)",
+            "count": "Articles",
+            "screening": "Percentile cut",
+        },
+        category_orders={"screening": [below_label, above_label]},
+        color_discrete_map={below_label: TREND_DOWN_COLOR, above_label: CATEGORICAL_PALETTE[0]},
     )
     fig.update_layout(
         xaxis_title="Relevance score (1.0 = identical to the theme anchor)",
         yaxis_title="Number of articles",
-        showlegend=False,
     )
     render_chart(
         fig,
         caption="The score is the cosine between the abstract and an anchor text describing "
-        "the scope of the review. The left tail concentrates the search's false positives.",
+        "the scope of the review. The left tail concentrates the search's false positives; "
+        f"bars below the percentile-{LOW_RELEVANCE_PERCENTILE} cut ({threshold:.3f}) are "
+        "colored separately.",
     )
 
     st.divider()
@@ -593,7 +603,10 @@ def _semantic_map(scored: pd.DataFrame) -> None:
 
     # Dynamic title for the categorical legend.
     if choice == "Theme":
-        legend_title_text = "<b>Research theme</b><br><span style='font-size:10px; color:#888;'>Topic clustering</span>"
+        legend_title_text = (
+            "<b>Research theme</b><br><span style='font-size:10px; "
+            f"color:{theme_tokens()['muted']};'>Topic clustering</span>"
+        )
     elif choice == "Source":
         legend_title_text = "<b>Indexing source</b>"
     else:
@@ -826,25 +839,34 @@ def _semantic_novelty_panel(scored: pd.DataFrame) -> None:
         ]
     )
 
+    # The P90 cut used to be a dashed vertical line; the chart contract forbids
+    # guide lines, so it lives in the metric card above, the hover and the caption.
+    merged = merged.assign(
+        isolation_band=np.where(
+            merged["novelty_score"] >= p90, "Top 10% most isolated (≥ P90)", "Below P90"
+        )
+    )
     fig = px.scatter(
         merged,
         x="novelty_score",
         y="relevance_score" if "relevance_score" in merged.columns else "novelty_score",
         color="theme_label" if "theme_label" in merged.columns else None,
-        hover_data=["title", "year", "venue"],
+        hover_data=["title", "year", "venue", "isolation_band"],
         labels={
             "novelty_score": "Semantic isolation (k-NN distance)",
             "relevance_score": "Thematic Relevance",
             "theme_label": "Theme",
+            "isolation_band": "Isolation band",
         },
         color_discrete_sequence=CATEGORICAL_PALETTE,
         title="Semantic isolation and relevance in the corpus",
     )
-    fig.add_vline(x=p90, line_dash="dash", line_color="#eb6834", annotation_text="P90")
     fig.update_layout(height=480)
     render_chart(
         fig,
-        caption="Points on the right are more distant from their semantic neighbors and deserve inspection.",
+        caption="Points on the right are more distant from their semantic neighbors and deserve "
+        f"inspection; those at or beyond the P90 threshold ({p90:.3f}) are the 10% most "
+        "isolated (see the hover).",
     )
 
     st.markdown("#### Semantically more isolated articles")
