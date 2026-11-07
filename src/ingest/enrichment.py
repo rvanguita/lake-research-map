@@ -3,18 +3,18 @@ these numbers for on its own (Elsevier bib entries carry neither field).
 
 `data/enrichment_cache.json` is a hand-maintained `{doi: {citation_count,
 reference_count}}` cache (not produced by any code in this repo -- it was
-built out-of-band). Without this module, re-running `--stage bronze` wipes
-every citation/reference count the cache supplied, because
+built out-of-band). Bronze is a delete-and-rebuild from Raw
+(`transform/bronze_articles.py::build_bronze_articles`), and
 `_build_elsevier_records` writes `citation_count=None`/`reference_count=None`
-literally and `_upsert` overwrites field by field. This module makes that
-backfill a first-class, idempotent step of the bronze build instead of a
-one-off manual patch.
+literally, so every bronze run starts with no Elsevier counts at all. This
+module makes the backfill a first-class, idempotent step of that build
+(`_enrich_citation_counts`, run after the rebuild, filling only nulls) instead
+of a one-off manual patch that the next run would erase.
 """
 
 from __future__ import annotations
 
 import json
-import re
 from datetime import datetime
 from pathlib import Path
 
@@ -23,21 +23,9 @@ from sqlalchemy.orm import Session
 
 from config import DATA_DIR
 from db.bronze_models import EnrichmentObservation
+from ingest.doi import normalize_doi
 
 ENRICHMENT_CACHE_PATH = DATA_DIR / "enrichment_cache.json"
-
-
-def _normalize_doi(doi: str | None) -> str | None:
-    """Same normalization as transform.bronze_articles.normalize_doi.
-
-    Duplicated (rather than imported) to avoid a circular import --
-    bronze_articles imports this module to run the enrichment step.
-    """
-    if not doi:
-        return None
-    doi = doi.strip()
-    doi = re.sub(r"^https?://(dx\.)?doi\.org/", "", doi, flags=re.IGNORECASE)
-    return doi.strip().casefold() or None
 
 
 def load_enrichment_cache(path: Path | None = None) -> dict[str, dict[str, int | None]]:
@@ -58,7 +46,7 @@ def load_enrichment_cache(path: Path | None = None) -> dict[str, dict[str, int |
 
     normalized: dict[str, dict[str, int | None]] = {}
     for doi, values in raw.items():
-        key = _normalize_doi(doi)
+        key = normalize_doi(doi)
         if not key or not isinstance(values, dict):
             continue
         normalized[key] = {

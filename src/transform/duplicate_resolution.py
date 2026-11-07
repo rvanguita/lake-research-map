@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from db.gold_models import DuplicateOverride, DuplicatePair
 from db.silver_models import Article as SilverArticle
-from transform.bronze_articles import normalize_doi
+from ingest.doi import normalize_doi
 
 DECISIONS = {"merge", "keep"}
 

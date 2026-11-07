@@ -63,6 +63,10 @@ loaders.citation_observation_context = lambda: (2026, "test fixture")
 loaders.semantics = lambda: pd.DataFrame()
 loaders.with_semantics = lambda frame: frame
 loaders.all_venue_qualis_map = lambda: pd.DataFrame({"venue": [], "estrato": []})
+# Without this stub `qualis_available` parses the real CAPES workbook when one
+# is on disk (and not in the container), so the Production page would render a
+# different Qualis path depending on the machine.
+loaders.qualis_available = lambda: True
 
 author_rows = pd.DataFrame({
     "doi": [f"10.1000/{i}" for i in range(n)],

@@ -2,7 +2,7 @@
 held-out year plus rolling-origin cross-validation, then used to project two
 years ahead.
 
-Pure pandas/sklearn -- no `streamlit` import, mirroring `analytics.py` -- so
+Pure pandas/sklearn -- no `streamlit` import, mirroring the `analytics` package -- so
 the modeling logic can be reasoned about (and unit-tested) independently of
 the page that renders it.
 
@@ -23,6 +23,8 @@ from datetime import UTC, datetime
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LinearRegression
+
+from apps.dashboard.analytics.counts import valid_years
 
 logger = logging.getLogger(__name__)
 
@@ -545,4 +547,276 @@ def fit_bass_diffusion(
         "q": 0.38,
         "t_peak": None,
         "method": "fallback",
+    }
+
+
+# --- Keyword bursts and structural breaks in the yearly series -------------
+
+
+def technological_burst_detection(
+    df: pd.DataFrame,
+    top_n: int = 15,
+    *,
+    state_multiplier: float = 2.0,
+    transition_penalty: float = 1.0,
+) -> dict:
+    """Detect two-state Kleinberg bursts in yearly concept frequencies.
+
+    The observation at each year is the number of matching documents out of
+    all documents published that year. Dynamic programming chooses between a
+    baseline binomial state and a burst state with ``state_multiplier`` times
+    the baseline probability. Moving into the burst state incurs Kleinberg's
+    transition penalty; contiguous burst-state years become intervals.
+    """
+    if df.empty or "year" not in df.columns:
+        return {
+            "burst_timeline": pd.DataFrame(),
+            "active_frontiers": pd.DataFrame(),
+            "total_bursts": 0,
+        }
+
+    res = df.copy()
+    res["pub_year"] = valid_years(res, lo=2000)
+    res = res.dropna(subset=["pub_year"])
+    if res.empty:
+        return {
+            "burst_timeline": pd.DataFrame(),
+            "active_frontiers": pd.DataFrame(),
+            "total_bursts": 0,
+        }
+
+    text_corpus = (
+        res["title"].fillna("")
+        + " "
+        + res.get("abstract", pd.Series("", index=res.index)).fillna("")
+    ).str.lower()
+
+    frontiers_map = {
+        "Vehicle-to-Grid & EVs": r"\b(?:v2g|vehicle[- ]to[- ]grid|electric vehicles?|ev charging)\b",
+        "Deep Learning & RL": r"\b(?:deep learning|reinforcement learning|neural networks?|transformer)\b",
+        "Battery Storage (BESS)": r"\b(?:battery storage|bess|lithium[- ]ion|energy storage systems?)\b",
+        "Hosting Capacity": r"\b(?:hosting capacity|solar pv integration|der integration)\b",
+        "Resilience & Extreme Events": r"\b(?:resilience|extreme weather|blackout|natural disasters?)\b",
+        "Second-Order Cone (SOCP)": r"\b(?:socp|second[- ]order cone|convex relaxation)\b",
+        "Microgrids & Islanding": r"\b(?:microgrids?|islanding|autonomous operation)\b",
+        "Active Distribution (ADN)": r"\b(?:active distribution|adn|distribution management system)\b",
+        "Peer-to-Peer Energy (P2P)": r"\b(?:p2p|peer[- ]to[- ]peer|transactive energy|blockchain)\b",
+        "Digital Twin & IoT": r"\b(?:digital twin|iot|smart meters?|pmu|edge computing)\b",
+        "Robust Optimization": r"\b(?:robust optimization|two[- ]stage robust|box uncertainty)\b",
+        "Soft Open Points (SOP)": r"\b(?:soft open points?|sop|power electronic devices?)\b",
+    }
+
+    all_years = np.arange(int(res["pub_year"].min()), int(res["pub_year"].max()) + 1)
+    totals = res["pub_year"].astype(int).value_counts().reindex(all_years, fill_value=0).to_numpy()
+    burst_rows = []
+
+    def _binomial_cost(successes: int, trials: int, probability: float) -> float:
+        if trials <= 0:
+            return 0.0
+        probability = float(np.clip(probability, 1e-9, 1 - 1e-9))
+        return -(successes * np.log(probability) + (trials - successes) * np.log1p(-probability))
+
+    def _states(counts: np.ndarray) -> tuple[np.ndarray, float, float]:
+        total_trials = int(totals.sum())
+        baseline = float(counts.sum() / total_trials) if total_trials else 0.0
+        elevated = min(max(baseline * state_multiplier, baseline + 1e-9), 1 - 1e-9)
+        costs = np.full((len(all_years), 2), np.inf)
+        previous = np.zeros((len(all_years), 2), dtype=int)
+        entry_cost = transition_penalty * np.log(max(total_trials, 2))
+        costs[0, 0] = _binomial_cost(int(counts[0]), int(totals[0]), baseline)
+        costs[0, 1] = entry_cost + _binomial_cost(int(counts[0]), int(totals[0]), elevated)
+        for index in range(1, len(all_years)):
+            for state in (0, 1):
+                candidates = costs[index - 1].copy()
+                if state == 1:
+                    candidates[0] += entry_cost
+                source_state = int(np.argmin(candidates))
+                previous[index, state] = source_state
+                probability = elevated if state else baseline
+                costs[index, state] = candidates[source_state] + _binomial_cost(
+                    int(counts[index]), int(totals[index]), probability
+                )
+        states = np.zeros(len(all_years), dtype=int)
+        states[-1] = int(np.argmin(costs[-1]))
+        for index in range(len(all_years) - 1, 0, -1):
+            states[index - 1] = previous[index, states[index]]
+        return states, baseline, elevated
+
+    for label, pattern in frontiers_map.items():
+        matched = text_corpus.str.contains(pattern, regex=True)
+        if matched.sum() < 6:
+            continue
+
+        matched_years = res.loc[matched, "pub_year"].astype(int)
+        counts = matched_years.value_counts().reindex(all_years, fill_value=0).to_numpy()
+        states, baseline, elevated = _states(counts)
+        index = 0
+        while index < len(states):
+            if states[index] == 0:
+                index += 1
+                continue
+            end_index = index
+            while end_index + 1 < len(states) and states[end_index + 1] == 1:
+                end_index += 1
+            segment = slice(index, end_index + 1)
+            interval_counts = counts[segment]
+            interval_totals = totals[segment]
+            strength = sum(
+                _binomial_cost(int(k), int(n), baseline) - _binomial_cost(int(k), int(n), elevated)
+                for k, n in zip(interval_counts, interval_totals, strict=True)
+            )
+            peak_index = index + int(np.argmax(interval_counts))
+            is_active = end_index == len(states) - 1
+            burst_rows.append(
+                {
+                    "Technology / Concept": label,
+                    "Burst's Beginning": int(all_years[index]),
+                    "Peak year": int(all_years[peak_index]),
+                    "Burst end": int(all_years[end_index]),
+                    "Duration (Years)": int(end_index - index + 1),
+                    "Intensity": round(float(max(strength, 0.0)), 2),
+                    "Status": "Active" if is_active else "Ended",
+                    "Articles": int(interval_counts.sum()),
+                }
+            )
+            index = end_index + 1
+
+    burst_df = pd.DataFrame(burst_rows)
+    if not burst_df.empty:
+        burst_df = burst_df.sort_values("Intensity", ascending=False).head(top_n)
+        active_df = burst_df[burst_df["Status"] == "Active"].copy()
+    else:
+        active_df = pd.DataFrame()
+
+    return {
+        "burst_timeline": burst_df,
+        "active_frontiers": active_df,
+        "total_bursts": len(burst_df),
+    }
+
+
+def _max_f_over_breakpoints(values: np.ndarray) -> tuple[float, int | None]:
+    """Largest mean-shift F statistic over every admissible breakpoint.
+
+    Returns ``(f_stat, k)``; ``k`` is None when no split improves on the
+    pooled mean.
+    """
+    total = len(values)
+    tss = float(np.sum((values - np.mean(values)) ** 2))
+    best_rss = float("inf")
+    best_k = None
+    for k in range(2, total - 2):
+        pre, post = values[:k], values[k:]
+        rss = float(np.sum((pre - np.mean(pre)) ** 2) + np.sum((post - np.mean(post)) ** 2))
+        if rss < best_rss:
+            best_rss, best_k = rss, k
+    if best_k is None or best_rss <= 0 or tss <= best_rss:
+        return 0.0, None
+    df2 = total - 2
+    return float(((tss - best_rss) / 1) / (best_rss / df2)), best_k
+
+
+def detect_structural_breaks(
+    series: pd.Series | np.ndarray, *, n_bootstrap: int = 200, seed: int = 42
+) -> dict:
+    """Detect structural breaks / changepoints in time series using Chow test and SSE minimization.
+
+    Identifies historical regime shifts (inflection points) where the underlying mean
+    or momentum fundamentally changed.
+
+    The breakpoint is *searched*, so the F statistic is a maximum over every
+    admissible split and its null distribution is not F: read against the F
+    table, a pure-noise series looks significant far too often. The reported
+    `p_value` is therefore an empirical one from permuting the series under a
+    no-break null; `p_value_naive` keeps the old F-table value so the
+    difference stays visible rather than silently changing.
+    """
+    from scipy import stats
+
+    if isinstance(series, pd.Series):
+        years = series.index.to_numpy()
+        values = series.to_numpy(dtype=float)
+    else:
+        values = np.asarray(series, dtype=float)
+        years = np.arange(len(values))
+
+    valid_mask = np.isfinite(values)
+    values = values[valid_mask]
+    years = years[valid_mask]
+    T = len(values)
+
+    if T < 6:
+        return {
+            "has_break": False,
+            "break_index": None,
+            "break_year": None,
+            "f_stat": 0.0,
+            "p_value": 1.0,
+            "p_value_naive": 1.0,
+            "p_value_resolution": 1.0,
+            "bootstrap_samples": 0,
+            "pre_mean": float(np.mean(values)) if T > 0 else 0.0,
+            "post_mean": float(np.mean(values)) if T > 0 else 0.0,
+            "relative_jump_pct": 0.0,
+        }
+
+    f_stat, best_k = _max_f_over_breakpoints(values)
+
+    if best_k is None:
+        return {
+            "has_break": False,
+            "break_index": None,
+            "break_year": None,
+            "f_stat": 0.0,
+            "p_value": 1.0,
+            "p_value_naive": 1.0,
+            "p_value_resolution": 1.0,
+            "bootstrap_samples": 0,
+            "pre_mean": float(np.mean(values)),
+            "post_mean": float(np.mean(values)),
+            "relative_jump_pct": 0.0,
+        }
+
+    # The F-table value, kept only for comparison: it assumes the breakpoint
+    # was fixed in advance, which it was not.
+    p_value_naive = float(stats.f.sf(f_stat, 1, T - 2))
+
+    # Permuting the series destroys any ordering, so each replicate is drawn
+    # from a no-break null while keeping the observed values and their spread.
+    # The share of replicates whose own searched maximum reaches the observed
+    # one is the p-value the search actually earns.
+    rng = np.random.default_rng(seed)
+    exceedances = 0
+    draws = 0
+    for _ in range(max(1, n_bootstrap)):
+        null_f, null_k = _max_f_over_breakpoints(rng.permutation(values))
+        if null_k is None:
+            null_f = 0.0
+        draws += 1
+        if null_f >= f_stat:
+            exceedances += 1
+    p_value = float((1 + exceedances) / (draws + 1))
+    # An empirical p-value cannot resolve below 1/(draws+1); reporting the
+    # floor stops a reader treating "0.005" as a precise small number rather
+    # than "as small as this many replicates can show".
+    p_value_resolution = float(1.0 / (draws + 1))
+
+    pre_mean = float(np.mean(values[:best_k]))
+    post_mean = float(np.mean(values[best_k:]))
+    jump = float(((post_mean - pre_mean) / max(0.1, pre_mean)) * 100)
+
+    break_year = int(years[best_k]) if len(years) > best_k else best_k
+
+    return {
+        "has_break": bool(p_value < 0.05),
+        "break_index": best_k,
+        "break_year": break_year,
+        "f_stat": round(f_stat, 2),
+        "p_value": round(p_value, 4),
+        "p_value_naive": round(p_value_naive, 4),
+        "p_value_resolution": round(p_value_resolution, 5),
+        "bootstrap_samples": draws,
+        "pre_mean": round(pre_mean, 2),
+        "post_mean": round(post_mean, 2),
+        "relative_jump_pct": round(jump, 1),
     }

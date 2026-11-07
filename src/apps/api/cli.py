@@ -1,7 +1,7 @@
 """`lake-research-map search | screen | mcp`.
 
 All three only read: none takes the pipeline lock, so a long-running MCP
-server never blocks a pipeline run (`pipeline._mutates_published_inputs`).
+server never blocks a pipeline run (`cli.main._mutates_published_inputs`).
 With `--json`, stdout carries exactly one JSON document and nothing else --
 logs go to stderr -- so the output can be piped into another program.
 """

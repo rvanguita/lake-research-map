@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 
 from apps.dashboard import data, loaders
-from apps.dashboard.analytics import metadata_coverage_matrix, pdf_selection_bias
+from apps.dashboard.analytics.counts import metadata_coverage_matrix, pdf_selection_bias
 
 
 def _gold_frame() -> pd.DataFrame:

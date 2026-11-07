@@ -16,7 +16,7 @@ import pandas as pd
 from sklearn.metrics import cohen_kappa_score
 from sklearn.model_selection import train_test_split
 
-from transform.bronze_articles import normalize_doi
+from ingest.doi import normalize_doi
 
 STRATA = (
     "out_of_scope_deep",
@@ -46,7 +46,7 @@ LABEL_ALIASES = {
 }
 
 
-def _normalize_doi_value(value: object) -> str | None:
+def _doi_key(value: object) -> str | None:
     if pd.isna(value):
         return None
     return normalize_doi(str(value))
@@ -81,7 +81,7 @@ def generate_stratified_screening_sample(
         return _empty_sample()
 
     valid = scored_df.dropna(subset=["relevance_margin", "doi"]).copy()
-    valid["doi"] = valid["doi"].map(_normalize_doi_value)
+    valid["doi"] = valid["doi"].map(_doi_key)
     valid = valid.dropna(subset=["doi"]).drop_duplicates("doi")
     if valid.empty:
         return _empty_sample()
@@ -164,7 +164,7 @@ def validate_review_labels(
         return pd.DataFrame(), issue
 
     normalized = labels.copy()
-    normalized["doi"] = normalized["doi"].map(_normalize_doi_value)
+    normalized["doi"] = normalized["doi"].map(_doi_key)
     normalized["reviewer"] = (
         normalized.get("reviewer", pd.Series("reviewer_1", index=normalized.index))
         .fillna("reviewer_1")
@@ -206,7 +206,7 @@ def validate_review_labels(
 
     normalized = normalized.loc[~invalid_doi & ~invalid_label].copy()
     if known_dois is not None:
-        known = {doi for value in known_dois if (doi := _normalize_doi_value(value))}
+        known = {doi for value in known_dois if (doi := _doi_key(value))}
         unknown = ~normalized["doi"].isin(known)
         for doi in normalized.loc[unknown, "doi"].drop_duplicates():
             issues.append(
@@ -436,7 +436,7 @@ def calibrate_screening_threshold(
         return result
     labels = resolved_labels[resolved_labels["resolved"]].copy()
     scores = scored_df[["doi", "relevance_margin"]].copy()
-    scores["doi"] = scores["doi"].map(_normalize_doi_value)
+    scores["doi"] = scores["doi"].map(_doi_key)
     joined = labels.merge(scores, on="doi", how="inner").dropna(
         subset=["y_true", "relevance_margin"]
     )

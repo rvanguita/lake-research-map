@@ -12,10 +12,10 @@ from datetime import UTC, datetime
 from db.bronze_models import CitationEdge
 from ingest.openalex import (
     CITING_PAGE_SIZE,
-    citation_graph_coverage,
     fetch_openalex_citing_works,
     persist_incoming_edges,
 )
+from ingest.openalex_audits import citation_graph_coverage
 
 OBSERVED_AT = datetime(2026, 9, 22, tzinfo=UTC).replace(tzinfo=None)
 

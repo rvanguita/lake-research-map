@@ -6,9 +6,11 @@ import pathlib
 
 import pandas as pd
 
-from apps.dashboard.analytics import (
+from apps.dashboard.analytics.authors import (
     author_impact_advanced_indices,
     author_m_quotient_analysis,
+)
+from transform.taxonomy import (
     benchmark_feeders_analysis,
     computational_solvers_analysis,
     mathematical_complexity_spectrum,
@@ -256,7 +258,7 @@ def test_taxonomy_coverage_reports_what_the_chart_leaves_out():
     """
     import pandas as pd
 
-    from apps.dashboard.analytics import TAXONOMY_REGISTRY, taxonomy_coverage
+    from transform.taxonomy import TAXONOMY_REGISTRY, taxonomy_coverage
 
     frame = pd.DataFrame(
         {
@@ -288,7 +290,7 @@ def test_every_displayed_taxonomy_is_in_the_registry():
     """`WP-12` says *each* displayed taxonomy discloses coverage. The registry is
     what makes "each" enumerable rather than a promise, so it must stay in step
     with the page that renders them."""
-    from apps.dashboard.analytics import TAXONOMY_REGISTRY
+    from transform.taxonomy import TAXONOMY_REGISTRY
 
     assert set(TAXONOMY_REGISTRY) == {
         "Optimization methods",
@@ -312,10 +314,7 @@ def test_precision_scores_only_decided_labels():
     """
     import pandas as pd
 
-    from apps.dashboard.analytics import (
-        TAXONOMY_REGISTRY,
-        taxonomy_precision_from_labels,
-    )
+    from transform.taxonomy import TAXONOMY_REGISTRY, taxonomy_precision_from_labels
 
     frame = pd.DataFrame(
         {

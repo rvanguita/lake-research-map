@@ -260,7 +260,7 @@ def test_the_calibrate_command_prints_both_digests_and_applies_nothing(
     """Exercise the CLI handler itself, not only the functions beneath it."""
     import argparse
 
-    import pipeline as pipeline_module
+    from cli import reviews as cli_reviews
     from db.gold_models import DatasetSemantics
 
     subjects = [f"10.1000/{index:03d}" for index in range(60)]
@@ -284,7 +284,7 @@ def test_the_calibrate_command_prints_both_digests_and_applies_nothing(
 
     output = tmp_path / "calibration.json"
     args = argparse.Namespace(version_id=VERSION, min_recall=0.98, output_json=str(output))
-    pipeline_module._print_screening_calibration(gold_session, args)
+    cli_reviews._print_screening_calibration(gold_session, args)
 
     printed = capsys.readouterr().out
     assert "Label set SHA-256:" in printed
@@ -306,7 +306,7 @@ def test_calibrate_refuses_a_version_that_has_no_contrastive_margin(gold_session
 
     import pytest
 
-    import pipeline as pipeline_module
+    from cli import reviews as cli_reviews
     from db.gold_models import DatasetSemantics
 
     _round(gold_session, subjects=["10.1000/a"])
@@ -327,4 +327,4 @@ def test_calibrate_refuses_a_version_that_has_no_contrastive_margin(gold_session
 
     args = argparse.Namespace(version_id=VERSION, min_recall=0.98, output_json=None)
     with pytest.raises(ValueError, match="contrastive margin"):
-        pipeline_module._print_screening_calibration(gold_session, args)
+        cli_reviews._print_screening_calibration(gold_session, args)

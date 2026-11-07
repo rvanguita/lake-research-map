@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 
 import pipeline
+import runs
 
 
 class _FakeSession:
@@ -41,7 +42,7 @@ def handed_out(monkeypatch):
         sessions.append(session)
         return session
 
-    monkeypatch.setattr(pipeline, "get_session", fake_get_session)
+    monkeypatch.setattr(runs, "get_session", fake_get_session)
     monkeypatch.setattr(
         pipeline,
         "_prepare_raw_version",
@@ -105,10 +106,10 @@ def test_a_failed_open_closes_the_sessions_opened_before_it(monkeypatch):
         sessions.append(session)
         return session
 
-    monkeypatch.setattr(pipeline, "get_session", fake_get_session)
+    monkeypatch.setattr(runs, "get_session", fake_get_session)
 
     with pytest.raises(_Boom):
-        with pipeline._layer_sessions("gold", "raw", "bronze"):
+        with runs._layer_sessions("gold", "raw", "bronze"):
             raise AssertionError("the block must not run when an open fails")
 
     assert [session.layer for session in sessions] == ["gold", "raw"]
@@ -116,9 +117,9 @@ def test_a_failed_open_closes_the_sessions_opened_before_it(monkeypatch):
 
 
 def test_layer_sessions_yields_in_order_and_closes_on_success(monkeypatch):
-    monkeypatch.setattr(pipeline, "get_session", _FakeSession)
+    monkeypatch.setattr(runs, "get_session", _FakeSession)
 
-    with pipeline._layer_sessions("gold", "silver") as (gold, silver):
+    with runs._layer_sessions("gold", "silver") as (gold, silver):
         assert (gold.layer, silver.layer) == ("gold", "silver")
         assert not gold.closed and not silver.closed
 

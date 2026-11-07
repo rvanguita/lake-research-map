@@ -12,8 +12,8 @@ import argparse
 
 import pytest
 
+from cli.enrichment import _require_openalex_identity
 from ingest.openalex import DEFAULT_USER_AGENT, _user_agent
-from pipeline import _require_openalex_identity
 
 
 def test_a_contact_address_alone_is_enough(monkeypatch):
@@ -50,7 +50,7 @@ def test_the_user_agent_carries_a_real_address_or_none_at_all(monkeypatch):
 
 
 def test_the_citation_crawl_refuses_a_bronze_layer_with_nothing_to_crawl(bronze_session):
-    from pipeline import _refresh_citation_edges
+    from cli.enrichment import _refresh_citation_edges
 
     args = argparse.Namespace(max_works=10, delay=0.0, max_pages=1)
     with pytest.raises(ValueError, match="refresh-openalex"):
@@ -67,9 +67,9 @@ def test_the_citation_crawl_persists_edges_and_counts_truncation(bronze_session,
     """
     from datetime import UTC, datetime
 
-    import pipeline as pipeline_module
+    from cli import enrichment as cli_enrichment
     from db.bronze_models import CitationEdge, ExternalWork
-    from ingest.openalex import citation_graph_coverage
+    from ingest.openalex_audits import citation_graph_coverage
 
     for work_id in ("W1", "W2"):
         bronze_session.add(
@@ -97,7 +97,7 @@ def test_the_citation_crawl_persists_edges_and_counts_truncation(bronze_session,
     args = argparse.Namespace(
         max_works=10, delay=0.0, max_pages=None, refresh_all=False, commit_every=25
     )
-    stats = pipeline_module._refresh_citation_edges(bronze_session, args)
+    stats = cli_enrichment._refresh_citation_edges(bronze_session, args)
 
     assert stats["works_crawled"] == 2
     assert stats["edges_inserted"] == 3

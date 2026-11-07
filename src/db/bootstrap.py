@@ -41,7 +41,8 @@ def create_databases() -> None:
     server_engine.dispose()
 
 
-# Additive migrations for `lit_articles`, applied where the column is missing.
+# Additive column migrations, keyed by table (`lit_articles`, `lit_semantics`,
+# the `lit_dataset_*` snapshots and more), applied where the column is missing.
 # `create_all` only ever creates absent *tables*, so a column added to a model
 # after a table already exists needs this. Every entry must be nullable and
 # purely additive -- this runs unattended on every pipeline start, so it must

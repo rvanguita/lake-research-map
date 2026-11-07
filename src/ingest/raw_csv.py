@@ -1,5 +1,5 @@
 """Load configured IEEE Xplore metadata CSV exports (28 columns)
-into lit_raw.ieee_csv_rows -- one row per CSV row, values kept as JSON so no
+into `raw.lit_ieee_csv_rows` -- one row per CSV row, values kept as JSON so no
 typing/normalization happens yet (that's bronze's job).
 """
 

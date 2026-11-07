@@ -2,8 +2,9 @@
 
 The repairs write only Qdrant, never Gold rows (a published snapshot is immutable), and every
 action except `status` takes the pipeline lock -- that rule lives with the other commands' lock
-rules in `pipeline._mutates_published_inputs`. The store client itself (`db/vector_store.py`) stays in
-the core: the embed and semantic stages and publication depend on it, as they do on MySQL.
+rules in `cli.main._mutates_published_inputs`. The store client itself (`db/vector_store.py`)
+stays in the core: the embed and semantic stages and publication depend on it, as they do on
+MySQL.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from db.bootstrap import bootstrap
 from db.engines import get_session
 from db.vector_store import get_vector_store
 from quality import embed_contract
-from transform.versioned_gold import publish_vector_alias
+from transform.publication import publish_vector_alias
 
 
 def configure(subparsers) -> None:

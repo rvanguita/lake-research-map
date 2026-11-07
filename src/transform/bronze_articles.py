@@ -1,8 +1,9 @@
-"""Build lit_bronze.articles from lit_raw -- this is where cross-source
-consolidation begins (IEEE CSV + IEEE .bib + Elsevier .bib all become one
-common schema). No cross-source dedup or quality filtering yet (silver's
-job); pure pagination duplicates within a source collapse naturally via the
-`(source, source_id)` unique key.
+"""Build `lit_articles` in the `bronze` database from the `raw` database -- this
+is where cross-source consolidation begins (IEEE CSV + IEEE .bib + Elsevier
+.bib all become one common schema). No cross-source dedup or quality filtering
+yet (silver's job). The `(source, source_id)` key is file-qualified, so only an
+entry repeated within one export file collapses here; the same paper in two
+overlapping export runs stays two rows until silver dedups by DOI.
 
 IEEE reconciliation: the CSV (304 rows / 301 DOIs) is the authoritative
 record list; the paginated .bib files only cover ~275 entries and are mostly
@@ -15,27 +16,19 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
-import re
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from db.bronze_models import Article as BronzeArticle
 from db.raw_models import BibEntry, IeeeCsvRow
+from ingest.doi import normalize_doi
 from ingest.enrichment import (
     load_enrichment_cache,
     load_enrichment_observations,
     merge_enrichment,
 )
 from transform.publication_categories import classify_publication
-
-
-def normalize_doi(doi: str | None) -> str | None:
-    if not doi:
-        return None
-    doi = doi.strip()
-    doi = re.sub(r"^https?://(dx\.)?doi\.org/", "", doi, flags=re.IGNORECASE)
-    return doi.strip().casefold() or None
 
 
 def _strip_braces(text: str) -> str:

@@ -8,7 +8,14 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from apps.dashboard import loaders
-from apps.dashboard.analytics import (
+from apps.dashboard.components import (
+    page_header,
+    render_chart,
+    summary_card_row,
+    taxonomy_disclosure,
+)
+from apps.dashboard.theme import CATEGORICAL_PALETTE
+from transform.taxonomy import (
     benchmark_feeders_analysis,
     computational_solvers_analysis,
     mathematical_complexity_spectrum,
@@ -17,18 +24,10 @@ from apps.dashboard.analytics import (
     planning_time_horizons_analysis,
     uncertainty_paradigms_analysis,
 )
-from apps.dashboard.components import (
-    page_header,
-    render_chart,
-    summary_card_row,
-    taxonomy_disclosure,
-)
-from apps.dashboard.theme import CATEGORICAL_PALETTE
 
 
 def render() -> None:
     page_header(
-        "🔬",
         "Engineering evidence",
         "Mathematical formulation, objective functions, uncertainty, temporal horizons, IEEE validation and solvers.",
     )

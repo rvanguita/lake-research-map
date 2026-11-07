@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 
 from db.bronze_models import CitationEdge, ExternalWork
-from ingest.openalex import citation_graph_coverage
+from ingest.openalex_audits import citation_graph_coverage
 
 OBSERVED = datetime(2026, 9, 22, tzinfo=UTC).replace(tzinfo=None)
 
@@ -61,7 +61,7 @@ def _patch_crawl(monkeypatch, results, calls):
 
 
 def test_a_second_run_advances_instead_of_recrawling(bronze_session, monkeypatch):
-    import pipeline as pipeline_module
+    from cli import enrichment as cli_enrichment
 
     for work_id in ("W1", "W2", "W3", "W4"):
         _work(bronze_session, work_id)
@@ -70,11 +70,11 @@ def test_a_second_run_advances_instead_of_recrawling(bronze_session, monkeypatch
         monkeypatch, {"W1": {"citing_work_ids": ["W9"], "truncated": False, "pages": 1}}, calls
     )
 
-    first = pipeline_module._refresh_citation_edges(bronze_session, _args())
+    first = cli_enrichment._refresh_citation_edges(bronze_session, _args())
     assert first["works_crawled"] == 2
     assert first["remaining"] == 2
 
-    second = pipeline_module._refresh_citation_edges(bronze_session, _args())
+    second = cli_enrichment._refresh_citation_edges(bronze_session, _args())
 
     assert second["already_crawled"] == 2
     assert second["works_crawled"] == 2
@@ -84,14 +84,14 @@ def test_a_second_run_advances_instead_of_recrawling(bronze_session, monkeypatch
 
 def test_a_work_nobody_cites_is_not_retried_forever(bronze_session, monkeypatch):
     """Zero citing works is an answer, not a missing result."""
-    import pipeline as pipeline_module
+    from cli import enrichment as cli_enrichment
 
     _work(bronze_session, "W1")
     calls: list[str] = []
     _patch_crawl(monkeypatch, {}, calls)
 
-    pipeline_module._refresh_citation_edges(bronze_session, _args(max_works=5))
-    pipeline_module._refresh_citation_edges(bronze_session, _args(max_works=5))
+    cli_enrichment._refresh_citation_edges(bronze_session, _args(max_works=5))
+    cli_enrichment._refresh_citation_edges(bronze_session, _args(max_works=5))
 
     assert calls == ["W1"]
     work = bronze_session.scalar(select(ExternalWork))
@@ -101,7 +101,7 @@ def test_a_work_nobody_cites_is_not_retried_forever(bronze_session, monkeypatch)
 
 
 def test_truncation_is_recorded_on_the_work(bronze_session, monkeypatch):
-    import pipeline as pipeline_module
+    from cli import enrichment as cli_enrichment
 
     _work(bronze_session, "W1")
     _patch_crawl(
@@ -110,7 +110,7 @@ def test_truncation_is_recorded_on_the_work(bronze_session, monkeypatch):
         [],
     )
 
-    stats = pipeline_module._refresh_citation_edges(bronze_session, _args(max_works=5))
+    stats = cli_enrichment._refresh_citation_edges(bronze_session, _args(max_works=5))
 
     assert stats["truncated_works"] == 1
     assert bronze_session.scalar(select(ExternalWork)).citing_truncated is True

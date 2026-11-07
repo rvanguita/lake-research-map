@@ -8,11 +8,7 @@ import plotly.express as px
 import streamlit as st
 
 from apps.dashboard import loaders
-from apps.dashboard.analytics import (
-    source_counts_by,
-    source_means,
-    valid_years,
-)
+from apps.dashboard.analytics.counts import source_counts_by, source_means, valid_years
 from apps.dashboard.charts import source_lines
 from apps.dashboard.components import (
     article_table,
@@ -28,7 +24,6 @@ MIN_CITED_ARTICLES = 3
 
 def render() -> None:
     page_header(
-        "🏆",
         "Impact and citations",
         "Bibliometric analysis: reference basis, citation dynamics, heavy tail distributions and GLM determinants.",
     )
@@ -371,7 +366,7 @@ def _heavy_tail_analysis(articles_df: pd.DataFrame) -> None:
         st.info("Citation counts are not available for this population.")
         return
 
-    from apps.dashboard.analytics import fit_heavy_tail_distributions
+    from apps.dashboard.analytics.citations import fit_heavy_tail_distributions
 
     cites = articles_df["citation_count"].dropna().to_numpy()
     fit_res = fit_heavy_tail_distributions(cites)
@@ -472,7 +467,7 @@ def _age_normalized_rankings(articles_df: pd.DataFrame) -> None:
         "recent that are reaching exceptional impact velocity. "
         f"Rates use observation year {observation_year} ({observation_basis})."
     )
-    from apps.dashboard.analytics import age_normalized_citations
+    from apps.dashboard.analytics.citations import age_normalized_citations
 
     norm_df = age_normalized_citations(articles_df, observation_year=observation_year)
     if "citation_rate_annual" not in norm_df.columns:
@@ -524,7 +519,7 @@ def _citation_determinants_glm_view(articles_df: pd.DataFrame) -> None:
         "encodes source-specific missingness. "
         f"Article age is measured at {observation_year} ({observation_basis})."
     )
-    from apps.dashboard.analytics import citation_determinants_glm
+    from apps.dashboard.analytics.citations import citation_determinants_glm
 
     glm_res = citation_determinants_glm(articles_df, observation_year=observation_year)
     if not glm_res.get("valid"):

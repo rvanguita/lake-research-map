@@ -22,8 +22,8 @@ load_dotenv(REPO_ROOT / ".env")
 LAYERS = ("raw", "bronze", "silver", "gold")
 
 
-def relative_path(path) -> str:
-    """Path relative to the repo root, as stored in the database.
+def relative_path(path, root: Path = REPO_ROOT) -> str:
+    """Path relative to the repo root (or `root`), as stored in the database.
 
     The same file has a different absolute path in every checkout and inside
     any container (`/home/<user>/.../data/references/x.bib` on one machine,
@@ -31,13 +31,17 @@ def relative_path(path) -> str:
     idempotency keys off this string, storing the absolute path made the same
     file look like two different files and duplicated every row on a
     cross-environment run -- it happened when the pipeline also ran inside a
-    container. Relative to REPO_ROOT it is identical everywhere.
+    container. Relative to REPO_ROOT it is identical everywhere -- and POSIX
+    separators keep it identical on every OS, since source snapshots hash it.
+
+    `root` is for the source snapshots (`ingest/snapshots.py`), which take an
+    alternate repository or data root in tests and sort by data-relative path.
     """
     resolved = Path(path).resolve()
     try:
-        return str(resolved.relative_to(REPO_ROOT))
-    except ValueError:  # outside the repo -- keep it absolute
-        return str(resolved)
+        return resolved.relative_to(Path(root).resolve()).as_posix()
+    except ValueError:  # outside the root -- keep it absolute
+        return resolved.as_posix()
 
 
 def absolute_path(stored_path: str) -> Path:

@@ -47,7 +47,7 @@ MySQL connection settings and `QDRANT_URL` live in `.env` (git-ignored; see `.en
 
 | Skill | Covers |
 |---|---|
-| `medallion-transform` | authoring `ingest/`, `transform/`, `db/`, `pipeline.py` |
+| `medallion-transform` | authoring `ingest/`, `transform/`, `db/`, `pipeline.py`, `runs.py` |
 | `pipeline-ops` | *running* stages from the CLI, `.env`, the Qdrant service, idempotency, debugging a run |
 | `streamlit-dashboard` | `apps/dashboard/` page contract, chart contract, theme tokens, aggregation rules |
 | `developing-with-streamlit` | Streamlit's own generic skill (a symlink into the installed `streamlit` package; resolves after `uv sync`) |
@@ -57,17 +57,25 @@ MySQL connection settings and `QDRANT_URL` live in `.env` (git-ignored; see `.en
 
 ### Layout: core and `apps/`
 
-The pipeline core is `config.py`, `pipeline.py`, `quality.py`, `db/`, `ingest/` and `transform/`. Everything
-user-facing sits under `apps/`, one folder per application: `apps/dashboard/` (Streamlit), `apps/api/` (the
-`Retriever`, the `search`/`screen` commands and the MCP server) and `apps/qdrant/` (the `vectors` commands).
-Apps import the core, never each other except the dashboard using `apps.api`; the Qdrant *client*
-(`db/vector_store.py`) stays in the core because the stages depend on it. One known inversion remains -- two
-`transform/` modules import helpers from `apps/dashboard/analytics.py` (SDD §12).
+The pipeline core is `config.py`, `pipeline.py` (the six stages, `run_all`, `run`), `runs.py` (the pipeline
+lock, logging, signal handling, `_layer_sessions`, run/stage bookkeeping and abandoned-run recovery),
+`quality.py`, `db/`, `ingest/` and `transform/`. Everything user-facing sits under `apps/`, one folder per
+application: `apps/dashboard/` (Streamlit), `apps/api/` (the `Retriever`, the `search`/`screen` commands, the
+MCP server and the retrieval benchmark's `evaluation.py`) and `apps/qdrant/` (the `vectors` commands).
+
+`cli/` is the composition root: `cli/main.py` builds the parser, decides which commands take the pipeline lock
+(`_mutates_published_inputs`) and dispatches, and each command group is a `cli/<group>.py` with
+`configure(subparsers)`/`run(args)`. It is the only place outside `apps/` that imports an application, and
+nothing imports `cli`. `apps/` is a strict leaf: the core imports no application (the helpers the core needs
+now live in `transform/authors.py`, `transform/taxonomy.py` and `transform/semantics.py`), and apps import the
+core, never each other except the dashboard using `apps.api`. `tests/test_import_boundaries.py` enforces both
+rules, with an empty allowlist. The Qdrant *client* (`db/vector_store.py`) stays in the core because the stages
+depend on it.
 
 ### Stage graph
 
 `raw → bronze → silver → gold → embed → semantic`, each a `run_<stage>()` in `pipeline.py`, run from the
-CLI: `--stage <stage>` for one, `--stage all` for the chain. There is no orchestrator: the Airflow DAGs, their
+CLI (`cli/main.py`): `--stage <stage>` for one, `--stage all` for the chain. There is no orchestrator: the Airflow DAGs, their
 container and the dashboard's trigger buttons were removed on 2026-11-06 (ADR-09). A failed stage is re-run
 by hand; every stage is idempotent and `embed` resumes where it stopped.
 
@@ -81,8 +89,9 @@ by hand; every stage is idempotent and `embed` resumes where it stopped.
   version's **Qdrant** collection, and records each vector's provenance on its Gold chunk row.
 - `semantic` — reads those vectors from Qdrant, writes the candidate's `lit_dataset_semantics`,
   `lit_dataset_duplicate_pairs` and `lit_semantic_runs`, copies the screening signals back onto the points as
-  payload, and then publishes: the live `lit_articles`/`lit_chunks`/`lit_semantics`/`lit_duplicate_pairs` are
-  replaced from the version's snapshot only after the publication contract passes.
+  payload, and then publishes (`transform/publication.py::materialize_version`): the live
+  `lit_articles`/`lit_chunks`/`lit_semantics`/`lit_duplicate_pairs` are replaced from the version's snapshot
+  only after the publication contract passes.
 
 **Vectors live in Qdrant, not MySQL (ADR-08, 2026-11-06).** Gold stays the source of truth for chunk text,
 metadata, embedding provenance and the publication pointer; `db/vector_store.py` (`get_vector_store()`, the
@@ -157,7 +166,7 @@ fastembed cache into the current directory).
 
 ### Session lifecycle
 
-`pipeline.py` opens one `Session` per layer a stage touches and closes them in a `finally`; transform builders
+`runs._layer_sessions` opens one `Session` per layer a stage touches and closes them in a `finally`; transform builders
 take those sessions as arguments and never open their own. That's what lets the whole suite run against
 in-memory SQLite (`tests/conftest.py`, one session fixture per layer) with no MySQL. The vector store follows
 the same rule: builders take a `store` argument, and the suite passes `qdrant-client`'s in-process local mode
@@ -175,8 +184,8 @@ string, so absolute paths duplicate every row on a cross-environment run.
 ### Dashboard
 
 Strict one-way layering — `data.py` (raw SQL → DataFrame, tolerates a missing table) → `loaders.py` (the only
-`@st.cache_data` layer, plus list-column/`source` normalization) → `analytics.py` / `forecasting.py` /
-`qualis.py` (pure pandas, no `streamlit` import, unit-tested) → `charts.py` (styled Plotly figures) →
+`@st.cache_data` layer, plus list-column/`source` normalization) → the `analytics/` package (`counts`, `authors`,
+`citations`, `bibliometrics`, `vocabulary`, `anomalies`, `themes`) / `forecasting.py` / `qualis.py` (pure pandas, no `streamlit` import, unit-tested) → `charts.py` (styled Plotly figures) →
 `components.py` → `pages/*.py` (one zero-arg `render()`, registered in `app.py`'s `PAGE_GROUPS`; `PAGES` is
 derived from it). Search is not a
 dashboard module any more: the Quality page's article search and benchmark call `loaders.retriever()` -- the
@@ -198,13 +207,13 @@ to empty when the store does not answer; the article search degrades to BM25 wit
 **Page ownership — every chart has exactly one home.** Never duplicate a chart across tabs or pages;
 `overview.py` holds macro summaries only, and deep dives live on their analytical page:
 
-- `production` — chronological views: annual volume, cumulative growth, CAPES/Qualis strata.
+- `production` — chronological views: annual volume, cumulative growth, CAPES/Qualis strata (sole home).
 - `topics` — venue ranking, Bradford zones, semantic structure, Zipf's law, c-TF-IDF, conceptual atypicality,
   structural breaks.
 - `highlights` — two tabs: *Theoretical grounding* and *Citation dynamics & econometrics* (heavy-tail
   diagnostics, age normalization, the exposure-adjusted count GLM).
 - `researchers` — productivity, leadership, trajectories, collaboration networks, research lines, bibliometric laws.
-- `synthesis` — seven engineering-evidence taxonomies (`analytics.TAXONOMY_REGISTRY`): methods, objectives,
+- `synthesis` — seven engineering-evidence taxonomies (`transform/taxonomy.py::TAXONOMY_REGISTRY`): methods, objectives,
   uncertainty, horizons, solvers, mathematical complexity, benchmark feeders (test systems).
 - `forecasting` — complete-year volume forecasts with rolling validation and conformal bands, topic
   trajectories, Bass diagnostics, Kleinberg bursts.
@@ -318,7 +327,7 @@ reports `stopped_early` is not a bug; re-run it after the window resets. The pol
 
 `reference_count` from OpenAlex is `len(referenced_works)`, which is empty when OpenAlex has no reference list, not
 only when the work cites nothing: of 324 works it reported at zero, 81 have references deposited in Crossref.
-Treat a provider's zero as known only when no other source contradicts it (`openalex.contradicted_zeros`), and never
+Treat a provider's zero as known only when no other source contradicts it (`openalex_audits.contradicted_zeros`), and never
 let an observed zero overwrite a positive curated count (`enrichment.merge_enrichment`).
 
 Cited-reference years come from **Crossref** where the publisher deposited a reference list (2,815 of 3,115 works) and
@@ -343,7 +352,9 @@ Anything that merges IEEE and Elsevier records has to normalize these difference
 | Full text | yes, PDFs in the zips | none |
 
 DOI is the only reliable cross-source join/dedup key — strip the `https://doi.org/` prefix and casefold before
-comparing, or the same paper indexed by both publishers will survive deduplication twice. Records with no DOI
+comparing, or the same paper indexed by both publishers will survive deduplication twice. The one
+implementation is `ingest/doi.py::normalize_doi` (it also strips `http://dx.doi.org/`); every layer, the
+enrichment crawls and the dashboard's DOI-uniqueness check import it, so never inline a copy. Records with no DOI
 at all are dropped at silver (counted as `skipped_no_doi`, never silently).
 
 The fields `countries`, `online_date`, `document_type` and `license` carry through bronze → silver → gold, but
@@ -416,7 +427,7 @@ The 206 near-identical abstracts under distinct DOIs in `lit_duplicate_pairs` ar
 and they are resolved by human decision, never automatically.
 
 The corpus also contains 11 articles dated **2027** — publishers stamp an in-press record with its future
-issue year. Any plausibility window on `year` must allow next year; `analytics.plausible_year_bound()` is the
+issue year. Any plausibility window on `year` must allow next year; `analytics/counts.py::plausible_year_bound()` is the
 one place that decides this, and pinning a literal instead silently deletes those rows from every trend.
 
 ## Conventions
@@ -424,7 +435,7 @@ one place that decides this, and pinning a literal instead silently deletes thos
 - **Language**: everything is in English -- code, comments, docstrings, `docs/`, and every string the
   dashboard renders (page titles, captions, warnings, metric labels, download filenames). The UI was
   Portuguese until the 2026-09-21 migration; `PRD.md` NFR-07 now requires English. Watch for two
-  leftovers when editing: values produced in `analytics.py`/`forecasting.py` that are rendered verbatim
+  leftovers when editing: values produced in `analytics/`/`forecasting.py` that are rendered verbatim
   by a page, and multi-line implicit string concatenation, which silently drops the space between
   fragments unless the first one ends with it.
 - **Comments explain *why***, and the existing ones encode hard-won decisions (why a chunk boundary is where it

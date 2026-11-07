@@ -192,7 +192,7 @@ def test_a_persistently_throttled_work_is_reported_as_truncated(bronze_session):
 def test_the_citing_batch_halts_after_five_throttled_works(bronze_session, monkeypatch):
     from datetime import UTC, datetime
 
-    import pipeline as pipeline_module
+    from cli import enrichment as cli_enrichment
 
     now = datetime.now(UTC).replace(tzinfo=None)
     for index in range(20):
@@ -218,7 +218,7 @@ def test_the_citing_batch_halts_after_five_throttled_works(bronze_session, monke
 
     monkeypatch.setattr("ingest.openalex.fetch_openalex_citing_batch", _all_throttled)
 
-    stats = pipeline_module._refresh_citation_edges(
+    stats = cli_enrichment._refresh_citation_edges(
         bronze_session,
         argparse.Namespace(
             max_works=20, delay=0.0, max_pages=1, refresh_all=False, commit_every=25, batch_size=1

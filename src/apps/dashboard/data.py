@@ -21,6 +21,7 @@ from db.vector_store import (
     VectorStoreUnavailable,
     get_vector_store,
 )
+from ingest.doi import normalize_doi
 
 logger = logging.getLogger(__name__)
 
@@ -161,10 +162,12 @@ def assess_gold_articles(df: pd.DataFrame) -> tuple[str, ...]:
     if missing_columns:
         reasons.append("Gold is missing required fields: " + ", ".join(missing_columns))
     if "doi" in df.columns:
-        dois = df["doi"].fillna("").astype(str).str.strip().str.lower()
-        if dois.eq("").any():
+        # The pipeline's own DOI key (`ingest/doi.py`), so a resolver-URL and a
+        # bare spelling of one DOI count as the duplicate silver would merge.
+        dois = df["doi"].map(lambda value: normalize_doi(value) if isinstance(value, str) else None)
+        if dois.isna().any():
             reasons.append("Gold contains blank DOI values.")
-        if dois[dois.ne("")].duplicated().any():
+        if dois.dropna().duplicated().any():
             reasons.append("Gold contains duplicate DOI values.")
     return tuple(reasons)
 

@@ -25,10 +25,13 @@ from config import (
     IEEE_BIB_DIRS,
     REPO_ROOT,
     SEARCH_CONFIG_PATHS,
+    relative_path,
 )
+from ingest.hashing import sha256_file
 
 FINGERPRINT_SCHEMA_VERSION = 1
-ARCHIVE_DIR = DATA_DIR / ".lake_research_map" / "objects"
+# The content-addressed archive, relative to whichever data directory is scanned.
+ARCHIVE_SUBDIR = Path(".lake_research_map") / "objects"
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,25 +57,9 @@ class VersionFingerprint:
     enrichment_sha256: str | None = None
 
 
-def _sha256_file(path: Path, chunk_size: int = 1 << 20) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(chunk_size), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def _stable_hash(value: Any) -> str:
     payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
-def _relative(path: Path, root: Path) -> str:
-    resolved = path.resolve()
-    try:
-        return resolved.relative_to(root.resolve()).as_posix()
-    except ValueError:
-        return resolved.as_posix()
 
 
 def _supported_paths(data_dir: Path) -> list[tuple[Path, str, str]]:
@@ -110,7 +97,7 @@ def _supported_paths(data_dir: Path) -> list[tuple[Path, str, str]]:
     enrichment = data_dir / "enrichment_cache.json"
     if enrichment.is_file():
         paths.append((enrichment, "openalex", "enrichment"))
-    return sorted(paths, key=lambda item: _relative(item[0], data_dir))
+    return sorted(paths, key=lambda item: relative_path(item[0], data_dir))
 
 
 def _archive_object(path: Path, sha256: str, archive_dir: Path) -> Path:
@@ -128,7 +115,7 @@ def _archive_object(path: Path, sha256: str, archive_dir: Path) -> Path:
             output.flush()
             os.fsync(output.fileno())
         temporary = Path(temporary_name)
-        if _sha256_file(temporary) != sha256:
+        if sha256_file(temporary) != sha256:
             raise OSError(f"archive checksum mismatch for {path}")
         os.replace(temporary, destination)
         destination.chmod(0o444)
@@ -146,12 +133,12 @@ def scan_sources(
     archive_dir: Path | None = None,
 ) -> list[ScannedSource]:
     """Hash and archive every source that can affect the medallion pipeline."""
-    archive_root = archive_dir or data_dir / ".lake_research_map" / "objects"
+    archive_root = archive_dir or data_dir / ARCHIVE_SUBDIR
     scanned: list[ScannedSource] = []
     for path, source, kind in _supported_paths(data_dir):
-        sha256 = _sha256_file(path)
+        sha256 = sha256_file(path)
         archived = _archive_object(path, sha256, archive_root)
-        stored_path = _relative(path, repo_root)
+        stored_path = relative_path(path, repo_root)
         revision_id = _stable_hash({"path": stored_path, "sha256": sha256})
         stat = path.stat()
         scanned.append(
@@ -163,7 +150,7 @@ def scan_sources(
                 size_bytes=stat.st_size,
                 mtime=dt.datetime.fromtimestamp(stat.st_mtime),
                 revision_id=revision_id,
-                archive_path=_relative(archived, repo_root),
+                archive_path=relative_path(archived, repo_root),
             )
         )
     return sorted(scanned, key=lambda item: item.path)
@@ -192,16 +179,22 @@ def config_hash(sources: list[ScannedSource]) -> str:
 # Presentation-only dashboard modules: nothing a pipeline stage imports, so
 # they cannot change a published output. Hashing them made a caption edit mint
 # a new dataset version and re-run bronze through semantic for identical data.
-# `apps/dashboard/analytics.py` stays in the hash on purpose -- the semantic stage
-# persists `semantic_stability_diagnostics` from it into the version.
+# The semantic stage's `semantic_stability_diagnostics` (persisted into the
+# version) lives in `transform/semantics.py`, so the analytics package no longer
+# feeds a build either.
 PRESENTATION_ONLY = (
-    "src/apps/dashboard/pages/",
-    "src/apps/dashboard/app.py",
-    "src/apps/dashboard/charts.py",
-    "src/apps/dashboard/components.py",
-    "src/apps/dashboard/theme.py",
+    # Nothing under apps/ changes what a published version holds: the dashboard
+    # (its loaders and maths included) only reads one, and the `evidence` and
+    # `vectors` commands and the search read a version; they never build one.
+    # The import-boundary test keeps the core from reaching into apps/, which is
+    # what makes this exclusion safe.
+    "src/apps/dashboard/",
+    "src/apps/api/",
+    "src/apps/qdrant/",
     # Developer tools (hero image, pre-commit guard) never change what a version holds.
     "src/devtools/",
+    # The CLI only routes commands to the stages; it never changes what a version holds.
+    "src/cli/",
 )
 
 
@@ -210,16 +203,16 @@ def code_fingerprint(repo_root: Path = REPO_ROOT) -> tuple[str | None, str]:
     paths = sorted(
         path
         for path in (repo_root / "src").rglob("*.py")
-        if not _relative(path, repo_root).startswith(PRESENTATION_ONLY)
+        if not relative_path(path, repo_root).startswith(PRESENTATION_ONLY)
     )
     paths.extend(
         path for path in (repo_root / "pyproject.toml", repo_root / "uv.lock") if path.exists()
     )
     digest = hashlib.sha256()
     for path in sorted(paths):
-        digest.update(_relative(path, repo_root).encode())
+        digest.update(relative_path(path, repo_root).encode())
         digest.update(b"\0")
-        digest.update(bytes.fromhex(_sha256_file(path)))
+        digest.update(bytes.fromhex(sha256_file(path)))
     try:
         revision = subprocess.run(
             ["git", "rev-parse", "HEAD"],

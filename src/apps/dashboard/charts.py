@@ -351,8 +351,6 @@ def stacked_area(
         category_orders=category_orders,
         groupnorm=groupnorm,
     )
-    if color_map and OTHER_COLOR not in color_map.values():
-        pass  # caller is responsible for including the "Others" bucket color
     fig.update_layout(title=title)
     _axis_titles(fig, x_title, y_title)
     polish_figure_layout(fig)

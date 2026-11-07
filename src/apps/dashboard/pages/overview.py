@@ -7,10 +7,7 @@ import plotly.express as px
 import streamlit as st
 
 from apps.dashboard import loaders
-from apps.dashboard.analytics import (
-    RECENT_WINDOW_YEARS,
-    valid_years,
-)
+from apps.dashboard.analytics.counts import RECENT_WINDOW_YEARS, valid_years
 from apps.dashboard.components import (
     hero_banner,
     metric_row,
@@ -27,7 +24,6 @@ from transform.publication_categories import PUBLICATION_CATEGORIES
 
 def render() -> None:
     page_header(
-        ":material/dashboard:",
         "Overview",
         'Systematic literature review pipeline for "electric power distribution network planning" — '
         "IEEE Xplore and ScienceDirect/Elsevier consolidated through the "

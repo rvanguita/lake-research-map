@@ -10,7 +10,7 @@ import pytest
 
 from apps.api.filters import (
     ArticleFilters,
-    apply_article_filters,
+    article_filter_mask,
     filters_from_args,
     to_qdrant_filter,
 )
@@ -95,6 +95,11 @@ def _store_with_payloads(vector_store) -> None:
     vector_store.upsert("v1", points)
 
 
+def _kept(frame: pd.DataFrame, filters: ArticleFilters) -> set[str]:
+    """The DOIs the pandas side keeps."""
+    return set(frame.loc[article_filter_mask(frame, filters), "doi"])
+
+
 FILTER_CASES = [
     ArticleFilters(),
     ArticleFilters(exclude_non_articles=False),
@@ -112,7 +117,7 @@ FILTER_CASES = [
 def test_pandas_and_qdrant_select_the_same_articles(filters, vector_store):
     _store_with_payloads(vector_store)
 
-    expected = set(apply_article_filters(_frame(), filters)["doi"])
+    expected = _kept(_frame(), filters)
     stored = vector_store.scroll(
         "v1", query_filter=to_qdrant_filter(filters, chunk_type="abstract"), payload_fields=["doi"]
     )
@@ -148,7 +153,7 @@ def _store_with_null_point(vector_store) -> None:
 def test_pandas_and_qdrant_agree_on_missing_values(filters, vector_store):
     _store_with_null_point(vector_store)
 
-    expected = set(apply_article_filters(_frame_with_null_row(), filters)["doi"])
+    expected = _kept(_frame_with_null_row(), filters)
     stored = vector_store.scroll(
         "v1", query_filter=to_qdrant_filter(filters, chunk_type="abstract"), payload_fields=["doi"]
     )
@@ -160,7 +165,7 @@ def test_missing_flags_keep_or_drop_the_article_as_documented():
     frame = _frame_with_null_row()
 
     def kept(filters: ArticleFilters) -> bool:
-        return NULL_DOI in set(apply_article_filters(frame, filters)["doi"])
+        return NULL_DOI in _kept(frame, filters)
 
     assert kept(ArticleFilters(exclude_non_articles=True))  # unknown is not a non-article
     assert kept(ArticleFilters(min_margin=0.0))  # unscored is kept
@@ -169,24 +174,22 @@ def test_missing_flags_keep_or_drop_the_article_as_documented():
 
 
 def test_the_margin_filter_keeps_unscored_articles():
-    kept = set(apply_article_filters(_frame(), ArticleFilters(min_margin=0.0))["doi"])
+    kept = _kept(_frame(), ArticleFilters(min_margin=0.0))
 
     # b is closer to logistics (negative margin); d has no score at all.
     assert kept == {"10.1/a", "10.1/c", "10.1/d", "10.1/f"}
 
 
 def test_non_articles_are_excluded_by_default_and_kept_on_request():
-    default = set(apply_article_filters(_frame(), ArticleFilters())["doi"])
-    everything = set(
-        apply_article_filters(_frame(), ArticleFilters(exclude_non_articles=False))["doi"]
-    )
+    default = _kept(_frame(), ArticleFilters())
+    everything = _kept(_frame(), ArticleFilters(exclude_non_articles=False))
 
     assert "10.1/e" not in default
     assert "10.1/e" in everything
 
 
 def test_require_abstract_uses_the_fifty_character_rule():
-    kept = set(apply_article_filters(_frame(), ArticleFilters(require_abstract=True))["doi"])
+    kept = _kept(_frame(), ArticleFilters(require_abstract=True))
 
     assert "10.1/c" not in kept
     assert abstract_is_missing("x" * 49) and not abstract_is_missing("x" * 50)

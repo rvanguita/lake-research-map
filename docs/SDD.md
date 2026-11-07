@@ -38,26 +38,33 @@ Streamlit dashboard (read-only) ----------------┘
 |---|---|---|
 | `ingest/` | Parse publisher files, source configuration, PDF inventory, and enrichment cache | Raw tables and enrichment cache |
 | `config.py` | Paths under `data/`, per-layer database names and URLs from `.env` (dataclasses + `python-dotenv`) | Nothing |
-| `pipeline.py` | Stage functions, run telemetry, the pipeline lock and the whole CLI (§4.3) | Pipeline-run records |
+| `pipeline.py` | The six stage functions, `_prepare_raw_version`, `_version_ready`, `run_all` and `run` | Through `runs.py` and the builders |
+| `runs.py` | The pipeline lock (`_pipeline_lock`), logging, signal handling, `_layer_sessions`, run/stage bookkeeping (`_begin_stage`, `_finish_stage`, `_finalize_execution`), `recover_abandoned_executions` and `_recover_before_run` | Pipeline-run records |
+| `cli/` | The composition root: `main.py` (parser, `_mutates_published_inputs` lock policy, dispatch, `main()`) plus one `configure(subparsers)`/`run(args)` module per command group (`duplicates`, `versions`, `reviews`, `enrichment`, `evidence`, `audit`, `maintenance`); the only module tree outside `apps/` that imports an application, and imported by nothing (§4.3) | Nothing itself; its handlers call the core |
 | `quality.py` | Executable per-stage contracts (`raw_contract` … `semantic_contract`, `publication_contract`), `persist_results`, `assert_contract` | `gold.lit_quality_results` |
 | `db/engines.py` | One cached engine and session factory per layer (`get_engine`, `get_session`) | Nothing |
 | `db/bootstrap.py` | `CREATE DATABASE IF NOT EXISTS`, `create_all`, the `_ADDITIVE_COLUMNS` migrations and the `lit_config` uniqueness migration | Schema only |
 | `db/time.py` | Naive-UTC timestamp helper shared by the models | Nothing |
 | `ingest/openalex.py` | Batched, resumable OpenAlex client: DOI refresh, `cites:` crawl, reference-year resolution | Bronze observation tables |
+| `ingest/openalex_audits.py` | Read-only audits of the stored OpenAlex evidence: `contradicted_zeros`, citation-graph coverage and integrity, access validation, citation-year coverage | Nothing |
 | `ingest/crossref.py` | Quota-free Crossref reference deposits and their years | `lit_crossref_*`, `lit_doi_years` |
+| `ingest/doi.py` | `normalize_doi`, the one DOI comparison form (resolver prefix stripped, casefolded) every layer imports | Nothing |
 | `ingest/enrichment.py` | Load the enrichment cache and observations and merge them (`merge_enrichment`) | Nothing; Bronze applies the result |
 | `ingest/reconciliation.py` | Reconcile the active Raw projection with an immutable source snapshot | Raw tables |
 | `ingest/snapshots.py` | Content-addressed source archive, manifests, `diff_manifests`, `build_fingerprint` | `data/.lake_research_map/objects`, Raw `lit_source_*` |
 | `transform/bronze_articles.py` | Harmonize IEEE and Elsevier records | `bronze.lit_articles` |
 | `transform/publication_categories.py` | Deterministic journal/conference/review/other classification with its basis | Nothing |
 | `transform/silver_articles.py` | DOI deduplication, rejection audit, non-article flags, PDF matching | Silver tables |
-| `transform/gold_articles.py` | Chunking, PDF extraction and merge helpers the Gold builder calls (plus a legacy live-table `build_gold_articles` that only tests call) | Nothing in a pipeline run |
-| `transform/versioned_gold.py` | The candidate builders the stages run (`build_dataset_gold`, `build_dataset_embeddings`, `build_dataset_semantics`), `fill_vector_collection`, `materialize_version`, `publish_vector_alias` | `lit_dataset_*`, `lit_semantic_runs`, live Gold on publication, Qdrant |
+| `transform/gold_articles.py` | Per-article Gold rules `build_dataset_gold` applies: abstract/full-text chunking, PDF extraction (via `pdf_text.py`), the conservative duplicate merge | Nothing; `versioned_gold.py` writes |
+| `transform/versioned_gold.py` | The candidate builders the stages run (`build_dataset_gold`, `build_dataset_embeddings`, `build_dataset_semantics`) and `fill_vector_collection` | `lit_dataset_*`, `lit_semantic_runs`, the version's Qdrant collection |
+| `transform/publication.py` | Publication and reactivation: `materialize_version`, `adopt_legacy_publication`, `publish_vector_alias`, and `_state` (the pointer row) | Live Gold tables (`lit_articles`, `lit_chunks`, `lit_semantics`, `lit_duplicate_pairs`), `lit_publication_state`, the `lit_chunks_active` alias |
+| `transform/authors.py` | `canonical_author`, the cross-source author-name folding shared by the dashboard and the evidence samplers | Nothing |
+| `transform/taxonomy.py` | The engineering-evidence regex taxonomies, `taxonomy_haystack`, `TAXONOMY_REGISTRY`, coverage and `taxonomy_precision_from_labels` | Nothing |
 | `transform/pdf_text.py` | Clean pypdf output before chunking: reference list, page furniture, line-break hyphens, reflow | Nothing; called by the Gold builders |
 | `transform/embeddings.py` | Model identity, revision check (by snapshot or byte-identical model files), batch/thread bounds, the one model loader | Nothing; the writer is `versioned_gold.py` |
 | `transform/vector_payloads.py` | What each Qdrant point carries: text, provenance, article filter fields, screening signals | Nothing |
-| `db/vector_store.py` | The Qdrant access point: one immutable collection per version, exact search, the `lit_chunks_active` alias | Qdrant collections (through `versioned_gold.py` and `vectors` repairs only) |
-| `transform/semantics.py` | Contrastive scoring, themes, projection, duplicate candidates (plus a legacy live-table `build_semantics` no stage calls) | Nothing in a pipeline run; `versioned_gold.py` writes |
+| `db/vector_store.py` | The Qdrant access point: one immutable collection per version, exact search, the `lit_chunks_active` alias | Qdrant collections (through `versioned_gold.py`, the alias move in `publication.py`, and `vectors` repairs only) |
+| `transform/semantics.py` | Pure numpy functions for contrastive scoring, themes, projection, duplicate candidates and `semantic_stability_diagnostics`, plus the anchor embedder | Nothing; `versioned_gold.py::build_dataset_semantics` reads Qdrant and writes |
 | `transform/duplicate_resolution.py` | Validate persistent merge/keep/undo decisions | Duplicate overrides |
 | `transform/review_workflows.py` | Protocols, dual assignments, append-only labels, adjudication, approvals | `lit_review_*`, `lit_model_approvals` |
 | `transform/screening_calibration.py` | Label validation, consensus, agreement, threshold calibration and its digests | Nothing |
@@ -68,12 +75,13 @@ Streamlit dashboard (read-only) ----------------┘
 | `apps/api/filters.py` | `ArticleFilters`, one definition as a pandas mask and a Qdrant filter | None |
 | `apps/api/rank.py` | Pure BM25 index, RRF fusion, per-article collapse, excerpts | None |
 | `apps/api/models.py` | Pinned optional cross-encoder and the untruncating token counter | None |
+| `apps/api/evaluation.py` | Pure ranking metrics and per-mode latency measurement for the retrieval benchmark | None |
 | `apps/api/cli.py`, `mcp_server.py` | The `search`/`screen`/`mcp` commands and the five MCP tools (stdio) | None |
 | `apps/dashboard/data.py` | Fault-tolerant SQL reads returning DataFrames | None |
 | `apps/dashboard/loaders.py` | Cached normalization, joins, and filtered datasets | Streamlit cache only |
-| `apps/dashboard/analytics.py`, `forecasting.py` | Pure analytical computation | None |
-| `apps/dashboard/qualis.py` | Pure CAPES/Qualis venue lookup (ENGENHARIAS IV) | None |
-| `apps/dashboard/retrieval_eval.py` | Pure ranking metrics and per-mode latency measurement for the retrieval benchmark | None |
+| `apps/dashboard/analytics/` | Pure analytical computation, one module per subject: `counts`, `authors`, `citations`, `bibliometrics`, `vocabulary`, `anomalies`, `themes` | None |
+| `apps/dashboard/forecasting.py` | Pure forecasting, Bass diffusion, Kleinberg bursts and structural breaks | None |
+| `apps/dashboard/qualis.py` | Pure CAPES/Qualis venue lookup (ENGENHARIAS IV) and the strata helpers the Production page renders (`qualis_strata`, `strata_volume_by_year`, `top_tier_summary`) | None |
 | `apps/dashboard/charts.py` | Plotly figure construction and chart contracts | None |
 | `apps/dashboard/pages/` | English presentation controllers | None |
 | `devtools/` | `docs_branch_guard.py` (pre-commit hook refusing docs-only commits on `main`) and `hero.py` (README illustration generator) | Nothing at runtime |
@@ -203,9 +211,9 @@ Abandoned executions are recovered without human intervention. `run()` sweeps ex
 
 ### 4.3 Command-line surface
 
-**Current:** `lake-research-map` (`pipeline:main`) is the only entry point. "Lock" means the command takes the
-project's MySQL advisory lock (`pipeline._pipeline_lock`), so it cannot overlap a stage run; the rule is
-`pipeline._mutates_published_inputs` -- a command takes it when it changes what the next publication would contain.
+**Current:** `lake-research-map` (`cli.main:main`) is the only entry point. "Lock" means the command takes the
+project's MySQL advisory lock (`runs._pipeline_lock`), so it cannot overlap a stage run; the rule is
+`cli.main._mutates_published_inputs` -- a command takes it when it changes what the next publication would contain.
 
 | Command | What it does | Lock |
 |---|---|---|
@@ -280,7 +288,7 @@ Existing tables gain version/run references only when their producer and readers
 
 - `data.py`: parameterized/read-only SQL and graceful absence handling.
 - `loaders.py`: the only `@st.cache_data` layer; normalization, compatible joins, and cache bounds.
-- `analytics.py` and `forecasting.py`: deterministic pure functions with explicit inputs and outputs.
+- the `analytics/` package and `forecasting.py`: deterministic pure functions with explicit inputs and outputs.
 - `charts.py`: theme-aware figure construction without data access.
 - `components.py`: reusable Streamlit presentation, including the read-only panel of pipeline commands.
 - `pages/*.py`: one zero-argument `render()` controller per registered page, as required by this repository's established architecture.
@@ -319,8 +327,6 @@ Hard-coded observation years and cluster-name assignments are transitional. Time
 ### 6.5 Analytical methods
 
 What the dashboard can infer from the current corpus, how each model is validated, and which formal indicators are intentionally unavailable.
-
-This document defines what the dashboard can infer from the current corpus, how each model is validated, and which formal indicators are intentionally unavailable.
 
 #### Evidence boundaries
 
@@ -408,7 +414,7 @@ Lotka's law is fitted on distinct-DOI counts per canonical author. Like every ot
 #### Engineering taxonomies
 
 The seven taxonomies on the Engineering-evidence page are regular expressions over
-title and abstract, enumerated in `analytics.py::TAXONOMY_REGISTRY`. They are
+title and abstract, enumerated in `transform/taxonomy.py::TAXONOMY_REGISTRY`. They are
 **exploratory**: no reviewed sample exists, so their precision and recall are
 unmeasured, and every panel says so.
 
@@ -447,7 +453,7 @@ Analytical functions are pure Python functions without Streamlit imports. Databa
 - Rejection reasons, duplicate decisions, chunk invalidation, and embedding coverage.
 - External enrichment success/not-found/error/rate-limit counts and observation age.
 - Data-quality check outcomes and active dataset version.
-- **Target:** dashboard query/cache latency for expensive loaders and search latency by retrieval mode. **Current:** no loader is timed; per-mode search latency is measured only on demand, by the retrieval benchmark harness (`apps/dashboard/retrieval_eval.py`) behind the Quality page's benchmark.
+- **Target:** dashboard query/cache latency for expensive loaders and search latency by retrieval mode. **Current:** no loader is timed; per-mode search latency is measured only on demand, by the retrieval benchmark harness (`apps/api/evaluation.py`) behind the Quality page's benchmark.
 
 **Target:** logs use structured fields with parent run ID, stage run ID, and dataset version. **Current:** the CLI logs plain text (`%(asctime)s %(levelname)s %(name)s: %(message)s`) to stderr and to `data/.lake_research_map/pipeline.log` (`LAKE_RESEARCH_MAP_LOG` overrides it); execution, stage-run and version ids live in the `lit_pipeline_*` rows, not in log fields. A telemetry-write failure is surfaced; it must not be silently downgraded to debug-only information for a production run.
 
@@ -689,7 +695,6 @@ Docker Compose keeps the dashboard and the opt-in Qdrant service.
 - No automatic stage retry or timeout since `ADR-09`: a failed stage is re-run by hand (every stage is idempotent and `embed` resumes).
 - OpenAlex responses are append-only observations with observation time, response state, HTTP status, response hash, retry count, longitudinal counts, outgoing edges, and access metadata. A real refresh still requires local API credentials.
 - Chunk and duplicate-candidate logical keys are not fully constrained in the database.
-- The core imports an application: `transform/evidence_samples.py` takes `canonical_author`, `OPTIMIZATION_METHOD_PATTERNS` and `taxonomy_haystack`, and `transform/versioned_gold.py` takes `semantic_stability_diagnostics`, all from `apps/dashboard/analytics.py`. Moving those four names into the core would make `apps/` a strict leaf. (`pipeline.py` also imports `apps.qdrant` and `apps.api`, but only to wire their commands into the CLI.)
 - Dashboard caches are not invalidated after a publication (§4.2 step 8): pages can show the previous version until a loader's TTL expires or someone presses *Refresh data*.
 - Logs are plain text, not structured fields carrying run/stage/version ids (§7.1).
 - No dashboard loader latency telemetry; search latency by mode exists only in the on-demand retrieval benchmark (§7.1).
@@ -735,6 +740,7 @@ Open ones are PRD §12. The full status notes and dated evidence records they su
 | `WP-26` | Qdrant vector store | 2026-11-06 — `db/vector_store.py` (one immutable collection per version, deterministic point ids, exact search, `lit_chunks_active` alias); the embed stage writing only Qdrant and copying reusable vectors by text hash before computing; the… |
 | `WP-27` | Full-text cleaning before chunking | 2026-11-06 — `transform/pdf_text.py` (four pure cleaners in a fixed order), applied by both Gold builders, which report `pdf_*` counts in their stats. |
 | `WP-28` | Article-level retrieval API, CLI and MCP server | 2026-11-06 — `apps/api/` (`Retriever.search/screen/evidence/article/status`, filters shared by pandas and Qdrant, BM25 index built once, RRF, optional pinned cross-encoder, untruncated token counts); `lake-research-map search|screen|mcp`;… |
+| `REVIEW-2026-11` | Project review against the skills, agents and specs | 2026-11-06 — Three phases: defects; spec alignment, evidence tests and dead-code removal; structural refactor (the `analytics/` package, the `pipeline.py`/`runs.py`/`cli/` split, the `transform/publication.py` and `ingest/openalex_audits.py` modules, and a core that no longer imports `apps/`). |
 
 ## 14. Measured baselines
 
@@ -752,6 +758,7 @@ Re-measure before quoting; the corpus grows with every export (CLAUDE.md keeps t
 | 2026-11-06 | Retrieval disclosures | 95 articles without a usable abstract (< 50 chars); 21 abstract chunks exceed the 512-token window |
 | 2026-11-06 | Test collection (`uv run pytest --collect-only -q`) | 534 tests collected, of which 4 opt-in (`mysql`/`qdrant` markers) |
 | 2026-11-06 | Model snapshot drift | Hub snapshot `aa8f8b06…` differs from the pin `52398278…` only in README; re-embedding 200 chunks reproduced the stored vectors exactly |
+| 2026-11-06 | Test collection after the review refactor (`uv run pytest --collect-only -q`) | 660 tests collected, of which 4 opt-in (`mysql`/`qdrant` markers) |
 
 ## Appendix A. Review protocols
 

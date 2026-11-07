@@ -1,10 +1,17 @@
-"""GOLD layer models (lit_gold database) -- curated, RAG-ready.
+"""GOLD layer models (`gold` database) -- curated, RAG-ready.
 
-`articles` is the table a human or agent scans to decide which paper to cite.
-`chunks` is the RAG ingestion unit: one row per passage of text. `embedding`/
-`embed_model` are filled in by the `embed` pipeline stage
-(`transform/embeddings.py`, via `fastembed`) -- they stay NULL only until
-that stage has been run at least once for a given chunk.
+`lit_articles` is the table a human or agent scans to decide which paper to
+cite. `lit_chunks` is the RAG ingestion unit: one row per passage of text.
+Both are live projections of the published version, rebuilt from the
+`lit_dataset_*` snapshot tables on publication (`publication.materialize_version`).
+
+Vectors live in Qdrant, one collection per dataset version (ADR-08,
+`db/vector_store.py`); Gold keeps only each chunk's embedding provenance
+(`text_sha256`, `embed_model`, `embed_revision`, ...), written by the `embed`
+stage. The `embedding` (JSON) and `embedding_bin` (BLOB) columns are no longer
+written: they survive only in versions published before ADR-08, whose rows are
+immutable, and `embed` may still copy a qualifying BLOB into Qdrant instead of
+re-embedding its text.
 """
 
 from __future__ import annotations
@@ -86,7 +93,9 @@ class Chunk(Base):
     text: Mapped[str] = mapped_column(Text)
     char_len: Mapped[int] = mapped_column(Integer)
 
-    embedding: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # filled by --stage embed
+    # Pre-ADR-08 vector columns: no longer written (vectors live in Qdrant), kept
+    # for the BLOBs already stored in published, immutable snapshots.
+    embedding: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     embed_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
     embedding_bin: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     # Deliberately unindexed, as on the deployed MySQL schema (the additive
@@ -483,7 +492,8 @@ class PipelineRun(Base):
     """One row per pipeline stage execution, written by `pipeline.py`.
 
     Turns the per-stage stats dict (which each `run_*` already returns) into a
-    persistent record, so the "Camadas & Pipeline" page can answer "what changed
+    persistent record, so the dashboard's "Pipeline and provenance" page
+    (`apps/dashboard/pages/pipeline_layers.py`) can answer "what changed
     between the last two runs" instead of only showing live row counts.
     """
 

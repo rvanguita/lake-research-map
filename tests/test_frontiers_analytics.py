@@ -2,7 +2,7 @@
 
 import pandas as pd
 
-from apps.dashboard.analytics import technological_burst_detection
+from apps.dashboard.forecasting import technological_burst_detection
 
 
 def _sample_corpus_df() -> pd.DataFrame:

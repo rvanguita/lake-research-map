@@ -261,18 +261,13 @@ def render_pipeline_commands() -> None:
         st.rerun()
 
 
-def page_header(
-    icon_or_title: str,
-    title_or_desc: str,
-    description: str | None = None,
-) -> None:
-    """Consistent native title block. Legacy icon arguments are ignored."""
-    if description is None:
-        st.title(icon_or_title)
-        st.caption(title_or_desc)
-    else:
-        st.title(title_or_desc)
-        st.caption(description)
+def page_header(title: str, description: str) -> None:
+    """Consistent native title block: the page title and a one-line caption.
+
+    Page icons live in `app.py`'s `PAGES` (the navigation), not here.
+    """
+    st.title(title)
+    st.caption(description)
 
 
 def metric_row(metrics: Sequence[tuple[str, str] | tuple[str, str, str | None]]) -> None:
@@ -480,7 +475,7 @@ def taxonomy_disclosure(df, taxonomy_name: str, *, key: str = "") -> None:
     Precision upgrades itself once human labels exist for this taxonomy. Draft
     labels from a reviewer whose identifier ends in ``-assisted`` are excluded.
     """
-    from apps.dashboard.analytics import (
+    from transform.taxonomy import (
         TAXONOMY_REGISTRY,
         taxonomy_coverage,
         taxonomy_precision_from_labels,

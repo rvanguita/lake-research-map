@@ -37,7 +37,7 @@ from db.vector_store import (
     collection_name,
     point_id,
 )
-from transform.bronze_articles import normalize_doi
+from ingest.doi import normalize_doi
 from transform.embeddings import (
     EMBED_DIMENSION,
     EMBED_MODEL_NAME,
@@ -531,3 +531,16 @@ def assert_contract(stage: str, results: list[CheckResult]) -> None:
     failures = [result for result in results if result.severity == "error" and not result.passed]
     if failures:
         raise ContractViolation(stage, failures)
+
+
+# Acceptance gates of the read-only `audit citation-graph` / `audit citation-years`
+# commands (WP-23, WP-24). They gate whether an analysis may be reported, not a
+# publication, so no contract above reads them.
+INTEGRITY_AGREEMENT_GATE = 0.95
+ACCESS_AGREEMENT_GATE = 0.90
+COVERAGE_GATE = 0.80
+# The provider's year may differ from the corpus's by the online-first gap;
+# anything wider than a year on more than 5% of works would mean the years
+# Price's index rests on are not the years the corpus reports.
+YEAR_AGREEMENT_GATE = 0.95
+TEMPORAL_GATE = 0.99

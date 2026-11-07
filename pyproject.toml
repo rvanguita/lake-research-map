@@ -30,7 +30,7 @@ dependencies = [
 ]
 
 [project.scripts]
-lake-research-map = "pipeline:main"
+lake-research-map = "cli.main:main"
 
 [build-system]
 requires = ["hatchling>=1.27"]
@@ -43,6 +43,7 @@ build-backend = "hatchling.build"
 sources = ["src"]
 only-include = [
     "src/apps",
+    "src/cli",
     "src/db",
     "src/devtools",
     "src/ingest",
@@ -50,6 +51,7 @@ only-include = [
     "src/config.py",
     "src/pipeline.py",
     "src/quality.py",
+    "src/runs.py",
 ]
 
 [dependency-groups]

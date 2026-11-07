@@ -1,5 +1,5 @@
 """Shared helpers for idempotent raw ingestion: hash a file and check/record
-it against lit_raw.source_files so re-running a stage doesn't reprocess
+it against `raw.lit_source_files` so re-running a stage doesn't reprocess
 unchanged inputs.
 """
 

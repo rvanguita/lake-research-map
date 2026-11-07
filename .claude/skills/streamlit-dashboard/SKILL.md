@@ -19,7 +19,9 @@ to keep it from drifting back.
 - Pages are read-only, with no exception (ADR-06, ADR-09): no database write, no file
   write, no run trigger. Every rendered string is English (`tests/test_dashboard_language.py`).
 - Respect page ownership: every chart has exactly one home (CLAUDE.md "Page ownership" and
-  the PRD §7 table). Never duplicate a chart on a second page or tab.
+  the PRD §7 table). Never duplicate a chart on a second page or tab. Every CAPES/Qualis view
+  (strata volume through B2, the match table, totals, cumulative, the A1–A3 top tiers) belongs to
+  the Production page; no other page renders one.
 - Start every page with `articles_df = loaders.require_articles()`. This applies the
   global sidebar filters, handles the empty-state / `st.stop()` case, shows the
   degraded-mode warning, and renders the dataset-version caption
@@ -53,11 +55,14 @@ to keep it from drifting back.
   `lorenz_chart` for concentration curves, `stacked_area` for composition-over-time.
   Add a new builder there rather than hand-rolling `px`/`go` calls in a page
   a second time.
-- Compute the data for a chart in `apps/dashboard/analytics.py` (pure pandas, no
-  `streamlit` import) — not inline in the page function. Reuse
-  `valid_years`, `source_counts_by`, `cumulative_by_source`,
-  `cumulative_by_venue`, `source_means`, `explode_authors`,
-  `explode_keywords`, `canonical_author` before writing a new groupby.
+- Compute the data for a chart in the `apps/dashboard/analytics/` package (pure
+  pandas, no `streamlit` import, one module per subject: `counts`, `authors`,
+  `citations`, `bibliometrics`, `vocabulary`, `anomalies`, `themes`; import from the
+  submodule, there are no re-exports) — not inline in the page function. Reuse
+  `counts.valid_years`, `source_counts_by`, `cumulative_by_source`,
+  `cumulative_by_venue`, `source_means`, `explode_keywords`,
+  `authors.explode_authors` and `transform.authors.canonical_author` before writing
+  a new groupby.
 - Finish every chart with `components.render_chart(fig, caption=..., height=...)`
   — it applies `polish_figure_layout` and calls `st.plotly_chart` +
   `st.caption` in one place. Don't call `polish_figure_layout` /
@@ -170,13 +175,30 @@ got long). Two rules keep this from recurring:
 
 ## Aggregation rule
 
-Pure pandas logic lives in `apps/dashboard/analytics.py`, `forecasting.py`,
-`qualis.py` and `retrieval_eval.py` (no Streamlit import, so they're
-testable independently). `apps/dashboard/loaders.py` is the only cache layer
+Pure pandas logic lives in the `apps/dashboard/analytics/` package (one module
+per subject), `forecasting.py` and `qualis.py` (no Streamlit import, so they're
+testable independently; `tests/test_dashboard_layering.py` globs the package).
+The retrieval benchmark's metrics are `apps/api/evaluation.py`, not a dashboard
+module. The engineering taxonomies (`transform/taxonomy.py`) and author folding
+(`transform/authors.py`) live in the core, because building a version uses them. `apps/dashboard/loaders.py` is the only cache layer
 (`@st.cache_data` with a TTL, plus `@st.cache_resource` for the retriever); raw
 SQL against the medallion databases lives in `apps/dashboard/data.py`. A page
 function should mostly be: call a loader, call an analytics function, call a
 chart builder, call `render_chart`.
+
+Two rules keep pages thin:
+
+- An expensive computation that depends on the sidebar filters gets a
+  `@st.cache_data` wrapper in `loaders.py` keyed by `loaders.filter_signature()`
+  (a few small tuples), not by the filtered frame, which would be hashed on
+  every lookup -- e.g. `keyword_rising_falling`, `cognitive_distance`,
+  `theme_drift`, `pdf_selection_bias_table` (the last with a fixed `seed=42`, so
+  its bootstrap intervals are the same on every rerun).
+- A control whose labels map to values keeps that mapping in a dict in the pure
+  module, not as literals in the page: `themes.SMOOTHING_WINDOWS`,
+  `themes.THEME_METRICS`, `themes.HORIZON_FLOORS`; the drift windows come from
+  `themes.drift_windows` (`DRIFT_WINDOW_COUNT` article-count terciles from
+  `DRIFT_MIN_YEAR = 1990`), so the page holds no year literal.
 
 Article search is not a dashboard module: the Quality page's search and its
 benchmark call `loaders.retriever()`, which holds one `apps.api.api.Retriever`
@@ -200,12 +222,12 @@ dashboard.
   Don't present "IEEE has richer keywords" as a finding without this caveat.
 - Author names are **not the same identity across sources**: IEEE exports
   initials (`J. Liu`), Elsevier full names (`Junyong Liu`), IEEE's own `.bib`
-  uses `Last, First`. `analytics.canonical_author` folds these to `"initial
+  uses `Last, First`. `transform.authors.canonical_author` folds these to `"initial
   surname"` — a real simplification that can also merge distinct people who
   share an initial+surname. Any author-identity chart must disclose this
   (see the `hero_banner` on the Researchers and collaboration page for the
   wording to reuse).
-- `year` ranges 1926–2027 (2027 = in-press). Use `analytics.valid_years` with
+- `year` ranges 1926–2027 (2027 = in-press). Use `analytics.counts.valid_years` with
   an explicit window rather than a bare `pd.to_numeric` — a stray old/future
   row will otherwise dominate any trend/rate calculation.
 - Run history lives in `gold.lit_pipeline_executions` / `lit_pipeline_runs`

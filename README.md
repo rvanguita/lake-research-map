@@ -131,7 +131,7 @@ The Streamlit dashboard (`src/apps/dashboard/`) is partitioned into **10 workflo
 
 ## 🔬 Scientometric, Econometric & Machine Learning Rigor
 
-All analytical functions reside in `apps/dashboard/analytics.py` and `apps/dashboard/forecasting.py` as **pure, stateless mathematical functions** independent of Streamlit and MySQL:
+All analytical functions reside in the `apps/dashboard/analytics/` package (one module per subject: counts, authors, citations, bibliometrics, vocabulary, anomalies, themes) and `apps/dashboard/forecasting.py`, with the engineering taxonomies in `transform/taxonomy.py` and author-name folding in `transform/authors.py`, as **pure, stateless mathematical functions** independent of Streamlit and MySQL:
 
 ```
                                   ANALYTICAL RIGOR
@@ -294,8 +294,10 @@ lake-research-map/
 │   │   ├── architecture.svg      # Legacy pipeline architecture diagram
 │   │   └── medallion_architecture.svg # Modern white-background medallion architecture diagram
 │   ├── config.py                 # Paths and per-layer database settings (dataclasses + python-dotenv)
-│   ├── pipeline.py               # Stage functions (run_raw, run_bronze, ...) and the whole CLI
+│   ├── pipeline.py               # The six stage functions (run_raw, run_bronze, ...), run_all, run
+│   ├── runs.py                   # Pipeline lock, logging, layer sessions, run/stage bookkeeping, recovery
 │   ├── quality.py                # Executable per-stage data contracts and publication gates
+│   ├── cli/                      # Composition root: main.py (parser, lock policy, dispatch) + one module per command group
 │   ├── db/                       # SQLAlchemy 2.0 multi-database models
 │   │   ├── raw_models.py         # lit_source_files, lit_config, lit_bib_entries
 │   │   ├── bronze_models.py      # lit_articles union schema
@@ -309,13 +311,18 @@ lake-research-map/
 │   │   ├── raw_bib.py            # Robust BibTeX parser (handles no-separator gotcha)
 │   │   ├── raw_pdfs.py           # PDF manifest inventory
 │   │   ├── raw_config.py         # Search query provenance parser
+│   │   ├── doi.py                # normalize_doi, the one DOI comparison form
 │   │   ├── openalex.py           # OpenAlex REST enrichment client
+│   │   ├── openalex_audits.py    # Read-only coverage and integrity audits over the OpenAlex observations
 │   │   └── hashing.py            # Sha256 idempotency hashing
 │   ├── transform/                # Medallion transformations
 │   │   ├── bronze_articles.py    # Schema unification
 │   │   ├── silver_articles.py    # Normalized DOI dedup & RapidFuzz PDF matching
 │   │   ├── gold_articles.py      # Chunking, PDF extraction and merge helpers for Gold
-│   │   ├── versioned_gold.py     # Candidate Gold/embed/semantic builders, publication, Qdrant alias
+│   │   ├── versioned_gold.py     # Candidate Gold/embed/semantic builders
+│   │   ├── publication.py        # Publication: live Gold tables, pointer, lit_chunks_active alias
+│   │   ├── authors.py            # canonical_author: cross-source author-name folding
+│   │   ├── taxonomy.py           # Engineering-evidence taxonomies (TAXONOMY_REGISTRY)
 │   │   ├── pdf_text.py           # PDF text cleaning before chunking (references, hyphens, reflow)
 │   │   ├── duplicate_resolution.py # Persistent merge/keep review decisions
 │   │   ├── embeddings.py         # Local ONNX fastembed model identity, pin and loader
@@ -330,6 +337,7 @@ lake-research-map/
 │       │   ├── rank.py               # BM25 index, RRF, per-article collapse
 │       │   ├── index.py              # Published version's articles and chunk texts
 │       │   ├── models.py             # Pinned reranker, untruncated token counts
+│       │   ├── evaluation.py         # Ranking metrics and per-mode latency for the retrieval benchmark
 │       │   ├── cli.py                # search / screen / mcp commands
 │       │   └── mcp_server.py         # Five MCP tools over stdio
 │       ├── qdrant/               # `vectors status|backfill|rebuild|sync-alias` maintenance commands
@@ -338,8 +346,16 @@ lake-research-map/
 │           ├── app.py                # Dashboard navigation & router
 │           ├── data.py               # Raw SQL data layer
 │           ├── loaders.py            # @st.cache_data caching and normalization
-│           ├── analytics.py          # Pure mathematical, scientometric & network analytics
-│           ├── forecasting.py        # Regression benchmarking, quantiles, Bass diffusion
+│           ├── analytics/            # Pure scientometric & network analytics, one module per subject
+│           │   ├── counts.py             # Year windows, per-source counts, coverage, PDF selection bias
+│           │   ├── authors.py            # Productivity, team size, collaboration networks
+│           │   ├── citations.py          # Heavy tails, age normalization, count GLMs
+│           │   ├── bibliometrics.py      # Bradford zones, Lotka's law
+│           │   ├── vocabulary.py         # Keyword trends, Zipf's law, c-TF-IDF, atypicality
+│           │   ├── anomalies.py          # Bibliometric anomaly audit
+│           │   └── themes.py             # Theme sizes, evolution and drift
+│           ├── forecasting.py        # Regression benchmarking, quantiles, Bass diffusion, bursts, breaks
+│           ├── qualis.py             # CAPES/Qualis venue lookup and strata
 │           ├── theme.py              # Fixed-dark theme tokens and transparent polar styling
 │           ├── components.py         # Reusable Streamlit UI widgets & metric cards
 │           └── pages/                # 10 workflow-oriented analytical controllers

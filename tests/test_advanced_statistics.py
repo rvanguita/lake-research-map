@@ -7,20 +7,20 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from apps.dashboard.analytics import (
-    age_normalized_citations,
-    benjamini_hochberg,
-    bradford_zones,
-    citation_determinants_glm,
+from apps.dashboard.analytics.authors import (
     coauthorship_community_detection,
-    fit_heavy_tail_distributions,
     graph_advanced_metrics,
-    lotka_law_analysis,
-    mann_kendall_trend,
     network_null_model_diagnostics,
-    semantic_stability_diagnostics,
-    zipf_law_analysis,
 )
+from apps.dashboard.analytics.bibliometrics import bradford_zones, lotka_law_analysis
+from apps.dashboard.analytics.citations import (
+    age_normalized_citations,
+    citation_determinants_glm,
+    fit_heavy_tail_distributions,
+)
+from apps.dashboard.analytics.counts import benjamini_hochberg, mann_kendall_trend
+from apps.dashboard.analytics.vocabulary import zipf_law_analysis
+from transform.semantics import semantic_stability_diagnostics
 
 
 def test_fit_heavy_tail_distributions():
@@ -237,7 +237,7 @@ def test_graph_advanced_metrics_centralities_and_small_world():
 
 
 def test_detect_structural_breaks():
-    from apps.dashboard.analytics import detect_structural_breaks
+    from apps.dashboard.forecasting import detect_structural_breaks
 
     # Regime 1: mean 10, Regime 2: mean 50
     years = np.arange(2000, 2020)
@@ -268,7 +268,7 @@ def test_searched_breakpoint_p_value_controls_false_positives():
     the time. The permutation p-value is what brings that back near nominal,
     and that gap is the whole reason this statistic is bootstrapped.
     """
-    from apps.dashboard.analytics import detect_structural_breaks
+    from apps.dashboard.forecasting import detect_structural_breaks
 
     rng = np.random.default_rng(3)
     trials = 60
@@ -285,7 +285,7 @@ def test_searched_breakpoint_p_value_controls_false_positives():
 
 
 def test_conceptual_atypicality_analysis():
-    from apps.dashboard.analytics import conceptual_atypicality_analysis
+    from apps.dashboard.analytics.vocabulary import conceptual_atypicality_analysis
 
     df = pd.DataFrame(
         [
@@ -403,7 +403,7 @@ def test_mann_kendall_short_series_reports_a_neutral_correction():
 
 
 def test_linear_slope_with_ci_reports_the_spread_a_ranking_hides():
-    from apps.dashboard.analytics import linear_slope_with_ci
+    from apps.dashboard.analytics.counts import linear_slope_with_ci
 
     clean = linear_slope_with_ci(np.arange(10), 2.0 * np.arange(10))
     assert clean["slope"] == pytest.approx(2.0)

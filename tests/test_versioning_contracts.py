@@ -13,6 +13,10 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 import pipeline
+import runs as run_records
+from cli import main as cli_main
+from cli import maintenance as cli_maintenance
+from cli import versions as cli_versions
 from db import bronze_models, gold_models, raw_models, silver_models
 from db.bronze_models import Article as BronzeArticle
 from db.gold_models import (
@@ -44,12 +48,12 @@ from quality import (
 )
 from transform.bronze_articles import build_bronze_articles
 from transform.embeddings import EMBED_MODEL_NAME, EMBED_MODEL_REVISION
+from transform.publication import materialize_version
 from transform.vector_payloads import chunk_payload
 from transform.versioned_gold import (
     build_dataset_embeddings,
     build_dataset_gold,
     build_dataset_semantics,
-    materialize_version,
 )
 
 
@@ -297,7 +301,6 @@ def test_versioned_gold_build_does_not_mutate_live_publication(
 def test_semantic_run_persists_the_diagnostics_that_produced_its_map(
     gold_session, monkeypatch, vector_store
 ):
-    from apps.dashboard import analytics
     from transform import semantics, versioned_gold
 
     gold_session.add(DatasetVersion(version_id="v1", status="candidate"))
@@ -336,7 +339,7 @@ def test_semantic_run_persists_the_diagnostics_that_produced_its_map(
     monkeypatch.setattr(versioned_gold, "project_2d", lambda _matrix: reduced)
     monkeypatch.setattr(versioned_gold, "near_duplicate_pairs", lambda *_args: [])
     monkeypatch.setattr(
-        analytics,
+        semantics,
         "semantic_stability_diagnostics",
         lambda *_args: {"valid": True, "bootstrap_ari_mean": 0.9},
     )
@@ -426,16 +429,27 @@ def test_quality_gates_reject_incompatible_embedding(gold_session, vector_store)
 
 
 def test_materialization_rechecks_publication_contract(gold_session, vector_store):
+    # NFR-03: a candidate that fails its contract leaves the version already
+    # serving readers exactly where it was -- pointer, status and live rows.
+    previous_id = "p" * 64
+    _candidate(gold_session, vector_store, previous_id, "10.1/previous", 0.1)
+    materialize_version(gold_session, previous_id, "execution-previous", store=vector_store)
+    gold_session.commit()
+
     version_id = "a" * 64
     _candidate(gold_session, vector_store, version_id, "10.1/a", 0.1)
-    chunk = gold_session.scalar(select(DatasetChunk))
+    chunk = gold_session.scalar(
+        select(DatasetChunk).where(DatasetChunk.dataset_version_id == version_id)
+    )
     chunk.embedding_dtype = "float16"
 
     with pytest.raises(ContractViolation, match="embed.compatible"):
         materialize_version(gold_session, version_id, "execution-invalid", store=vector_store)
 
-    assert gold_session.query(Article).count() == 0
+    assert [row.doi for row in gold_session.scalars(select(Article)).all()] == ["10.1/previous"]
     assert gold_session.get(DatasetVersion, version_id).status == "candidate"
+    assert gold_session.get(PublicationState, 1).active_version_id == previous_id
+    assert gold_session.get(DatasetVersion, previous_id).status == "active"
 
 
 def test_publication_and_reactivation_restore_exact_gold_snapshot(gold_session, vector_store):
@@ -469,9 +483,9 @@ def _null_lock(execution_id):
 
 def test_versions_cli_dispatches_without_starting_pipeline(monkeypatch):
     called = []
-    monkeypatch.setattr(pipeline, "_run_version_command", called.append)
+    monkeypatch.setattr(cli_versions, "run", called.append)
 
-    pipeline.main(["versions", "list"])
+    cli_main.main(["versions", "list"])
 
     assert len(called) == 1
     assert called[0].version_action == "list"
@@ -502,10 +516,10 @@ def test_pipeline_lock_rejects_another_mysql_process(monkeypatch):
             self.closed = True
 
     session = FakeSession()
-    monkeypatch.setattr(pipeline, "get_session", lambda layer: session)
+    monkeypatch.setattr(run_records, "get_session", lambda layer: session)
 
-    with pytest.raises(pipeline.PipelineBusyError, match="another pipeline execution"):
-        with pipeline._pipeline_lock("execution-2"):
+    with pytest.raises(run_records.PipelineBusyError, match="another pipeline execution"):
+        with run_records._pipeline_lock("execution-2"):
             raise AssertionError("the lock must reject the second process")
 
     assert session.closed is True
@@ -544,9 +558,9 @@ def test_pipeline_lock_releases_mysql_advisory_lock(monkeypatch):
             self.closed = True
 
     session = FakeSession()
-    monkeypatch.setattr(pipeline, "get_session", lambda layer: session)
+    monkeypatch.setattr(run_records, "get_session", lambda layer: session)
 
-    with pipeline._pipeline_lock("execution-1"):
+    with run_records._pipeline_lock("execution-1"):
         pass
 
     assert any("GET_LOCK" in call for call in session.calls)
@@ -567,14 +581,14 @@ def test_full_pipeline_correlates_stages_and_publishes_only_after_gates(monkeypa
         factories[layer] = sessionmaker(bind=engine, future=True)
 
     monkeypatch.setattr(pipeline, "bootstrap", lambda: None)
-    monkeypatch.setattr(pipeline, "get_session", lambda layer: factories[layer]())
+    monkeypatch.setattr(run_records, "get_session", lambda layer: factories[layer]())
     source = ScannedSource(
         path="data/elsevier/test.bib",
         source="elsevier",
         kind="bib",
         sha256="a" * 64,
         size_bytes=10,
-        mtime=pipeline.datetime(2026, 9, 21),
+        mtime=datetime(2026, 9, 21),
         revision_id="b" * 64,
         archive_path="data/.lake_research_map/objects/aa/" + "a" * 64,
     )
@@ -721,7 +735,7 @@ def test_golden_corpus_add_edit_rename_remove_and_reactivate(monkeypatch, tmp_pa
         factories[layer] = sessionmaker(bind=engine, future=True)
 
     monkeypatch.setattr(pipeline, "bootstrap", lambda: None)
-    monkeypatch.setattr(pipeline, "get_session", lambda layer: factories[layer]())
+    monkeypatch.setattr(run_records, "get_session", lambda layer: factories[layer]())
     monkeypatch.setattr(raw_bib, "IEEE_BIB_DIRS", (data / "ieee",))
     monkeypatch.setattr(raw_bib, "ELSEVIER_BIB_DIRS", (data / "elsevier",))
     monkeypatch.setattr(
@@ -866,9 +880,11 @@ def test_golden_corpus_add_edit_rename_remove_and_reactivate(monkeypatch, tmp_pa
         len({initial_version, added_version, edited_version, renamed_version, removed_version}) == 5
     )
 
-    pipeline._run_version_command(
-        SimpleNamespace(version_action="activate", version_id=renamed_version)
-    )
+    # `versions activate` opens its own sessions and store, outside the stages.
+    monkeypatch.setattr(cli_versions, "bootstrap", lambda: None)
+    monkeypatch.setattr(cli_versions, "get_session", lambda layer: factories[layer]())
+    monkeypatch.setattr(cli_versions, "get_vector_store", lambda: vector_store)
+    cli_versions.run(SimpleNamespace(version_action="activate", version_id=renamed_version))
     gold_session = factories["gold"]()
     try:
         assert gold_session.get(PublicationState, 1).active_version_id == renamed_version
@@ -919,14 +935,12 @@ def test_recover_stale_clears_executions_with_no_heartbeat(monkeypatch, gold_ses
     )
     gold_session.commit()
 
-    monkeypatch.setattr(pipeline, "bootstrap", lambda: None)
-    monkeypatch.setattr(pipeline, "get_session", lambda layer: gold_session)
-    monkeypatch.setattr(pipeline, "_pipeline_lock", _null_lock)
+    monkeypatch.setattr(cli_maintenance, "bootstrap", lambda: None)
+    monkeypatch.setattr(cli_maintenance, "get_session", lambda layer: gold_session)
+    monkeypatch.setattr(run_records, "_pipeline_lock", _null_lock)
     monkeypatch.setattr(gold_session, "close", lambda: None)
 
-    pipeline._run_maintenance_command(
-        SimpleNamespace(maintenance_action="recover-stale", older_than_minutes=30)
-    )
+    cli_maintenance.run(SimpleNamespace(maintenance_action="recover-stale", older_than_minutes=30))
 
     execution = gold_session.get(PipelineExecution, "abandoned")
     assert execution.status == "error"
@@ -954,17 +968,25 @@ def test_a_presentation_only_edit_does_not_mint_a_new_version(tmp_path):
     from ingest.snapshots import code_fingerprint
 
     page = tmp_path / "src/apps/dashboard/pages/overview.py"
-    analytics = tmp_path / "src/apps/dashboard/analytics.py"
-    page.parent.mkdir(parents=True)
+    analytics = tmp_path / "src/apps/dashboard/analytics/counts.py"
+    semantics = tmp_path / "src/transform/semantics.py"
+    for path in (page, analytics, semantics):
+        path.parent.mkdir(parents=True, exist_ok=True)
     page.write_text("CAPTION = 'a'\n")
     analytics.write_text("K = 1\n")
+    semantics.write_text("S = 1\n")
     _, first = code_fingerprint(tmp_path)
 
     page.write_text("CAPTION = 'b'\n")
     _, caption_edit = code_fingerprint(tmp_path)
     analytics.write_text("K = 2\n")
     _, analytics_edit = code_fingerprint(tmp_path)
+    semantics.write_text("S = 2\n")
+    _, semantics_edit = code_fingerprint(tmp_path)
 
     assert caption_edit == first
-    # analytics.py feeds the semantic stage's persisted diagnostics.
-    assert analytics_edit != first
+    # The dashboard maths reads a version and never builds one.
+    assert analytics_edit == first
+    # `transform/semantics.py` holds the stability diagnostics the semantic
+    # stage persists into the version, so an edit there must mint a new one.
+    assert semantics_edit != first

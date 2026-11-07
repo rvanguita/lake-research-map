@@ -57,7 +57,6 @@ def _render_search_provenance() -> None:
 
 def render() -> None:
     page_header(
-        "🏗️",
         "Pipeline and provenance",
         "The raw → bronze → silver → gold funnel: how much survives each stage, why, and where "
         "metadata coverage improves or degrades.",
@@ -258,7 +257,7 @@ def _headline_metrics(funnel_df: pd.DataFrame) -> None:
     dropped = int(funnel_df["dropped_no_doi"].sum())
     metric_row(
         [
-            ("📥 Raw", f"{int(totals['raw']):,}", "linhas CSV + entradas bib"),
+            ("📥 Raw", f"{int(totals['raw']):,}", "CSV rows + bib entries"),
             ("🥉 Bronze", f"{int(totals['bronze']):,}", None),
             (
                 "🥈 Silver",

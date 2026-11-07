@@ -188,24 +188,24 @@ its requirement, or says plainly that none exists.
 | `FR-03` | `silver.doi_unique`, `silver.doi_normalized`, `silver.bronze_partition` | `quality.silver_contract`; `tests/test_silver_articles.py` |
 | `FR-04` | Idempotent merge/keep/undo with rationale and timestamps | `transform/duplicate_resolution.py`; `tests/test_duplicate_resolution.py` |
 | `FR-05` | Reused vs. invalidated chunk counts on an unchanged rebuild; copy-before-compute and orphan deletion in the embed stage | `transform/versioned_gold.py`; `tests/test_gold_articles.py`, `tests/test_vector_collections.py` |
-| `FR-06` | Dimension, model, revision, finiteness, orphan and coverage gates on the Qdrant points before publication | `quality.embed_contract`, `quality.publication_contract`; `tests/test_vector_collections.py` |
+| `FR-06` | Dimension, model, revision, finiteness, orphan and coverage gates on the Qdrant points before publication | `quality.embed_contract`, `quality.publication_contract`; `tests/test_vector_collections.py` (`test_the_contract_fails_on_lost_points_changed_text_and_an_unreachable_store`, `test_the_contract_fails_on_a_non_finite_vector`) |
 | `FR-07` | Parent execution and stage rows sharing one version | `tests/test_versioning_contracts.py` |
-| `FR-08` | Article reader bound to the publication pointer | `apps/dashboard/data.py::load_articles`; `tests/test_dashboard_pages.py` |
-| `FR-09` | Durable labels joined to calibration, with both approval digests | `reviews calibrate`; `tests/test_review_label_reader.py` |
+| `FR-08` | Article reader bound to the publication pointer: a newer unpublished candidate and the live projection never reach the dashboard; no pointer degrades to Silver, labelled non-canonical | `apps/dashboard/data.py::load_articles`, `select_articles_layer`; `tests/test_dashboard_publication_pointer.py` |
+| `FR-09` | Durable labels joined to calibration; the approval row persists the threshold parameters, metrics, decision and both digests | `reviews calibrate`, `reviews approve` (`transform/review_workflows.py::approve_model`); `tests/test_review_label_reader.py`, `tests/test_model_approval.py` |
 | `FR-10` | Component ranks and scores exposed per mode | `apps/api/rank.py`, `apps/api/api.py::ArticleHit`; `tests/test_retrieval_rank.py`, `tests/test_retrieval_api.py` |
-| `FR-11` | No write call anywhere under `apps/dashboard/` | `tests/test_theme.py` |
+| `FR-11` | No write call anywhere under `apps/dashboard/`: ORM writes, DML through `execute`, file-writing pandas calls, write-mode `open`, `pathlib`/`os`/`shutil` mutations, `subprocess` | `tests/test_dashboard_read_only.py` (static AST scan; its detector cases include the removed `qualis.py` parquet cache) |
 | `FR-12` | Every page rendered headless in populated and empty states | `tests/test_dashboard_pages.py` |
 | `FR-13` | Per-version collection, deterministic point ids, exact search, alias moved after publication, backfill/rebuild repairs | `db/vector_store.py`; `tests/test_vector_store.py`, `tests/test_vector_collections.py`, opt-in `tests/test_qdrant_server.py`; `vectors status` |
 | `FR-14` | One hit per article, filters before ranking, pandas/Qdrant filter parity, JSON-only stdout, no pipeline lock, five MCP tools | `apps/api/`; `tests/test_retrieval_api.py`, `tests/test_retrieval_filters.py`, `tests/test_retrieval_cli.py`, `tests/test_mcp_server.py` |
 | `FR-15` | Cleaner unit tests and the measured before/after on the 97 linked PDFs; `pdf_*` keys in the Gold stats | `transform/pdf_text.py`; `tests/test_pdf_text.py`, `tests/test_gold_articles.py`; SDD §14 |
 | `NFR-01` | Source/config/code/curation fingerprints; per-page dataset-version caption | `ingest/snapshots.py::build_fingerprint`; `tests/test_versioning_contracts.py` (fingerprints), `tests/test_population_provenance.py` (caption) |
 | `NFR-02` | Unchanged re-run produces no new logical rows | `tests/test_gold_articles.py`, `tests/test_raw_bib.py` |
-| `NFR-03` | Contract violation blocks publication and keeps the prior version active | `quality.assert_contract`; `tests/test_versioning_contracts.py` (`test_quality_gates_reject_incompatible_embedding`, `test_materialization_rechecks_publication_contract`) |
+| `NFR-03` | Contract violation blocks publication and keeps the prior version active (pointer, status and live rows unchanged) | `quality.assert_contract`; `tests/test_versioning_contracts.py` (`test_quality_gates_reject_incompatible_embedding`, `test_materialization_rechecks_publication_contract`) |
 | `NFR-04` | Rejections, overrides, quality results and run errors persisted | `lit_rejected`, `lit_quality_results`, `lit_pipeline_runs` |
 | `NFR-05` | **Not measured.** Latency and memory were benchmarked once by hand (2026-09-21), on the pre-Qdrant in-process search; nothing has been measured on the current Qdrant architecture, and no performance test guards either | SDD §14: 11.06 MiB vector matrix, 92.72 ms warm-search P95 on 2026-09-21 (superseded architecture) |
 | `NFR-06` | Secret hygiene only. The per-table privilege boundary was traded away on 2026-09-22 and is **not** enforced | `.gitignore`; `WP-08` evidence |
 | `NFR-07` | Portuguese-shaped copy, empty headings and empty metric labels all fail the build | `tests/test_dashboard_language.py` |
-| `NFR-08` | `analytics.py` and `forecasting.py` import no Streamlit; every page has `AppTest` coverage | `tests/test_theme.py`, `tests/test_dashboard_pages.py` |
+| `NFR-08` | Every `analytics/` module, `forecasting.py` and `qualis.py` import no Streamlit; `@st.cache_*` is declared only in `loaders.py`; `apps/api` and `apps/qdrant` import neither Streamlit nor the dashboard, the core imports no app (the allowlist is empty), and only `cli/` imports `apps/` while nothing imports `cli`; every page has `AppTest` coverage | `tests/test_dashboard_layering.py`, `tests/test_import_boundaries.py`, `tests/test_dashboard_pages.py` |
 
 Two rows say "not measured" on purpose. `NFR-05` and the roles half of `NFR-06`
 are currently aspirations, and writing them as though they were verified is the

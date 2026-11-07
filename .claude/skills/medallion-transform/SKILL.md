@@ -1,12 +1,12 @@
 ---
 name: medallion-transform
-description: Conventions for adding/editing pipeline code under ingest/, transform/, db/, and pipeline.py — the raw→bronze→silver→gold→embed→semantic medallion stages. Use whenever adding an ingest loader, a transform builder, a new model column, or wiring a stage into the CLI.
+description: Conventions for adding/editing pipeline code under ingest/, transform/, db/, pipeline.py and runs.py — the raw→bronze→silver→gold→embed→semantic medallion stages. Use whenever adding an ingest loader, a transform builder, a new model column, or wiring a stage into the CLI.
 ---
 
 # lake-research-map medallion pipeline
 
-This is the authoring-side skill for the pipeline itself (`src/{ingest,transform,db}/`
-and `pipeline.py`) — how to actually *run* it is the `pipeline-ops` skill instead.
+This is the authoring-side skill for the pipeline itself (`src/{ingest,transform,db}/`,
+`pipeline.py` and `runs.py`) — how to actually *run* it is the `pipeline-ops` skill instead.
 Dashboard code (`apps/dashboard/`) has its own `streamlit-dashboard` skill.
 
 ## One database per layer, same table names
@@ -54,13 +54,14 @@ published versions are immutable snapshots and are never rewritten. Raw is the l
 (content-hash idempotency), so a raw column is the one case where already-ingested rows stay without it until
 their source file changes.
 
-## Stage functions (`pipeline.py`)
+## Stage functions (`pipeline.py`, bookkeeping in `runs.py`)
 
-Do not write a stage from a short template: copy `run_silver` in `pipeline.py`, which is the reference. Every
-`run_<stage>()` does, in order:
+Do not write a stage from a short template: copy `run_silver` in `pipeline.py`, which is the reference. The
+stage bodies live there; the lock, logging, sessions and run/stage bookkeeping they call live in `runs.py`
+(`pipeline.py` imports them). Every `run_<stage>()` does, in order:
 
-1. open its sessions with `_layer_sessions(...)` (an `ExitStack`, so a failure anywhere still closes them --
-   and the module-level `get_session` it calls is the tests' injection point);
+1. open its sessions with `runs._layer_sessions(...)` (an `ExitStack`, so a failure anywhere still closes them --
+   and the `runs.get_session` it calls is the tests' injection point);
 2. resolve the working version (`_working_version`) and record the execution (`_ensure_execution`, commit);
 3. `_begin_stage` (a `lit_pipeline_runs` row in `running`);
 4. the skip check: `_is_unchanged_full_run` → `_complete_skipped_stage` (an unchanged `--stage all` run of an
@@ -73,10 +74,12 @@ Do not write a stage from a short template: copy `run_silver` in `pipeline.py`, 
 8. on any exception: roll back the layer session and call `_handle_stage_failure` (rollback, error status on the
    run and the execution, failed version), then re-raise.
 
-`run_semantic` adds the publication (`_version_ready`, `materialize_version`, then `publish_vector_alias` after
-the commit). Wire a new stage into `STAGES`, `_STAGE_SEQUENCE` (derived), `run_all()` and `run()`; the CLI is the
-only entry point (there is no orchestrator since ADR-09). A new CLI command that changes what the next
-publication contains must also be listed in `_mutates_published_inputs` so it takes the pipeline lock.
+`run_semantic` adds the publication (`_version_ready`, then `transform/publication.py::materialize_version`, then
+`publish_vector_alias` after the commit). Wire a new stage into `STAGES`, `_STAGE_SEQUENCE` (derived), `run_all()`
+and `run()`; the CLI is the only entry point (there is no orchestrator since ADR-09). A new command group is a
+`cli/<group>.py` with `configure(subparsers)`/`run(args)`, registered in `cli/main.py`. A new CLI command that
+changes what the next publication contains must also be listed in `cli/main.py::_mutates_published_inputs` so
+it takes the pipeline lock.
 
 ## Ingest loader idempotency (`ingest/raw_*.py`)
 
@@ -85,12 +88,14 @@ Every raw-layer loader (`raw_{csv,bib,pdfs,config}.py`) follows the same pattern
 unchanged file. Follow this pattern for any new `ingest/raw_*.py` loader rather than inventing a new
 change-detection scheme.
 
-## The two `normalize_doi` implementations
+## One `normalize_doi`
 
-`transform/bronze_articles.normalize_doi` and `ingest/enrichment._normalize_doi` are **deliberately
-duplicated** (a comment in `enrichment.py` explains it avoids a circular import). If DOI normalization logic changes
-(e.g. handling a new URL prefix format), update both — a divergence here silently breaks either bronze
-building or citation-count enrichment lookups.
+`ingest/doi.py::normalize_doi` is the only DOI normalizer (strip a `http(s)://(dx.)doi.org/` prefix and
+whitespace, casefold; empty means `None`). Bronze, silver's dedup, `quality.py`, duplicate resolution,
+screening calibration, the enrichment/OpenAlex/Crossref crawls and the dashboard all import it -- it used to be
+two hand-synchronised copies, kept apart to dodge a circular import that a dependency-free module removes. Never
+inline a copy: a divergence silently breaks either deduplication or an enrichment lookup.
+`tests/test_doi.py` holds the canonical spellings and checks every caller uses the same function object.
 
 ## Gold full text
 

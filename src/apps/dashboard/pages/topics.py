@@ -2,29 +2,20 @@
 
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
 from apps.dashboard import loaders
-from apps.dashboard.analytics import (
+from apps.dashboard.analytics.counts import explode_keywords
+from apps.dashboard.analytics.vocabulary import (
     conceptual_atypicality_analysis,
-    cumulative_by_category,
-    detect_structural_breaks,
     dynamic_topic_ctfidf,
-    explode_keywords,
-    source_counts_by,
-    valid_years,
+    keyword_trend_frame,
     zipf_law_analysis,
 )
-from apps.dashboard.charts import (
-    source_bars,
-    source_topn_hbar,
-    stacked_area,
-    topn_hbar,
-)
+from apps.dashboard.charts import stacked_area, topn_hbar
 from apps.dashboard.components import (
     article_table,
     metric_row,
@@ -32,20 +23,13 @@ from apps.dashboard.components import (
     render_chart,
     require_columns,
 )
-from apps.dashboard.qualis import (
-    ESTRATO_ORDER,
-    MATCH_THRESHOLD,
-    NOT_CLASSIFIED,
-    QUALIS_AREA,
-    SOURCE_UNAVAILABLE_MESSAGE,
-)
+from apps.dashboard.forecasting import detect_structural_breaks
 from apps.dashboard.theme import (
     CATEGORICAL_PALETTE,
     FLAG_COLORS,
     TREND_DOWN_COLOR,
     TREND_UP_COLOR,
     theme_tokens,
-    venue_color_map,
 )
 
 TOP_KEYWORDS_TREND = 12
@@ -55,7 +39,6 @@ MIN_KEYWORD_OCCURRENCES = 15
 
 def render() -> None:
     page_header(
-        "🏷️",
         "Topics and scientific structure",
         "Where the corpus publishes, about what, and how the themes evolved over time.",
     )
@@ -78,48 +61,21 @@ def render() -> None:
 
     if tab_venues.open:
         with tab_venues:
-            venue_view = st.segmented_control(
-                "Venue analysis",
-                options=["Ranking and impact", "CAPES/Qualis", "Bradford zones", "Semantics"],
-                default="Ranking and impact",
-                key="topics_venue_view",
-            )
+            venue_view = (
+                st.segmented_control(
+                    "Venue analysis",
+                    options=["Ranking and impact", "Bradford zones", "Semantics"],
+                    default="Ranking and impact",
+                    key="topics_venue_view",
+                )
+                or "Ranking and impact"
+            )  # clicking the selected option off returns None
+            # The CAPES/Qualis views live on the Production and venues page
+            # (page ownership): this tab ranks venues, it does not grade them.
             if venue_view == "Ranking and impact":
                 _top_venues(articles_df)
             elif require_columns(articles_df, ["venue"]) and articles_df["venue"].notna().any():
-                if venue_view == "CAPES/Qualis" and not loaders.qualis_available():
-                    st.info(SOURCE_UNAVAILABLE_MESSAGE)
-                elif venue_view == "CAPES/Qualis":
-                    match_df, with_estrato, totals_by_estrato, estrato_order = _qualis_match_data(
-                        articles_df
-                    )
-                    qualis_view = (
-                        st.segmented_control(
-                            "CAPES/Qualis visualization format",
-                            options=[
-                                "Detailed table",
-                                "Totals by stratum",
-                                "Cumulative evolution",
-                                "A1–A3 subset",
-                            ],
-                            default="Detailed table",
-                            key="qualis_view_selector",
-                        )
-                        or "Detailed table"
-                    )
-                    if qualis_view == "Detailed table":
-                        _qualis_table(
-                            articles_df,
-                            match_df,
-                            with_estrato[with_estrato["estrato"] == "A1"],
-                        )
-                    elif qualis_view == "Totals by stratum":
-                        _qualis_totals_chart(totals_by_estrato, estrato_order)
-                    elif qualis_view == "Cumulative evolution":
-                        _qualis_cumulative_chart(with_estrato, estrato_order)
-                    else:
-                        _qualis_a1_a3_combined(with_estrato)
-                elif venue_view == "Bradford zones":
+                if venue_view == "Bradford zones":
                     _bradford_analysis(articles_df)
                 else:
                     _semantic_venues_analysis(articles_df)
@@ -160,7 +116,7 @@ def render() -> None:
             if not all_keywords:
                 st.info("No keywords identified in this layer.")
             else:
-                kw_year = _prepare_keyword_trend_data(articles_df)
+                kw_year = keyword_trend_frame(articles_df, min_year=TREND_MIN_YEAR)
                 if kw_year is None:
                     st.info("Insufficient data to analyze temporal trends.")
                 else:
@@ -178,7 +134,7 @@ def render() -> None:
                     if trend_view == "Annual share":
                         _topic_share_area(kw_year)
                     elif trend_view == "Rise vs. decline":
-                        _rising_falling(kw_year)
+                        _rising_falling()
                     elif trend_view == "First appearance":
                         _first_appearance(kw_year)
                     else:
@@ -442,18 +398,6 @@ def _keyword_explorer(
     )
 
 
-def _prepare_keyword_trend_data(articles_df: pd.DataFrame) -> pd.DataFrame | None:
-    """Shared prep for the three "Time Evolution" sub-tabs, or None if there's not enough data."""
-    kw_year = explode_keywords(articles_df)
-    if kw_year.empty or "year" not in kw_year.columns:
-        return None
-    kw_year["year"] = valid_years(kw_year, lo=TREND_MIN_YEAR)
-    kw_year = kw_year.dropna(subset=["year"]).astype({"year": int})
-    if len(kw_year) < 30:
-        return None
-    return kw_year
-
-
 def _topic_share_area(kw_year: pd.DataFrame) -> None:
     st.markdown("**Annual share of the main keywords**")
     top_terms = kw_year["keyword"].value_counts().head(TOP_KEYWORDS_TREND).index.tolist()
@@ -484,42 +428,17 @@ def _topic_share_area(kw_year: pd.DataFrame) -> None:
     )
 
 
-def _rising_falling(kw_year: pd.DataFrame) -> None:
+def _rising_falling() -> None:
     st.markdown("**Rising vs. declining terms**")
-    counts = kw_year["keyword"].value_counts()
-    eligible = counts[counts >= MIN_KEYWORD_OCCURRENCES].index
-
-    from apps.dashboard.analytics import linear_slope_with_ci
-
-    by_year_total = kw_year.groupby("year").size()
-    fits: dict[str, dict[str, float]] = {}
-    for kw in eligible:
-        yearly = kw_year[kw_year["keyword"] == kw].groupby("year").size()
-        share = (yearly / by_year_total.reindex(yearly.index)).fillna(0.0) * 100
-        if len(share) < 3:
-            continue
-        fit = linear_slope_with_ci(share.index.to_numpy(dtype=float), share.to_numpy(dtype=float))
-        if np.isfinite(fit["slope"]):
-            fits[kw] = fit
-
-    if not fits:
+    result = loaders.keyword_rising_falling(
+        loaders.filter_signature(), TREND_MIN_YEAR, MIN_KEYWORD_OCCURRENCES
+    )
+    df = result["slopes"] if result is not None else None
+    if df is None or df.empty:
         st.info(
             f"No term has at least {MIN_KEYWORD_OCCURRENCES} occurrences for trend calculation."
         )
         return
-
-    slope_series = pd.Series({kw: fit["slope"] for kw, fit in fits.items()}).sort_values()
-    top_slopes = pd.concat([slope_series.head(7), slope_series.tail(7)]).drop_duplicates()
-    df = top_slopes.rename_axis("keyword").reset_index(name="slope")
-    df["direction"] = df["slope"].apply(lambda s: "Rising" if s >= 0 else "Falling")
-    # Error bars carry the sampling spread the ranking hides: on series this
-    # short the interval very often straddles zero even at the extremes.
-    df["ci_low"] = df["keyword"].map(lambda kw: fits[kw]["ci_low"])
-    df["ci_high"] = df["keyword"].map(lambda kw: fits[kw]["ci_high"])
-    df["err_plus"] = df["ci_high"] - df["slope"]
-    df["err_minus"] = df["slope"] - df["ci_low"]
-    df["excludes_zero"] = (df["ci_low"] > 0) | (df["ci_high"] < 0)
-    df = df.sort_values("slope")
 
     fig = px.bar(
         df,
@@ -554,59 +473,17 @@ def _rising_falling(kw_year: pd.DataFrame) -> None:
         "so the rest are ranked by a slope the data cannot separate from no trend.",
     )
 
-    from apps.dashboard.analytics import benjamini_hochberg, mann_kendall_trend
-
-    # The test family is every eligible keyword, not the extremes plotted above.
-    # Adjusting only the top/bottom slopes would correct a set already chosen for
-    # being extreme, which inflates significance instead of controlling it -- so
-    # Mann-Kendall runs over the full family, Benjamini-Hochberg is applied there,
-    # and only then is the table narrowed to the terms on the chart.
-    pivoted = kw_year.groupby(["year", "keyword"]).size().unstack(fill_value=0)
-    mk_records = []
-    for kw in eligible:
-        if kw in pivoted.columns:
-            series = pivoted[kw].to_numpy()
-            res = mann_kendall_trend(series)
-            mk_records.append(
-                {
-                    "Keyword": kw,
-                    "Trend": res["trend"].title(),
-                    "Raw p-value": float(res["p_value"]),
-                    # Mann-Kendall assumes independent years, which annual
-                    # counts are not. The Hamed-Rao variance inflation is
-                    # reported beside the raw value as a sensitivity rather
-                    # than swapped in: it changes which terms look significant.
-                    "Serial-corrected p-value": float(res["p_value_serial_corrected"]),
-                    "Sen slope": round(res["slope"], 3),
-                }
-            )
-    if mk_records:
-        family = pd.DataFrame(mk_records)
-        family["Adjusted p-value"] = benjamini_hochberg(family["Raw p-value"])
-        family["Adjusted p-value (serial)"] = benjamini_hochberg(family["Serial-corrected p-value"])
-        family["FDR significant"] = family["Adjusted p-value"] < 0.05
-        family["FDR significant (serial)"] = family["Adjusted p-value (serial)"] < 0.05
-        survives = int((family["FDR significant"] & family["FDR significant (serial)"]).sum())
-        flagged = int(family["FDR significant"].sum())
-        displayed = set(df["keyword"])
-        trends = family[family["Keyword"].isin(displayed)].copy()
-        p_columns = [
-            "Raw p-value",
-            "Adjusted p-value",
-            "Serial-corrected p-value",
-            "Adjusted p-value (serial)",
-        ]
-        trends[p_columns] = trends[p_columns].round(4)
-        trends = trends.sort_values("Sen slope")
+    if result["family_size"]:
+        trends = result["tests"]
         st.markdown("#### Nonparametric trend test")
         st.caption(
             "Mann-Kendall and Sen slopes use zero-filled annual series. Benjamini-Hochberg "
-            f"adjustment controls the false-discovery rate across all {len(family)} keywords "
-            f"with at least {MIN_KEYWORD_OCCURRENCES} occurrences; the table shows the "
+            f"adjustment controls the false-discovery rate across all {result['family_size']} "
+            f"keywords with at least {MIN_KEYWORD_OCCURRENCES} occurrences; the table shows the "
             f"{len(trends)} terms charted above, with their family-adjusted values. "
-            f"Of the {flagged} keywords significant under the independence assumption, "
-            f"{survives} stay significant once the Hamed-Rao correction for autocorrelated "
-            "years is applied — treat the difference as the cost of that assumption."
+            f"Of the {result['flagged']} keywords significant under the independence assumption, "
+            f"{result['survives']} stay significant once the Hamed-Rao correction for "
+            "autocorrelated years is applied — treat the difference as the cost of that assumption."
         )
         st.dataframe(trends, hide_index=True, width="stretch")
 
@@ -671,249 +548,13 @@ def _first_appearance(kw_year: pd.DataFrame) -> None:
     )
 
 
-def _qualis_match_data(
-    articles_df: pd.DataFrame,
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.Series, list[str]]:
-    """Returns `(match_df, with_estrato, totals_by_estrato, estrato_order)`; `with_estrato` is `articles_df` with an added `estrato` column (each article's venue's CAPES/Qualis tier)."""
-    # Filter the full-corpus match table down to venues in the current filter
-    # scope, rather than calling `venue_qualis_map` with a filtered venues
-    # tuple directly -- that would re-trigger the rapidfuzz matching pass
-    # (and, transitively, the ~9s CAPES xlsx parse) on every global filter
-    # change, since the venues tuple is the cache key.
-    venues = set(articles_df["venue"].dropna().unique())
-    match_df = loaders.all_venue_qualis_map()
-    match_df = match_df[match_df["venue"].isin(venues)].reset_index(drop=True)
-    match_df["estrato"] = match_df["estrato"].fillna(NOT_CLASSIFIED)
-    # A raw None in a string column renders as literal "undefined" in Streamlit's
-    # dataframe grid (pandas' Arrow-backed string dtype stores it as a genuine
-    # null, not NaN) -- always give it an explicit placeholder instead.
-    match_df["matched_title"] = match_df["matched_title"].fillna("—")
-    match_df["score"] = match_df["score"].apply(lambda s: f"{s:.0f}" if pd.notna(s) else "—")
-
-    counts = articles_df["venue"].value_counts()
-    match_df["articles"] = match_df["venue"].map(counts).fillna(0).astype(int)
-    # Best classification first (A1 ... C, unclassified last); most-published
-    # journal leads within a tier.
-    tier_rank = {estrato: rank for rank, estrato in enumerate(ESTRATO_ORDER)}
-    match_df["_tier_rank"] = match_df["estrato"].map(tier_rank)
-    match_df = match_df.sort_values(["_tier_rank", "articles"], ascending=[True, False]).drop(
-        columns=["_tier_rank"]
-    )
-
-    venue_to_estrato = dict(zip(match_df["venue"], match_df["estrato"], strict=True))
-    with_estrato = articles_df.copy()
-    with_estrato["estrato"] = with_estrato["venue"].map(venue_to_estrato)
-    totals_by_estrato = with_estrato["estrato"].value_counts().reindex(ESTRATO_ORDER, fill_value=0)
-    totals_by_estrato = totals_by_estrato[
-        totals_by_estrato.index.isin(with_estrato["estrato"].unique())
-    ]
-    estrato_order = list(totals_by_estrato.index)
-
-    return match_df, with_estrato, totals_by_estrato, estrato_order
-
-
-def _qualis_table(
-    articles_df: pd.DataFrame, match_df: pd.DataFrame, a1_articles_df: pd.DataFrame
-) -> None:
-    st.subheader("🎓 CAPES/Qualis classification")
-    n_classified = int((match_df["estrato"] != NOT_CLASSIFIED).sum())
-    a1_venues = match_df.loc[match_df["estrato"] == "A1", "venue"]
-    pct_a1 = (len(a1_articles_df) / len(articles_df) * 100) if len(articles_df) else 0.0
-
-    metric_row(
-        [
-            ("📚 Periodicals classified", f"{n_classified}/{len(match_df)}", None),
-            ("🥇 A1 journals", f"{len(a1_venues)}", None),
-            (
-                "📄 Articles in A1 journals",
-                f"{len(a1_articles_df):,}",
-                f"{pct_a1:.1f}% of the corpus",
-            ),
-        ]
-    )
-
-    st.caption(
-        f"Official CAPES/Qualis classification (2017–2020 cycle, area **{QUALIS_AREA}** — the "
-        "last per-journal evaluation; from 2025-2028 CAPES evaluates by article rather than by "
-        "venue). Venues are matched to the official list by normalised title similarity "
-        f"(threshold {MATCH_THRESHOLD:.0f}%), because venue spellings vary across sources "
-        "(e.g. `&` vs. `and`, `(Print)`/`(Online)` suffixes). A venue with no confident match "
-        f'appears as "{NOT_CLASSIFIED}" -- never as a guessed grade.'
-    )
-    st.dataframe(
-        match_df.rename(
-            columns={
-                "venue": "Venue (corpus)",
-                "matched_title": "Matched title (CAPES)",
-                "estrato": "Tier",
-                "score": "Similarity (%)",
-                "articles": "Articles",
-            }
-        ),
-        hide_index=True,
-        width="stretch",
-    )
-
-
-def _qualis_totals_chart(totals_by_estrato: pd.Series, estrato_order: list[str]) -> None:
-    st.subheader("Total publications by classification")
-    fig = px.bar(
-        x=totals_by_estrato.index,
-        y=totals_by_estrato.to_numpy(),
-        category_orders={"x": estrato_order},
-        color=totals_by_estrato.index,
-        color_discrete_map=venue_color_map(estrato_order, others_label=NOT_CLASSIFIED),
-        labels={"x": "Classification", "y": "Articles"},
-    )
-    fig.update_layout(showlegend=False)
-    render_chart(
-        fig,
-        caption="Total corpus articles by CAPES/Qualis classification, ordered from best "
-        f'("A1") to worst, with "{NOT_CLASSIFIED}" last.',
-    )
-
-
-def _qualis_cumulative_chart(with_estrato: pd.DataFrame, estrato_order: list[str]) -> None:
-    st.subheader("Cumulative by classification")
-    cum_by_estrato = cumulative_by_category(with_estrato, "estrato", top_n=10)
-    if cum_by_estrato.empty:
-        st.info("No valid years for the cumulative by classification.")
-        return
-
-    fig = stacked_area(
-        cum_by_estrato,
-        x="year",
-        y="cumulative",
-        color="estrato",
-        color_map=venue_color_map(estrato_order, others_label=NOT_CLASSIFIED),
-        category_orders={"estrato": estrato_order},
-        title="Articles cumulative by CAPES/Qualis classification",
-    )
-    fig.update_traces(
-        hovertemplate="Year %{x}<br>%{data.name}: %{y:,.0f} cumulative articles<extra></extra>"
-    )
-    fig.update_layout(
-        xaxis_title="Year of publication",
-        yaxis_title="Cumulative articles",
-        # px names the legend after the raw `estrato` column otherwise.
-        legend_title_text="Classification",
-    )
-    render_chart(
-        fig,
-        caption="Cumulative corpus composition by CAPES/Qualis stratum (area "
-        f"{QUALIS_AREA}). Journals without a reliable match remain in "
-        f'"{NOT_CLASSIFIED}" and are not mixed into a real stratum.',
-    )
-
-
-def _qualis_a1_a3_combined(with_estrato: pd.DataFrame) -> None:
-    st.subheader("A1–A3 journals — cumulative")
-    combined_df = with_estrato[with_estrato["estrato"].isin(("A1", "A2", "A3"))]
-    if combined_df.empty:
-        st.info("No journal articles classified A1, A2 or A3 in this layer/filter.")
-        return
-
-    tier_palette = venue_color_map(["A1", "A2", "A3"])
-
-    col_volume, col_ranking = st.columns(2)
-    with col_volume:
-        years_df = combined_df.copy()
-        years_df["year"] = valid_years(years_df)
-        years_df = years_df.dropna(subset=["year"]).astype({"year": int})
-        by_year = source_counts_by(years_df, "year").sort_values("year")
-        if by_year.empty:
-            st.info("No valid years for this graph.")
-        else:
-            fig = source_bars(
-                by_year,
-                "year",
-                total_line=True,
-                title="Annual volume of articles in A1–A3 journals, by source",
-            )
-            fig.update_layout(
-                hovermode="x unified",
-                xaxis_title="Year of publication",
-                yaxis_title="Number of articles",
-            )
-            render_chart(
-                fig,
-                caption="Annual volume of articles published in A1, A2, or A3 journals, by source.",
-            )
-    with col_ranking:
-        top_combined = (
-            source_counts_by(combined_df, "venue").sort_values("total", ascending=False).head(15)
-        )
-        fig = source_topn_hbar(
-            top_combined,
-            "venue",
-            title="Top 15 A1–A3 journals by article count and source",
-            x_title="Number of articles",
-            y_title="Journal",
-        )
-        render_chart(
-            fig,
-            caption="Most frequent journals in the corpus across the A1, A2, and A3 tiers, "
-            "colored by source.",
-        )
-
-    st.divider()
-    col_venue_tier, col_source_tier = st.columns(2)
-    with col_venue_tier:
-        top_venues = combined_df["venue"].value_counts().head(15)
-        venue_to_estrato = combined_df.drop_duplicates("venue").set_index("venue")["estrato"]
-        fig = topn_hbar(
-            top_venues,
-            color_by=venue_to_estrato,
-            palette=tier_palette,
-            title="Top 15 A1–A3 journals by article count and CAPES/Qualis classification",
-            x_title="Number of articles",
-            y_title="Journal",
-        )
-        fig.update_traces(hovertemplate="<b>%{y}</b><br>%{x:,} articles<extra></extra>")
-        render_chart(
-            fig,
-            caption="The same most-published journals of the A1-A3 set, now coloured by the "
-            "CAPES/Qualis classification itself — it shows which category each journal in "
-            "the ranking belongs to.",
-        )
-    with col_source_tier:
-        if "source" not in combined_df.columns:
-            st.info("Source column not available in this layer.")
-        else:
-            by_source_tier = (
-                combined_df.groupby(["source", "estrato"]).size().reset_index(name="count")
-            )
-            fig = px.bar(
-                by_source_tier,
-                x="source",
-                y="count",
-                color="estrato",
-                category_orders={"estrato": ["A1", "A2", "A3"], "source": ["ieee", "elsevier"]},
-                color_discrete_map=tier_palette,
-                title="Distribution of A1/A2/A3 by source (IEEE vs. Elsevier)",
-                labels={"source": "Source", "count": "Articles", "estrato": "Classification"},
-            )
-            fig.update_traces(
-                hovertemplate="<b>%{data.name}</b><br>%{x}: %{y:,} articles<extra></extra>"
-            )
-            fig.update_layout(
-                xaxis_title="Source",
-                yaxis_title="Number of articles",
-                legend_title_text="Classification",
-            )
-            render_chart(
-                fig,
-                caption="Distribution of A1/A2/A3 articles by source (IEEE vs. Elsevier).",
-            )
-
-
 def _bradford_analysis(articles_df: pd.DataFrame) -> None:
     st.subheader("🎯 Bradford Dispersal Zones")
     st.caption(
         "Bradford's Law divides the journals into 3 concentric zones of equal productivity (~1/3 of the articles each). "
         "The theoretical proportion of the number of journals in each zone follows approximately 1 : k : k2."
     )
-    from apps.dashboard.analytics import bradford_zones
+    from apps.dashboard.analytics.bibliometrics import bradford_zones
 
     res = bradford_zones(articles_df)
     zone_sum = res.get("zone_summary")

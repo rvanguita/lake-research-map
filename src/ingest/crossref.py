@@ -41,7 +41,7 @@ from db.bronze_models import (
     ExternalWork,
     ReferenceWork,
 )
-from ingest.enrichment import _normalize_doi
+from ingest.doi import normalize_doi
 from ingest.openalex import (
     CONSECUTIVE_FAILURE_LIMIT,
     PROJECT_URL,
@@ -135,7 +135,7 @@ def fetch_crossref_reference_lists(
     """Reference lists for a batch of DOIs, keyed by normalized DOI."""
     get = session_factory or requests.get
     clean = [
-        doi for doi in dict.fromkeys(_normalize_doi(d) for d in dois) if doi and _queryable(doi)
+        doi for doi in dict.fromkeys(normalize_doi(d) for d in dois) if doi and _queryable(doi)
     ]
     if not clean:
         return {"status": "ok", "lists": {}}
@@ -148,11 +148,11 @@ def fetch_crossref_reference_lists(
         return {"status": fetched["status"], "error": fetched.get("error"), "lists": {}}
     lists: dict[str, list[dict] | None] = {doi: None for doi in clean}
     for item in fetched["items"]:
-        doi = _normalize_doi(item.get("DOI"))
+        doi = normalize_doi(item.get("DOI"))
         if doi in lists:
             lists[doi] = [
                 {
-                    "doi": _normalize_doi(reference.get("DOI")),
+                    "doi": normalize_doi(reference.get("DOI")),
                     "year": parse_reference_year(reference.get("year")),
                 }
                 for reference in item.get("reference") or []
@@ -166,7 +166,7 @@ def fetch_crossref_years(
     """Publication years for a batch of DOIs; a DOI Crossref lacks maps to None."""
     get = session_factory or requests.get
     clean = [
-        doi for doi in dict.fromkeys(_normalize_doi(d) for d in dois) if doi and _queryable(doi)
+        doi for doi in dict.fromkeys(normalize_doi(d) for d in dois) if doi and _queryable(doi)
     ]
     if not clean:
         return {"status": "ok", "years": {}}
@@ -180,7 +180,7 @@ def fetch_crossref_years(
     years: dict[str, int | None] = {doi: None for doi in clean}
     found: set[str] = set()
     for item in fetched["items"]:
-        doi = _normalize_doi(item.get("DOI"))
+        doi = normalize_doi(item.get("DOI"))
         if doi in years:
             years[doi] = issued_year(item)
             found.add(doi)
@@ -205,7 +205,7 @@ def collect_crossref_references(
     looked up again. Throttled batches are never recorded, so they are retried.
     """
     at = (observed_at or datetime.now(UTC)).replace(tzinfo=None)
-    corpus = sorted({d for d in (_normalize_doi(value) for value in corpus_dois) if d})
+    corpus = sorted({d for d in (normalize_doi(value) for value in corpus_dois) if d})
     corpus_set = set(corpus)
 
     seen = set(session.scalars(select(CrossrefReferenceList.doi)).all())
@@ -324,9 +324,7 @@ def reference_year_coverage(session: Session, corpus_years: dict[str, int | None
     list from either is counted separately as unenumerated, because its
     references cannot be counted at all -- neither as dated nor as missing.
     """
-    corpus = {
-        _normalize_doi(doi): year for doi, year in corpus_years.items() if _normalize_doi(doi)
-    }
+    corpus = {normalize_doi(doi): year for doi, year in corpus_years.items() if normalize_doi(doi)}
 
     # Latest Crossref list per DOI.
     latest: dict[str, tuple[datetime, str, int]] = {}
@@ -366,7 +364,7 @@ def reference_year_coverage(session: Session, corpus_years: dict[str, int | None
         select(ExternalWork.provider_work_id, ExternalWork.doi, ExternalWork.publication_year)
     ).all():
         if doi:
-            work_of[_normalize_doi(doi)] = work_id
+            work_of[normalize_doi(doi)] = work_id
         if year is not None:
             year_of[work_id] = year
     for work_id, year, status in session.execute(
@@ -390,7 +388,7 @@ def reference_year_coverage(session: Session, corpus_years: dict[str, int | None
         if work_id is not None and count is not None:
             openalex_count[work_id] = count
 
-    from ingest.openalex import contradicted_zeros
+    from ingest.openalex_audits import contradicted_zeros
 
     disputed = contradicted_zeros(session)["references"]
     source_of: dict[str, str] = {}

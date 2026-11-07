@@ -16,25 +16,25 @@ covered and focus review effort on what they can't catch.
 ## What to check
 
 **Pipeline/DOI correctness** (load the `medallion-transform` skill for the underlying conventions):
-- DOI normalization: is `transform/bronze_articles.normalize_doi` matched by
-  `ingest/enrichment._normalize_doi` if either changed? A silent divergence breaks either bronze building or
-  citation enrichment lookups without an obvious error.
-- Does a new/changed stage open its sessions through `_layer_sessions(...)` in `pipeline.py` (so every one is
+- DOI normalization: does every DOI comparison go through `ingest/doi.py::normalize_doi` (the one
+  implementation)? A hand-rolled `.strip().lower()` elsewhere lets the same paper survive deduplication twice,
+  or miss its enrichment lookup, without an obvious error.
+- Does a new/changed stage open its sessions through `_layer_sessions(...)` in `runs.py` (so every one is
   closed on failure), and do builders take sessions/`store` as arguments instead of opening their own? A leaked
   session is easy to miss in review since it won't fail a test using short-lived in-memory SQLite.
 - Does a new model column on an already-deployed table get an entry in `_ADDITIVE_COLUMNS` in
   `db/bootstrap.py` -- nullable, purely additive, and with no index -- not just a new SQLAlchemy column
   (which only affects fresh databases) and not a hand-written `ALTER TABLE`?
-- Import boundary: the core (`config.py`, `pipeline.py`, `quality.py`, `db/`, `ingest/`, `transform/`) must not
-  gain a new import from `apps/` (known exceptions: `pipeline.py` wiring the `apps.qdrant`/`apps.api` commands,
-  and the `transform/` → `apps/dashboard/analytics.py` inversion recorded in SDD §12); `apps/api/` never imports
+- Import boundary: the core (`config.py`, `pipeline.py`, `runs.py`, `quality.py`, `db/`, `ingest/`,
+  `transform/`) imports nothing from `apps/` (no exceptions; `tests/test_import_boundaries.py` has an empty
+  allowlist); nothing under `src/` imports `cli`, and only `cli/` imports `apps`; `apps/api/` never imports
   Streamlit or `apps/dashboard/`.
 - Is `data/` treated as read-only input anywhere in the diff (no writes, no assumption that a file there can
   be regenerated cheaply)?
 
 **Dashboard layering and contract** (load the `streamlit-dashboard` skill for the full list):
-- `@st.cache_data`/`@st.cache_resource` only in `loaders.py`; no `streamlit` import in `analytics.py`,
-  `forecasting.py`, `qualis.py` or `retrieval_eval.py`; SQL only in `data.py`.
+- `@st.cache_data`/`@st.cache_resource` only in `loaders.py`; no `streamlit` import in the `analytics/` package,
+  `forecasting.py` or `qualis.py`; SQL only in `data.py`.
 - Pages stay read-only: no database write, no file write, no pipeline trigger.
 - Page ownership: a new chart does not duplicate one that another page or tab already owns (CLAUDE.md "Page
   ownership", PRD §7).
@@ -50,7 +50,7 @@ covered and focus review effort on what they can't catch.
 - Does new transform/analytics logic have an extracted pure-function test, not only (or instead of) a full-
   flow test?
 - No mocking framework in new tests; fakes go through the documented injection points (`session_factory`,
-  `embed_fn`/`store`, `pipeline.get_session`, `_default_embed_fn`).
+  `embed_fn`/`store`, `runs.get_session`, `_default_embed_fn`, the `cli.<group>` dispatchers).
 
 ## Output
 

@@ -73,7 +73,7 @@ def test_polish_figure_layout_preserves_heatmap_textfont() -> None:
     )
 
 
-def test_page_header_accepts_two_and_three_args(monkeypatch) -> None:
+def test_page_header_renders_title_then_caption(monkeypatch) -> None:
     from apps.dashboard.components import page_header
 
     recorded = []
@@ -81,15 +81,9 @@ def test_page_header_accepts_two_and_three_args(monkeypatch) -> None:
     monkeypatch.setattr(st, "title", lambda text: recorded.append(("title", text)))
     monkeypatch.setattr(st, "caption", lambda text: recorded.append(("caption", text)))
 
-    # 3-arg call
-    page_header("🏷️", "Topics", "Long description")
-    assert recorded[-2] == ("title", "Topics")
-    assert recorded[-1] == ("caption", "Long description")
+    page_header("Topics", "Long description")
 
-    # 2-arg call
-    page_header("🏷️ Topics", "Long description")
-    assert recorded[-2] == ("title", "🏷️ Topics")
-    assert recorded[-1] == ("caption", "Long description")
+    assert recorded == [("title", "Topics"), ("caption", "Long description")]
 
 
 def test_all_dashboard_pages_importable_and_render_callable() -> None:

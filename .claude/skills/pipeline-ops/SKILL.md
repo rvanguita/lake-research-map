@@ -17,6 +17,9 @@ docker compose --profile qdrant up -d qdrant                         # vector st
 docker compose up -d                                                 # the read-only dashboard, port ${DASHBOARD_PORT:-8501}
 ```
 
+The console script is `cli.main:main`; `uv run python -m cli.main ...` is the same CLI without the installed
+script.
+
 There is no orchestrator: Airflow (DAGs, container, the dashboard's trigger buttons) was removed on
 2026-11-06 (ADR-09), and no page can start a run. Nothing retries a failed stage automatically -- re-run it:
 every stage is idempotent, `embed` resumes from its own Qdrant collection, and the next run's start-up sweep
@@ -31,7 +34,7 @@ every version's collection with its Gold chunks and says whether the `lit_chunks
 `vectors backfill` copies vectors still held as MySQL BLOBs, `vectors rebuild [--version ID]` restores a lost
 collection from Gold text, `vectors sync-alias` re-points the alias. Repairs take the pipeline lock, as do stage
 runs, `duplicates merge|keep|undo`, `versions activate`, `enrichment refresh-openalex` and
-`maintenance recover-stale` (`pipeline._mutates_published_inputs`; full table in SDD §4.3); `search`, `screen`,
+`maintenance recover-stale` (`cli.main._mutates_published_inputs`; full table in SDD §4.3); `search`, `screen`,
 `mcp`, `reviews`, `evidence`, `audit` and the other `enrichment` crawls never do.
 
 Embedding is CPU-bound and bounded on purpose (`LAKE_RESEARCH_MAP_EMBED_THREADS=2` in `.env`): re-embedding the
@@ -71,3 +74,7 @@ the stage's contract results in `gold.lit_quality_results`. The Pipeline page's 
 Its funnel, by contrast, is computed live from current row counts in each database -- a discrepancy there means
 "what's in the DB right now", not "what happened on the last run". Run with stdout redirected to a file and the
 stage lines appear only at exit (block buffering); read progress from `lit_pipeline_runs` instead.
+
+Log lines go to stderr and to `data/.lake_research_map/pipeline.log` (`LAKE_RESEARCH_MAP_LOG` overrides the
+path). The run bookkeeping logs as `runs` and the CLI as `cli.main`, `cli.enrichment` and `cli.evidence`; there
+is no `pipeline` logger any more, so filter on those names.

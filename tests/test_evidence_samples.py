@@ -126,7 +126,7 @@ def test_taxonomy_sample_populates_real_classes_and_an_unclassified_stratum():
 
 def test_taxonomy_strata_are_the_classifier_s_own_classes():
     """A stratum the dashboard does not recognise is not reviewable evidence."""
-    from apps.dashboard.analytics import OPTIMIZATION_METHOD_PATTERNS
+    from transform.taxonomy import OPTIMIZATION_METHOD_PATTERNS
 
     frame = pd.DataFrame(
         {

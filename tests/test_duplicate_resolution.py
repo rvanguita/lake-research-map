@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-import pipeline
 from apps.dashboard import data as dashboard_data
+from cli import duplicates as cli_duplicates
+from cli import main as cli_main
 from db.gold_models import (
     DatasetDuplicatePair,
     DatasetVersion,
@@ -193,15 +194,15 @@ def test_merge_plan_is_stable_and_rejects_chains():
 
 def test_cli_preserves_stage_routing_and_formats_domain_errors(monkeypatch, capsys):
     called = []
-    monkeypatch.setattr(pipeline, "run", called.append)
-    pipeline.main(["--stage", "silver"])
+    monkeypatch.setattr(cli_main, "run", called.append)
+    cli_main.main(["--stage", "silver"])
     assert called == ["silver"]
 
     def fail(_args):
         raise DuplicateResolutionError("invalid reviewed pair")
 
-    monkeypatch.setattr(pipeline, "_run_duplicate_command", fail)
+    monkeypatch.setattr(cli_duplicates, "run", fail)
     with pytest.raises(SystemExit) as exc_info:
-        pipeline.main(["duplicates", "list"])
+        cli_main.main(["duplicates", "list"])
     assert exc_info.value.code == 2
     assert "invalid reviewed pair" in capsys.readouterr().err

@@ -11,7 +11,6 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from apps.dashboard import loaders
-from apps.dashboard.analytics import technological_burst_detection
 from apps.dashboard.components import (
     hero_banner,
     metric_row,
@@ -24,6 +23,7 @@ from apps.dashboard.forecasting import (
     HOLDOUT_YEAR,
     TRAIN_END_YEAR,
     ForecastResult,
+    technological_burst_detection,
 )
 from apps.dashboard.theme import (
     CATEGORICAL_PALETTE,
@@ -49,7 +49,6 @@ _MODEL_LABELS = {
 
 def render() -> None:
     page_header(
-        "🔮",
         "Trends and fronts",
         "Volume projection with temporal validation, trained only on complete years, with conformal "
         "intervals calibrated on historical errors.",

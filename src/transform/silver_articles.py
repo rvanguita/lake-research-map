@@ -1,7 +1,7 @@
-"""Build lit_silver.articles from lit_bronze.articles: dedupe by normalized
-DOI (the reliable cross-source join key -- see CLAUDE.md), attach quality
-flags, and link each article to a PDF in data/articles/ via normalized/fuzzy
-title matching (rapidfuzz) rather than exact string equality, since PDF
+"""Build `lit_articles` in the `silver` database from bronze's `lit_articles`:
+dedupe by normalized DOI (the reliable cross-source join key -- see CLAUDE.md),
+attach quality flags, and link each article to a PDF in data/articles/ via
+normalized/fuzzy title matching (rapidfuzz) rather than exact string equality, since PDF
 filenames are a lossy transform of the title (punctuation -> `-`).
 
 Articles with no DOI at all are excluded here (logged, not silently

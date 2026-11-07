@@ -1,8 +1,12 @@
 """Per-article semantic signals derived from the abstract embeddings.
 
-Runs as `--stage semantic`, after `embed` (which itself needs `gold`): it reads
-`lit_chunks.embedding` and writes `lit_semantics` / `lit_duplicate_pairs`.
-Re-running `gold` rebuilds the chunks, so this stage must be re-run after it.
+Runs as `--stage semantic`, after `embed` (which itself needs `gold`):
+`transform/versioned_gold.py::build_dataset_semantics` reads the candidate
+version's abstract vectors from its Qdrant collection (ADR-08), applies the
+functions below, and writes that version's `lit_dataset_semantics`,
+`lit_semantic_runs` and `lit_dataset_duplicate_pairs`; publication copies them
+into the live `lit_semantics` / `lit_duplicate_pairs`. Re-running `gold` builds
+a new candidate, so this stage must be re-run after it.
 
 Why this exists: the corpus was assembled from a search for "distribution
 system planning", which is ambiguous -- it matches electric power distribution
@@ -14,8 +18,9 @@ article is scored against *both* readings of the query and the dashboard lets a
 reviewer act on the margin between them.
 
 The functions below take plain numpy arrays so they can be tested without a
-database or the embedding model; `build_semantics` is the only part that does
-I/O.
+database or the embedding model; this module does no I/O of its own (only
+`_embed_anchors` loads the model). The reads and writes live in
+`build_dataset_semantics`.
 """
 
 from __future__ import annotations
@@ -23,11 +28,6 @@ from __future__ import annotations
 import logging
 
 import numpy as np
-from sqlalchemy import delete, func, select
-from sqlalchemy.orm import Session
-
-from db.gold_models import Chunk, DuplicateOverride, DuplicatePair, Semantics
-from transform.embeddings import EMBED_MODEL_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -139,7 +139,7 @@ def theme_labels_from_terms(
     from sklearn.feature_extraction.text import TfidfVectorizer
 
     labels = np.asarray(labels)
-    fallback = {int(t): f"Tema {int(t) + 1}" for t in np.unique(labels)}
+    fallback = {int(t): f"Theme {int(t) + 1}" for t in np.unique(labels)}
     # The floor has to scale with the corpus: 10 documents out of 1.8k is a
     # real floor, out of 20 it empties the vocabulary.
     min_df = int(np.clip(round(0.005 * len(texts)), 2, 10))
@@ -412,119 +412,70 @@ def _embed_anchors(texts: list[str]) -> np.ndarray:
     return np.array(list(embedding_model().embed(texts)), dtype="float32")
 
 
-def build_semantics(
-    gold_session: Session,
-    anchor_text: str = ANCHOR_TEXT,
-    off_anchor_text: str = OFF_ANCHOR_TEXT,
-    *,
-    anchor_vectors: tuple[np.ndarray, np.ndarray] | None = None,
-) -> dict:
-    """Rebuild `lit_semantics` and `lit_duplicate_pairs` from the abstract chunks.
+def _knn_overlap(matrix: np.ndarray, projection: np.ndarray, k: int) -> float:
+    """Share of each point's k nearest neighbours that survive the projection.
 
-    One abstract chunk per article is the unit here: it exists for every gold
-    article and is a self-contained summary, whereas fulltext chunks only exist
-    for the minority of articles that have a PDF.
+    The most legible of the three neighbourhood measures: 0.7 means seven of
+    every ten neighbours a point has in the clustering space are still its
+    neighbours on screen.
     """
-    rows = gold_session.execute(
-        select(Chunk.doi, Chunk.embedding, Chunk.embedding_bin, Chunk.text)
-        .where(Chunk.chunk_type == "abstract")
-        .where((Chunk.embedding.is_not(None)) | (Chunk.embedding_bin.is_not(None)))
-        .order_by(Chunk.doi)
-    ).all()
+    from sklearn.neighbors import NearestNeighbors
 
-    # Coverage, not just presence: this stage used to run happily on whatever
-    # subset happened to be embedded, so a `gold` rebuild followed by a partial
-    # `embed` produced a full-looking `lit_semantics` derived from a fraction of
-    # the corpus, with nothing saying so.
-    total_abstracts = (
-        gold_session.scalar(
-            select(func.count()).select_from(Chunk).where(Chunk.chunk_type == "abstract")
+    if k < 1 or len(matrix) <= k:
+        return float("nan")
+    high = NearestNeighbors(n_neighbors=k + 1).fit(matrix).kneighbors(return_distance=False)
+    low = NearestNeighbors(n_neighbors=k + 1).fit(projection).kneighbors(return_distance=False)
+    shared = [len(set(a).intersection(b)) for a, b in zip(high, low, strict=True)]
+    return float(np.mean(shared) / k)
+
+
+def semantic_stability_diagnostics(
+    embeddings: np.ndarray,
+    labels: np.ndarray,
+    projection: np.ndarray,
+    *,
+    n_bootstrap: int = 30,
+    seed: int = 42,
+) -> dict:
+    """Measure cluster seed/subsample stability and 2D neighborhood preservation."""
+    from sklearn.cluster import KMeans
+    from sklearn.manifold import trustworthiness
+    from sklearn.metrics import adjusted_rand_score
+
+    matrix = np.asarray(embeddings, dtype=float)
+    labels = np.asarray(labels)
+    projection = np.asarray(projection, dtype=float)
+    if matrix.ndim != 2 or len(matrix) < 10 or len(np.unique(labels)) < 2:
+        return {"valid": False, "reason": "insufficient_semantic_population"}
+    if projection.shape != (len(matrix), 2):
+        return {"valid": False, "reason": "invalid_projection"}
+    clusters = len(np.unique(labels))
+    sample_size = max(clusters * 2, int(np.ceil(len(matrix) * 0.8)))
+    sample_size = min(sample_size, len(matrix))
+    rng = np.random.default_rng(seed)
+    ari_values: list[float] = []
+    for run in range(max(1, n_bootstrap)):
+        indices = np.sort(rng.choice(len(matrix), size=sample_size, replace=False))
+        predicted = KMeans(n_clusters=clusters, random_state=seed + run, n_init=10).fit_predict(
+            matrix[indices]
         )
-        or 0
-    )
-    coverage = len(rows) / total_abstracts if total_abstracts else 0.0
-
-    if not rows:
-        return {
-            "articles": 0,
-            "themes": 0,
-            "duplicate_pairs": 0,
-            "embedding_coverage": 0.0,
-            "skipped": "no embeddings yet",
-        }
-
-    if coverage < 1.0:
-        logger.warning(
-            "build_semantics: only %d of %d abstract chunks are embedded (%.1f%%) -- "
-            "the signals written here describe that subset only; run `--stage embed` first",
-            len(rows),
-            total_abstracts,
-            coverage * 100,
-        )
-
-    dois = [r[0] for r in rows]
-    matrix = np.array(
-        [
-            np.frombuffer(r[2], dtype=np.float32)
-            if r[2] is not None
-            else np.array(r[1], dtype=np.float32)
-            for r in rows
-        ],
-        dtype="float32",
-    )
-    texts = [r[3] or "" for r in rows]
-
-    if anchor_vectors is not None:
-        anchors = np.array(anchor_vectors, dtype="float32")
-    else:
-        anchors = _embed_anchors([anchor_text, off_anchor_text])
-    scores = relevance_scores(matrix, anchors[0])
-    offtopic = relevance_scores(matrix, anchors[1])
-
-    # One space for both: the themes are found in it and the map is drawn from
-    # it, so a point's color and its position can't disagree the way they did
-    # when the clusters lived in 384 dimensions and the map in 2.
-    reduced = reduced_space(matrix)
-    labels, theme_labels = discover_themes(reduced, texts)
-    coords = project_2d(reduced)
-    pairs = near_duplicate_pairs(matrix, dois)
-    reviewed_pairs = {
-        (override.doi_a, override.doi_b)
-        for override in gold_session.scalars(select(DuplicateOverride)).all()
-    }
-    unresolved_pairs = unresolved_duplicate_pairs(pairs, reviewed_pairs)
-
-    gold_session.execute(delete(Semantics))
-    gold_session.execute(delete(DuplicatePair))
-    gold_session.add_all(
-        [
-            Semantics(
-                doi=doi,
-                relevance_score=float(scores[i]),
-                offtopic_score=float(offtopic[i]),
-                theme_id=int(labels[i]),
-                theme_label=theme_labels[int(labels[i])],
-                map_x=float(coords[i][0]),
-                map_y=float(coords[i][1]),
-                embed_model=EMBED_MODEL_NAME,
-            )
-            for i, doi in enumerate(dois)
-        ]
-    )
-    gold_session.add_all(
-        [DuplicatePair(doi_a=a, doi_b=b, similarity=s) for a, b, s in unresolved_pairs]
-    )
-    gold_session.flush()
-
+        ari_values.append(float(adjusted_rand_score(labels[indices], predicted)))
+    neighbors = min(10, max(1, (len(matrix) - 1) // 2))
     return {
-        "articles": len(dois),
-        "themes": len(theme_labels),
-        "duplicate_pairs": len(unresolved_pairs),
-        "duplicate_pairs_reviewed": len(pairs) - len(unresolved_pairs),
-        "embedding_coverage": round(coverage, 4),
-        "median_relevance": round(float(np.median(scores)), 4),
-        # The screening signal: positive means closer to the review's topic
-        # than to the logistics reading of the same search string.
-        "median_margin": round(float(np.median(scores - offtopic)), 4),
-        "offtopic_articles": int((scores - offtopic < 0).sum()),
+        "valid": True,
+        "bootstrap_ari_mean": float(np.mean(ari_values)),
+        "bootstrap_ari_min": float(np.min(ari_values)),
+        "projection_trustworthiness": float(
+            trustworthiness(matrix, projection, n_neighbors=neighbors)
+        ),
+        # Trustworthiness only punishes neighbours the map *invents*. A
+        # projection that tears a real cluster in two scores well on it while
+        # being badly wrong, so continuity (the same measure with the spaces
+        # swapped, which punishes neighbours the map *loses*) and the plain
+        # kNN overlap are reported beside it.
+        "projection_continuity": float(trustworthiness(projection, matrix, n_neighbors=neighbors)),
+        "knn_overlap": _knn_overlap(matrix, projection, neighbors),
+        "neighbors": neighbors,
+        "n_bootstrap": len(ari_values),
+        "clusters": clusters,
     }

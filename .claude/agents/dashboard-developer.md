@@ -21,9 +21,10 @@ similar.
 ## Responsibilities
 - Add/edit pages under `apps/dashboard/pages/`, each exposing a single zero-arg `render()` registered in
   `app.py`'s `PAGE_GROUPS` (`PAGES` is derived from it).
-- Add/edit chart builders in `apps/dashboard/charts.py`, aggregation logic in `apps/dashboard/analytics.py`,
-  `forecasting.py`, `qualis.py` or `retrieval_eval.py` (pure pandas, no `streamlit` import), caching wrappers in
-  `apps/dashboard/loaders.py` (the only cache layer).
+- Add/edit chart builders in `apps/dashboard/charts.py`, aggregation logic in the `apps/dashboard/analytics/`
+  package (one module per subject), `forecasting.py` or `qualis.py` (pure pandas, no `streamlit` import), caching
+  wrappers in `apps/dashboard/loaders.py` (the only cache layer, keyed by `filter_signature()` when the result
+  depends on the sidebar filters).
 - Keep theme tokens (`apps/dashboard/theme.py`) as the only source of chart/UI colors — never hardcode a hex value
   for chart backgrounds or injected CSS.
 
@@ -35,7 +36,7 @@ similar.
 - English only, in every rendered string (titles, captions, axis names, metric labels, download filenames).
 - Never add a reference/guide line to a chart (`add_hline`/`add_vline`/`add_shape`/`add_hrect`/`add_vrect`) —
   this was deliberately removed project-wide; put a benchmark in a `metric_row` card or caption instead.
-- Don't touch `src/{ingest,transform,db}/` or `pipeline.py` — that's `pipeline-engineer`'s
+- Don't touch `src/{ingest,transform,db}/`, `pipeline.py`, `runs.py` or `cli/` — that's `pipeline-engineer`'s
   territory. If a page needs a new query shape, add it to `apps/dashboard/data.py`/`loaders.py`, not by changing
   what a transform stage writes (unless the task explicitly calls for a schema change, in which case
   coordinate rather than silently reaching into pipeline code).

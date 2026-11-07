@@ -84,10 +84,6 @@ def article_filter_mask(df: pd.DataFrame, filters: ArticleFilters) -> pd.Series:
     return mask
 
 
-def apply_article_filters(df: pd.DataFrame, filters: ArticleFilters) -> pd.DataFrame:
-    return df.loc[article_filter_mask(df, filters)]
-
-
 def to_qdrant_filter(
     filters: ArticleFilters,
     *,

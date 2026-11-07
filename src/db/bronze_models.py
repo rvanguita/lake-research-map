@@ -1,4 +1,4 @@
-"""BRONZE layer models (lit_bronze database) -- this is where cross-source
+"""BRONZE layer models (`bronze` database) -- this is where cross-source
 consolidation begins: IEEE (csv+bib) and Elsevier (bib) are unioned into one
 common, typed schema. Pure pagination duplicates within a source are
 collapsed, but there is no cross-source dedup or quality filtering yet --

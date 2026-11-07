@@ -8,10 +8,12 @@ from types import SimpleNamespace
 import pytest
 from test_retrieval_api import _embed, _publish
 
-import pipeline
+import runs
 from apps.api import cli
 from apps.api.api import Retriever
 from apps.api.index import load_corpus
+from cli import evidence as cli_evidence
+from cli import main as cli_main
 
 
 @pytest.fixture
@@ -54,17 +56,17 @@ def _args(**overrides) -> SimpleNamespace:
 
 @pytest.mark.parametrize("command", ["search", "screen", "mcp"])
 def test_retrieval_commands_never_take_the_pipeline_lock(command, monkeypatch):
-    assert pipeline._mutates_published_inputs(SimpleNamespace(command=command)) is False
+    assert cli_main._mutates_published_inputs(SimpleNamespace(command=command)) is False
 
     def refuse(_execution_id):
         raise AssertionError("a read-only command must not take the pipeline lock")
 
     called = []
-    monkeypatch.setattr(pipeline, "_pipeline_lock", refuse)
+    monkeypatch.setattr(runs, "_pipeline_lock", refuse)
     monkeypatch.setattr(cli, "run", called.append)
     argv = [command] if command == "mcp" else [command, "distribution planning"]
 
-    pipeline.main(argv)
+    cli_main.main(argv)
 
     assert [args.command for args in called] == [command]
 
@@ -112,7 +114,6 @@ def test_evidence_pooling_runs_every_mode_and_names_the_ones_it_skips(
     import logging
 
     from apps.api import api
-    from db import engines
 
     _publish(gold_session, vector_store)
 
@@ -128,11 +129,11 @@ def test_evidence_pooling_runs_every_mode_and_names_the_ones_it_skips(
         context_window=512,
     )
     monkeypatch.setattr(api, "build_retriever", lambda version_id=None: retriever)
-    monkeypatch.setattr(engines, "get_session", lambda layer: silver_session)
+    monkeypatch.setattr(cli_evidence, "get_session", lambda layer: silver_session)
     output = tmp_path / "retrieval.csv"
 
-    with caplog.at_level(logging.INFO, logger="pipeline"):
-        pipeline._run_evidence_command(
+    with caplog.at_level(logging.INFO, logger="cli.evidence"):
+        cli_evidence.run(
             SimpleNamespace(evidence_action="retrieval", output=str(output), limit=3, seed=0)
         )
 

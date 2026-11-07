@@ -20,7 +20,7 @@ from db.bronze_models import (
     ExternalWork,
     ReferenceWork,
 )
-from ingest import openalex
+from ingest import openalex, openalex_audits
 
 NOW = datetime(2026, 9, 23, tzinfo=UTC).replace(tzinfo=None)
 URL = "https://openalex.org/"
@@ -210,7 +210,7 @@ def test_a_never_cited_work_has_a_known_trajectory(bronze_session):
     )
     bronze_session.commit()
 
-    cov = openalex.citation_year_coverage(bronze_session)
+    cov = openalex_audits.citation_year_coverage(bronze_session)
 
     assert cov["with_series"] == 1
     assert cov["never_cited"] == 1
@@ -234,7 +234,7 @@ def test_works_published_before_the_series_are_left_censored(bronze_session):
         )
     bronze_session.commit()
 
-    cov = openalex.citation_year_coverage(bronze_session)
+    cov = openalex_audits.citation_year_coverage(bronze_session)
 
     assert cov["series_start"] == 2012
     assert cov["left_censored"] == 1
@@ -258,7 +258,7 @@ def test_reference_year_coverage_counts_corpus_and_resolved_references(bronze_se
     )
     bronze_session.commit()
 
-    cov = openalex.citation_year_coverage(bronze_session)
+    cov = openalex_audits.citation_year_coverage(bronze_session)
 
     assert cov["reference_pairs"] == 3
     assert cov["dated_reference_pairs"] == 2
@@ -271,7 +271,7 @@ def test_a_zero_reference_work_is_backward_covered(bronze_session):
     _observation(bronze_session, "W2", "10.1/b", references=1)
     bronze_session.commit()
 
-    coverage = openalex.citation_graph_coverage(bronze_session, [URL + "W1", URL + "W2"])
+    coverage = openalex_audits.citation_graph_coverage(bronze_session, [URL + "W1", URL + "W2"])
 
     # W1's reference list is known and empty; W2 reports one reference we hold
     # no edge for, so it stays uncovered.
@@ -291,7 +291,7 @@ def test_the_two_edge_indexes_are_cross_checked(bronze_session):
     _edge(bronze_session, "W1", "W3", "referenced_works")  # never re-found
     bronze_session.commit()
 
-    integrity = openalex.citation_graph_integrity(bronze_session)
+    integrity = openalex_audits.citation_graph_integrity(bronze_session)
 
     assert integrity["self_loops"] == 0 and integrity["dangling_forward"] == 0
     assert integrity["backward_confirmed"] == 1 and integrity["backward_checkable"] == 2
@@ -305,7 +305,7 @@ def test_a_truncated_crawl_is_not_held_against_the_index(bronze_session):
     _edge(bronze_session, "W1", "W2", "referenced_works")
     bronze_session.commit()
 
-    assert openalex.citation_graph_integrity(bronze_session)["agreement"] is None
+    assert openalex_audits.citation_graph_integrity(bronze_session)["agreement"] is None
 
 
 def test_an_open_licence_must_be_open_in_openalex(bronze_session):
@@ -326,7 +326,7 @@ def test_an_open_licence_must_be_open_in_openalex(bronze_session):
         )
     bronze_session.commit()
 
-    result = openalex.access_validation(
+    result = openalex_audits.access_validation(
         bronze_session,
         # W3 is IEEE-copyright yet open (a green repository copy): not a contradiction.
         {"10.1109/a": "CCBY", "10.1109/b": "CCBYNCND", "10.1109/c": "IEEE"},
@@ -396,7 +396,7 @@ def test_provider_years_are_validated_against_corpus_metadata(bronze_session):
     _work(bronze_session, "W3", "10.1/c", year=2010)  # wrong by a decade
     bronze_session.commit()
 
-    cov = openalex.citation_year_coverage(
+    cov = openalex_audits.citation_year_coverage(
         bronze_session, {"10.1/a": 2020, "10.1/B": 2020, "10.1/c": 2020}
     )
 
@@ -413,7 +413,7 @@ def test_a_reference_newer_than_its_citer_is_counted_as_inconsistent(bronze_sess
         _edge(bronze_session, "W1", cited, "referenced_works")
     bronze_session.commit()
 
-    cov = openalex.citation_year_coverage(bronze_session)
+    cov = openalex_audits.citation_year_coverage(bronze_session)
 
     assert cov["temporal_checked"] == 3
     assert cov["temporal_inconsistent"] == 1
@@ -423,7 +423,7 @@ def test_validation_is_unavailable_rather_than_passing_when_nothing_is_comparabl
     _work(bronze_session, "W1", "10.1/a", year=2020)
     bronze_session.commit()
 
-    cov = openalex.citation_year_coverage(bronze_session)
+    cov = openalex_audits.citation_year_coverage(bronze_session)
 
     assert cov["year_agreement"] is None
     assert cov["temporal_consistency"] is None
@@ -462,6 +462,6 @@ def test_a_zero_contradicted_by_a_crossref_deposit_is_not_known_empty(bronze_ses
     )
     bronze_session.commit()
 
-    coverage = openalex.citation_graph_coverage(bronze_session, [URL + "W1", URL + "W2"])
+    coverage = openalex_audits.citation_graph_coverage(bronze_session, [URL + "W1", URL + "W2"])
 
     assert coverage["backward_ids"] == {URL + "W2"}

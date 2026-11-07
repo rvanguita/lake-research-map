@@ -5,32 +5,7 @@ from transform.bronze_articles import (
     _split_ieee_csv_authors,
     _to_int,
     build_bronze_articles,
-    normalize_doi,
 )
-
-
-def test_normalize_doi_strips_https_prefix():
-    assert (
-        normalize_doi("https://doi.org/10.1016/j.ijepes.2020.106042")
-        == "10.1016/j.ijepes.2020.106042"
-    )
-
-
-def test_normalize_doi_strips_http_dx_prefix():
-    assert (
-        normalize_doi("http://dx.doi.org/10.1109/TPWRS.2024.3418651")
-        == "10.1109/tpwrs.2024.3418651"
-    )
-
-
-def test_normalize_doi_casefolds_bare_doi():
-    assert normalize_doi("10.1109/TPWRS.2024.3418651") == "10.1109/tpwrs.2024.3418651"
-
-
-def test_normalize_doi_handles_none_and_empty():
-    assert normalize_doi(None) is None
-    assert normalize_doi("") is None
-    assert normalize_doi("   ") is None
 
 
 def test_split_bibtex_authors_strips_braces_and_splits_on_and():

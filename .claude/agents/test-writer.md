@@ -17,17 +17,16 @@ documented injection points instead of a mocking framework, and the opt-in `mysq
 ## Responsibilities
 - For new pipeline logic: identify or ask for the pure/extractable function to test directly (e.g. a new
   `normalize_*`, `_merge_*`, `_chunk_*`-shaped helper) rather than only testing through a full stage run.
-- For dashboard analytics logic (`apps/dashboard/analytics.py`, `forecasting.py`, `apps/api/rank.py`): test with hand-
-  built DataFrames, following `test_analytics_authors.py`'s pattern.
+- For dashboard analytics logic (the `apps/dashboard/analytics/` package, `forecasting.py`, `apps/api/rank.py`):
+  test with hand-built DataFrames, following `test_analytics_authors.py`'s pattern.
 - Reach for the `{raw,bronze,silver,gold}_session` fixtures only when a transform stage's end-to-end
   behavior (not just one helper) needs verifying.
 - Run `uv run pytest` after writing tests and confirm they pass (and, briefly, that they'd fail without the
   change they're covering — don't add a test that would pass against the old code too).
 
 ## Constraints
-- Don't use a mocking framework (`unittest.mock`, `pytest-mock`, etc.) in new tests — the four files that
-  still import `unittest.mock` are slated for conversion, not a pattern to copy. Inject plain fakes through the
-  documented points instead (see the skill).
+- Don't use a mocking framework (`unittest.mock`, `pytest-mock`, etc.) in new tests — none of `tests/` imports one.
+  Inject plain fakes through the documented points instead (see the skill).
 - Don't add a real MySQL or Qdrant dependency to the default suite — in-memory SQLite and Qdrant local mode are
   the stand-ins; server checks go behind the `mysql` / `qdrant` markers.
 - Don't restructure production code purely to make it "more testable" without discussing it — extracting a

@@ -9,6 +9,15 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from apps.dashboard import loaders
+from apps.dashboard.analytics.themes import (
+    DRIFT_MIN_YEAR,
+    SMOOTHING_WINDOWS,
+    THEME_METRICS,
+    horizon_options,
+    theme_evolution,
+    theme_sizes,
+    theme_years,
+)
 from apps.dashboard.components import (
     article_table,
     hero_banner,
@@ -47,7 +56,6 @@ MAP_COLOR_OPTIONS = {
 
 def render() -> None:
     page_header(
-        "🧭",
         "Screening and discovery",
         "Relevance screening, automatically discovered themes, and near-duplicates — all "
         "derived from abstract embeddings.",
@@ -56,7 +64,7 @@ def render() -> None:
     signals = loaders.semantics()
     if signals.empty:
         st.info(
-            "The `semantic` stage has not run yet — use the sidebar action or run "
+            "The `semantic` stage has not run yet — run "
             "`uv run lake-research-map --stage semantic`. It depends on `gold` and `embed`."
         )
         return
@@ -884,12 +892,7 @@ def _themes(scored: pd.DataFrame) -> None:
     if not require_columns(scored, ["theme_label"]):
         return
 
-    by_theme = (
-        scored.groupby("theme_label")
-        .agg(articles=("doi", "size"), mean_relevance=("relevance_score", "mean"))
-        .reset_index()
-        .sort_values("articles", ascending=False)
-    )
+    by_theme = theme_sizes(scored)
 
     fig = px.bar(
         by_theme,
@@ -922,142 +925,78 @@ def _themes(scored: pd.DataFrame) -> None:
     if "year" not in scored.columns:
         st.info("'year' column not available in this layer.")
         return
-    yearly = scored.dropna(subset=["year", "theme_label"]).copy()
-    yearly["year"] = pd.to_numeric(yearly["year"], errors="coerce")
-    yearly = yearly.dropna(subset=["year"]).astype({"year": int})
+    yearly = theme_years(scored)
     if yearly.empty:
         st.info("No valid years for this analysis.")
         return
 
     min_corpus_year = int(yearly["year"].min())
     max_corpus_year = int(yearly["year"].max())
+    horizons = horizon_options(min_corpus_year, max_corpus_year)
+    horizon_labels = list(horizons)
+    metric_labels = list(THEME_METRICS)
+    smoothing_labels = list(SMOOTHING_WINDOWS)
 
-    # Compact interactive controls.
+    # Compact interactive controls. Every option list is the key set of the
+    # dict that maps it to a value, so a label cannot drift from its meaning.
     c_time, c_metric, c_smooth = st.columns([3, 3, 3])
     with c_time:
-        time_options = []
-        if min_corpus_year < 2000:
-            time_options.append("Since 2000 (recommended)")
-        if min_corpus_year < 1990:
-            time_options.append("Since 1990")
-        time_options.append(f"Full history ({min_corpus_year}–{max_corpus_year})")
-
         time_choice = (
             st.segmented_control(
                 "Time horizon",
-                options=time_options,
-                default=time_options[0],
+                options=horizon_labels,
+                default=horizon_labels[0],
                 key="theme_evol_horizon",
                 help="The modern period avoids artificial oscillations of ancient sparse years.",
             )
-            or time_options[0]
+            or horizon_labels[0]
         )
 
     with c_metric:
         metric_choice = (
             st.segmented_control(
                 "Metrics",
-                options=["Relative Participation (%)", "Absolute Volume (Articles)"],
-                default="Relative Participation (%)",
+                options=metric_labels,
+                default=metric_labels[0],
                 key="theme_evol_metric",
                 help="It alters between the relative participation of each theme in the year and the real volume of publications.",
             )
-            or "Relative Participation (%)"
+            or metric_labels[0]
         )
 
     with c_smooth:
         smooth_choice = (
             st.segmented_control(
                 "Smoothing",
-                options=[
-                    "3-year moving average (smooth)",
-                    "5-year moving average",
-                    "No smoothing (raw)",
-                ],
-                default="3-year moving average (smooth)",
+                options=smoothing_labels,
+                default=smoothing_labels[0],
                 key="theme_evol_smooth",
                 help="It applies centralized moving average to smooth the annual noise and reveal structural trends.",
             )
-            or "3-year moving average (smooth)"
+            or smoothing_labels[0]
         )
 
-    # Determine the initial year from the selected filter.
-    if "Since 2000" in time_choice:
-        start_year = max(2000, min_corpus_year)
-    elif "Since 1990" in time_choice:
-        start_year = max(1990, min_corpus_year)
-    else:
-        start_year = min_corpus_year
-
+    # A stale session value (an option renamed since) falls back to the default.
+    start_year = horizons.get(time_choice, horizons[horizon_labels[0]])
     end_year = max_corpus_year
-    filtered_yearly = yearly[(yearly["year"] >= start_year) & (yearly["year"] <= end_year)]
-
-    # 1. Build the continuous Cartesian grid Product(Years, Themes) = 0.
-    all_years = list(range(start_year, end_year + 1))
-    all_themes = sorted(filtered_yearly["theme_label"].unique())
-    if not all_years or not all_themes:
+    is_relative = THEME_METRICS.get(metric_choice, True)
+    window = SMOOTHING_WINDOWS.get(smooth_choice, SMOOTHING_WINDOWS[smoothing_labels[0]])
+    plot_df = theme_evolution(
+        yearly,
+        start_year=start_year,
+        end_year=end_year,
+        window=window,
+        relative=is_relative,
+    )
+    if plot_df.empty:
         st.info("No data in the selected period.")
         return
-
-    grid = (
-        pd.MultiIndex.from_product([all_years, all_themes], names=["year", "theme_label"])
-        .to_frame()
-        .reset_index(drop=True)
-    )
-
-    raw_counts = (
-        filtered_yearly.groupby(["year", "theme_label"]).size().reset_index(name="articles")
-    )
-    complete = pd.merge(grid, raw_counts, on=["year", "theme_label"], how="left").fillna(
-        {"articles": 0}
-    )
-    pivot = complete.pivot(index="year", columns="theme_label", values="articles")
-
-    # 2. Configure the smoothing window.
-    if "3 years" in smooth_choice:
-        win = 3
-    elif "5 years" in smooth_choice:
-        win = 5
-    else:
-        win = 1
-
-    # 3. Calculate values for the selected metric.
-    is_relative = metric_choice == "Relative Participation (%)"
-    if is_relative:
-        row_sums = pivot.sum(axis=1).replace(0, 1)
-        pct = pivot.div(row_sums, axis=0) * 100
-        if win > 1:
-            smoothed = pct.rolling(window=win, min_periods=1, center=True).mean()
-            smoothed_sums = smoothed.sum(axis=1).replace(0, 1)
-            smoothed = smoothed.div(smoothed_sums, axis=0) * 100
-        else:
-            smoothed = pct
-        y_col = "percentual"
-        y_title = "Participation in the year (%)"
-        plot_df = smoothed.reset_index().melt(id_vars="year", value_name=y_col)
-    else:
-        if win > 1:
-            smoothed = pivot.rolling(window=win, min_periods=1, center=True).mean()
-        else:
-            smoothed = pivot
-        y_col = "volume"
-        y_title = "Number of published articles"
-        plot_df = smoothed.reset_index().melt(id_vars="year", value_name=y_col)
-
-    # Attach the actual unsmoothed count for the tooltip.
-    raw_vol_map = complete.rename(columns={"articles": "volume_real"})
-    plot_df = pd.merge(plot_df, raw_vol_map, on=["year", "theme_label"], how="left")
-
-    yearly_totals = filtered_yearly.groupby("year").size()
-    plot_df["pct_real"] = plot_df.apply(
-        lambda r: r["volume_real"] / yearly_totals.get(r["year"], 1) * 100,
-        axis=1,
-    )
+    y_title = "Participation in the year (%)" if is_relative else "Number of published articles"
 
     fig = px.area(
-        plot_df.sort_values(["theme_label", "year"]),
+        plot_df,
         x="year",
-        y=y_col,
+        y="value",
         color="theme_label",
         line_shape="spline",
         custom_data=["volume_real", "pct_real"],
@@ -1124,64 +1063,41 @@ def _themes(scored: pd.DataFrame) -> None:
 
     st.divider()
     st.subheader("🧭 Thematic Drift")
-    st.caption(
-        "Change of the center of mass of each theme over three historical times "
-        "(1990–2010, 2011–2018, 2019-2026). "
-        "Conceptual of each line of research shifted in the semantic plan."
-    )
-    if (
-        "map_x" in scored.columns
-        and "map_y" in scored.columns
-        and "year" in scored.columns
-        and "theme_id" in scored.columns
-    ):
-        from transform.semantics import compute_temporal_drift
-
-        valid_drift = scored.dropna(subset=["map_x", "map_y", "year", "theme_id"]).copy()
-        valid_drift["year"] = pd.to_numeric(valid_drift["year"], errors="coerce")
-        valid_drift = valid_drift.dropna(subset=["year"])
-        windows = [(1990, 2010), (2011, 2018), (2019, 2026)]
-        drift_data = compute_temporal_drift(
-            valid_drift[["map_x", "map_y"]].to_numpy(dtype=float),
-            valid_drift["theme_id"].to_numpy(dtype=int),
-            valid_drift["year"].to_numpy(dtype=int),
-            windows,
+    windows, drift_df = loaders.theme_drift(loaders.filter_signature())
+    if drift_df.empty or not windows:
+        st.info(
+            "Thematic drift needs scored articles spread over at least two publication years "
+            "within the current filters."
         )
-        drift_rows = []
-        theme_names = dict(zip(valid_drift["theme_id"], valid_drift["theme_label"], strict=False))
-        for t_id, pts in drift_data.items():
-            t_name = theme_names.get(t_id, f"Theme {t_id}")
-            for p in pts:
-                drift_rows.append(
-                    {
-                        "Theme": t_name,
-                        "Time": p["name"],
-                        "map_x": p["x"],
-                        "map_y": p["y"],
-                        "Articles": p["count"],
-                    }
-                )
-        if drift_rows:
-            drift_df = pd.DataFrame(drift_rows)
-            fig_drift = px.line(
-                drift_df,
-                x="map_x",
-                y="map_y",
-                color="Theme",
-                text="Time",
-                markers=True,
-                title="Trajectory of thematic centroids in two-dimensional space",
-                color_discrete_sequence=CATEGORICAL_PALETTE,
-            )
-            fig_drift.update_traces(textposition="top center")
-            fig_drift.update_layout(
-                xaxis=dict(title="Dimension 1", showticklabels=False),
-                yaxis=dict(title="Dimension 2", showticklabels=False),
-            )
-            render_chart(
-                fig_drift,
-                caption="The lines connect the average centroids at each chronological time.",
-            )
+        return
+    window_names = ", ".join(f"{lo}–{hi}" for lo, hi in windows)
+    st.caption(
+        f"Change of the center of mass of each theme over {len(windows)} chronological windows "
+        f"({window_names}). The windows are cut over the filtered articles dated {DRIFT_MIN_YEAR} "
+        "or later so that each holds roughly the same number of them: they follow the current "
+        "scope rather than fixed eras. The line shows how far each line of research shifted in "
+        "the semantic plane."
+    )
+    if not drift_df.empty:
+        fig_drift = px.line(
+            drift_df,
+            x="map_x",
+            y="map_y",
+            color="Theme",
+            text="Time",
+            markers=True,
+            title="Trajectory of thematic centroids in two-dimensional space",
+            color_discrete_sequence=CATEGORICAL_PALETTE,
+        )
+        fig_drift.update_traces(textposition="top center")
+        fig_drift.update_layout(
+            xaxis=dict(title="Dimension 1", showticklabels=False),
+            yaxis=dict(title="Dimension 2", showticklabels=False),
+        )
+        render_chart(
+            fig_drift,
+            caption="The lines connect the average centroids at each chronological time.",
+        )
 
 
 def _duplicates() -> None:

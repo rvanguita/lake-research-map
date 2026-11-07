@@ -1,4 +1,4 @@
-"""RAW layer models (lit_raw database) -- verbatim ingestion, one table per
+"""RAW layer models (`raw` database) -- verbatim ingestion, one table per
 source artifact type. Nothing here is normalized or deduplicated; it exists
 so every downstream layer can be rebuilt without re-touching the filesystem.
 """

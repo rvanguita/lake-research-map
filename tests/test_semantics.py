@@ -242,37 +242,54 @@ def test_theme_labels_fall_back_to_numbers_without_a_vocabulary():
 
     result = theme_labels_from_terms(["", "", "", ""], labels)
 
-    assert result == {0: "Tema 1", 1: "Tema 2"}
+    assert result == {0: "Theme 1", 1: "Theme 2"}
 
 
-def test_build_semantics_end_to_end_with_injected_anchors(gold_session):
-    """build_semantics runs to completion with injected anchor vectors,
-    bypassing the fastembed model entirely."""
-    from db.gold_models import Chunk, DuplicateOverride, DuplicatePair, Semantics
-    from transform.semantics import build_semantics
+def test_build_dataset_semantics_end_to_end_with_injected_anchors(gold_session, vector_store):
+    """The semantic stage runs on a candidate's Qdrant vectors with injected
+    anchors -- real PCA, themes, map and duplicate detection, no fastembed --
+    and a pair a reviewer already decided never returns as a candidate."""
+    from db.gold_models import (
+        DatasetChunk,
+        DatasetDuplicatePair,
+        DatasetSemantics,
+        DatasetVersion,
+        DuplicateOverride,
+        SemanticRun,
+    )
+    from db.vector_store import VectorPoint, point_id
+    from transform.versioned_gold import build_dataset_semantics
 
     rng = np.random.default_rng(42)
     n = 12
     dim = 384
 
-    # Create gold chunks with embeddings to simulate an embedded corpus.
+    # Articles 0 and 1 share a vector: a near-duplicate pair before review.
     shared = rng.standard_normal(dim).astype(np.float32)
     shared /= np.linalg.norm(shared)
+    gold_session.add(DatasetVersion(version_id="v1", status="candidate"))
+    vector_store.ensure_collection("v1", dim)
+    dois, vectors, points = [], [], []
     for i in range(n):
-        vec = shared if i < 2 else rng.standard_normal(dim).astype(np.float32)
+        doi = f"10.1000/test-{i}"
+        vec = shared.copy() if i < 2 else rng.standard_normal(dim).astype(np.float32)
         vec /= np.linalg.norm(vec)
         gold_session.add(
-            Chunk(
-                doi=f"10.1000/test-{i}",
+            DatasetChunk(
+                dataset_version_id="v1",
+                doi=doi,
                 seq=0,
                 chunk_type="abstract",
                 text=f"distribution planning article number {i} about power systems"
                 if i < 8
                 else f"logistics warehouse routing freight article {i}",
                 char_len=60,
-                embedding=vec.tolist(),
             )
         )
+        dois.append(doi)
+        vectors.append(vec)
+        points.append(VectorPoint(point_id(doi, "abstract", 0), vec, {"doi": doi}))
+    vector_store.upsert("v1", points)
     gold_session.add(
         DuplicateOverride(
             doi_a="10.1000/test-0",
@@ -283,23 +300,27 @@ def test_build_semantics_end_to_end_with_injected_anchors(gold_session):
         )
     )
     gold_session.commit()
+    assert ("10.1000/test-0", "10.1000/test-1") in {
+        (a, b) for a, b, _ in near_duplicate_pairs(np.array(vectors), dois)
+    }
 
     # Inject anchor vectors instead of loading the real embedding model.
     topic_anchor = rng.standard_normal(dim).astype(np.float32)
     off_anchor = rng.standard_normal(dim).astype(np.float32)
 
-    stats = build_semantics(gold_session, anchor_vectors=(topic_anchor, off_anchor))
+    stats = build_dataset_semantics(
+        gold_session, "v1", store=vector_store, anchor_vectors=(topic_anchor, off_anchor)
+    )
 
     assert stats["articles"] == n
     assert stats["themes"] > 0
     assert "median_relevance" in stats
     assert "median_margin" in stats
-    assert stats["duplicate_pairs_reviewed"] == 1
+    assert stats["duplicate_pairs"] == 0
 
-    # Verify lit_semantics rows were written.
-    sem_count = gold_session.query(Semantics).count()
-    assert sem_count == n
-    assert gold_session.query(DuplicatePair).count() == 0
+    assert gold_session.query(DatasetSemantics).count() == n
+    assert gold_session.query(SemanticRun).count() == 1
+    assert gold_session.query(DatasetDuplicatePair).count() == 0
     assert gold_session.query(DuplicateOverride).count() == 1
 
 
@@ -335,7 +356,7 @@ def test_projection_measures_separate_invented_from_lost_neighbours():
     """Trustworthiness alone cannot fail a projection that tears a cluster apart."""
     import numpy as np
 
-    from apps.dashboard.analytics import semantic_stability_diagnostics
+    from transform.semantics import semantic_stability_diagnostics
 
     rng = np.random.default_rng(7)
     matrix = np.vstack([rng.normal(-3, 0.1, (20, 4)), rng.normal(3, 0.1, (20, 4))])

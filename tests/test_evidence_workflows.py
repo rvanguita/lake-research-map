@@ -179,7 +179,7 @@ def test_subject_file_scopes_the_assignment_to_the_sample(tmp_path):
     assign the whole dataset version, so a stratified sample had nowhere to go."""
     import csv
 
-    from pipeline import _read_subject_file
+    from cli.reviews import _read_subject_file
 
     path = tmp_path / "sample.csv"
     with path.open("w", newline="", encoding="utf-8") as handle:
@@ -200,7 +200,7 @@ def test_subject_file_scopes_the_assignment_to_the_sample(tmp_path):
 def test_subject_file_refuses_a_csv_it_cannot_use(tmp_path):
     import pytest
 
-    from pipeline import _read_subject_file
+    from cli.reviews import _read_subject_file
 
     wrong = tmp_path / "wrong.csv"
     wrong.write_text("doi,label\n10.1/a,include\n", encoding="utf-8")

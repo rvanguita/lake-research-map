@@ -378,11 +378,8 @@ def filtered_articles() -> tuple[str, pd.DataFrame]:
 @st.cache_data(ttl=60)
 def author_table(filter_sig: tuple) -> pd.DataFrame:
     """Canonicalized author rows for the active global-filter signature."""
-    from apps.dashboard.analytics import (
-        author_display_name,
-        canonical_author,
-        explode_authors_with_position,
-    )
+    from apps.dashboard.analytics.authors import author_display_name, explode_authors_with_position
+    from transform.authors import canonical_author
 
     _, articles_df = filtered_articles()
     exploded = explode_authors_with_position(articles_df)
@@ -398,10 +395,74 @@ def author_table(filter_sig: tuple) -> pd.DataFrame:
 @st.cache_data(ttl=60)
 def author_year_matrix_cached(filter_sig: tuple) -> pd.DataFrame:
     """Author-by-year output matrix for the active global-filter signature."""
-    from apps.dashboard.analytics import author_year_matrix
+    from apps.dashboard.analytics.authors import author_year_matrix
 
     _, articles_df = filtered_articles()
     return author_year_matrix(articles_df)
+
+
+def _scored_articles() -> pd.DataFrame:
+    """Filtered articles joined to their semantic signals, scored rows only.
+
+    The same frame the Screening and discovery page builds from
+    `require_articles()`, so a wrapper keyed by `filter_signature()` sees what
+    the page sees.
+    """
+    _, articles_df = filtered_articles()
+    scoped = with_semantics(articles_df)
+    if "relevance_score" not in scoped.columns:
+        return scoped.iloc[0:0]
+    return scoped.dropna(subset=["relevance_score"])
+
+
+@st.cache_data(ttl=60)
+def keyword_rising_falling(filter_sig: tuple, min_year: int, min_occurrences: int) -> dict | None:
+    """Keyword share slopes and the family-adjusted trend tests, or None.
+
+    None when the filtered corpus has too few dated keywords to analyze.
+    """
+    from apps.dashboard.analytics.vocabulary import keyword_trend_frame, rising_falling_keywords
+
+    _, articles_df = filtered_articles()
+    kw_year = keyword_trend_frame(articles_df, min_year=min_year)
+    if kw_year is None:
+        return None
+    return rising_falling_keywords(kw_year, min_occurrences=min_occurrences)
+
+
+@st.cache_data(ttl=60)
+def cognitive_distance(filter_sig: tuple) -> dict:
+    """Co-author cognitive distance vs. citations for the active filter signature."""
+    from apps.dashboard.analytics.authors import cognitive_distance_analysis
+
+    _, articles_df = filtered_articles()
+    return cognitive_distance_analysis(author_table(filter_sig), with_semantics(articles_df))
+
+
+@st.cache_data(ttl=60)
+def theme_drift(filter_sig: tuple) -> tuple[list[tuple[int, int]], pd.DataFrame]:
+    """Drift windows derived from the scored articles' years, and each theme's centroids."""
+    from apps.dashboard.analytics.themes import drift_windows
+    from apps.dashboard.analytics.themes import theme_drift as drift_table
+
+    scored = _scored_articles()
+    years = scored["year"] if "year" in scored.columns else pd.Series(dtype=float)
+    windows = drift_windows(years)
+    return windows, drift_table(scored, windows)
+
+
+@st.cache_data(ttl=60)
+def pdf_selection_bias_table(filter_sig: tuple, n_bootstrap: int = 1000, seed: int = 42):
+    """PDF vs. no-PDF standardized differences for the active filter signature.
+
+    1,000 bootstrap resamples per metric are too slow to repeat on every rerun.
+    The seed is fixed, so the cached table is the one a fresh computation would
+    give for the same filters.
+    """
+    from apps.dashboard.analytics.counts import pdf_selection_bias
+
+    _, articles_df = filtered_articles()
+    return pdf_selection_bias(articles_df, n_bootstrap=n_bootstrap, seed=seed)
 
 
 @st.cache_data(ttl=60)
@@ -416,7 +477,7 @@ def volume_forecast(source: str | None):
 @st.cache_data(ttl=60)
 def keyword_forecasts(min_occurrences: int = 20):
     """Fit and cache temporal models for sufficiently frequent keywords."""
-    from apps.dashboard.analytics import explode_keywords
+    from apps.dashboard.analytics.counts import explode_keywords
     from apps.dashboard.forecasting import TRAIN_END_YEAR, fit_and_forecast
 
     _, articles_df = articles()
@@ -481,9 +542,9 @@ def require_articles() -> pd.DataFrame:
     _, all_articles = articles()
     if all_articles.empty:
         st.warning(
-            "No data found in the `lit_bronze`, `lit_silver`, or `lit_gold` layers yet.\n\n"
-            "Run the pipeline (from the sidebar, or with "
-            "`uv run lake-research-map --stage all`) and reload this page."
+            "No data found in the `bronze`, `silver`, or `gold` databases yet.\n\n"
+            "Run the pipeline from a terminal at the repository root "
+            "(`uv run lake-research-map --stage all`) and reload this page."
         )
         st.stop()
     status = article_population_status()

@@ -1,4 +1,4 @@
-"""SILVER layer models (lit_silver database) -- cleaned, conformed and
+"""SILVER layer models (`silver` database) -- cleaned, conformed and
 deduplicated. One row per normalized DOI (the reliable cross-source join
 key -- see CLAUDE.md), with quality flags and a fuzzy-matched link to a PDF
 in data/articles/ where one exists.

@@ -6,11 +6,12 @@ error anywhere -- which is exactly how three charts shipped unlabelled. These
 assert the titles survive all the way onto the figure.
 """
 
-from unittest.mock import MagicMock, patch
+from contextlib import nullcontext
 
 import pandas as pd
 import plotly.graph_objects as go
 
+from apps.dashboard import components
 from apps.dashboard.charts import (
     lorenz_chart,
     publication_category_bars,
@@ -169,29 +170,67 @@ def test_warn_unnamed_axes_heatmaps_fallback(caplog) -> None:
     assert fig.layout.yaxis.title.text == "Dimension Y"
 
 
-def test_metric_row_accepts_both_2_and_3_tuples() -> None:
-    mock_container = MagicMock()
-    mock_col1 = MagicMock()
-    mock_col2 = MagicMock()
-    with (
-        patch("streamlit.container", return_value=mock_container),
-        patch("streamlit.columns", return_value=[mock_col1, mock_col2]),
-    ):
-        metric_row(
-            [
-                ("Taxa", "50%"),
-                ("Score", "9.5", "+1.2"),
-            ]
-        )
-        mock_col1.metric.assert_called_once_with("Taxa", "50%", None)
-        mock_col2.metric.assert_called_once_with("Score", "9.5", "+1.2")
+class _Column:
+    """A Streamlit column: records `metric` calls, and is a context manager."""
 
+    def __init__(self) -> None:
+        self.metrics: list[tuple] = []
+
+    def metric(self, *args) -> None:
+        self.metrics.append(args)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        return None
+
+
+class _FakeStreamlit:
+    """The four `st` calls `metric_row`/`summary_card_row` make, recorded.
+
+    Installed on `components.st` (the module's own `streamlit` binding), so
+    nothing outside the module under test is replaced.
+    """
+
+    def __init__(self, n_columns: int) -> None:
+        self.cols = [_Column() for _ in range(n_columns)]
+        self.markdown_calls: list[str] = []
+        self.caption_calls: list[str] = []
+
+    def container(self, **_kwargs):
+        return nullcontext()
+
+    def columns(self, _spec):
+        return self.cols
+
+    def markdown(self, body: str) -> None:
+        self.markdown_calls.append(body)
+
+    def caption(self, body: str) -> None:
+        self.caption_calls.append(body)
+
+
+def test_metric_row_accepts_both_2_and_3_tuples(monkeypatch) -> None:
+    fake = _FakeStreamlit(2)
+    monkeypatch.setattr(components, "st", fake)
+
+    metric_row(
+        [
+            ("Taxa", "50%"),
+            ("Score", "9.5", "+1.2"),
+        ]
+    )
+
+    assert fake.cols[0].metrics == [("Taxa", "50%", None)]
+    assert fake.cols[1].metrics == [("Score", "9.5", "+1.2")]
+
+
+def test_summary_card_row_renders_a_long_value_as_one_heading(monkeypatch) -> None:
     long_value = "GAMS / AMPL (Modeladores Algébricos)"
-    with (
-        patch("streamlit.container", return_value=mock_container),
-        patch("streamlit.columns", return_value=[mock_col1]),
-        patch("streamlit.caption"),
-        patch("streamlit.markdown") as markdown,
-    ):
-        summary_card_row([("Ferramenta mais citada", long_value, "42 artigos")])
-        markdown.assert_called_once_with(f"### {long_value}")
+    fake = _FakeStreamlit(1)
+    monkeypatch.setattr(components, "st", fake)
+
+    summary_card_row([("Ferramenta mais citada", long_value, "42 artigos")])
+
+    assert fake.markdown_calls == [f"### {long_value}"]

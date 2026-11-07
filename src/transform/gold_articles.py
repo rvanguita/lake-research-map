@@ -1,19 +1,22 @@
-"""Build lit_gold.articles + lit_gold.chunks from lit_silver.articles.
+"""What one Silver article becomes in Gold: its chunks and its merged record.
 
-`articles` is the curated table a human/agent scans to pick a reference.
-`chunks` is the RAG ingestion unit: every article gets an 'abstract' chunk
-(title + abstract + keywords), and articles with a linked PDF (has_pdf) also
-get 'fulltext' chunks extracted via pypdf, cleaned (`transform/pdf_text.py`:
-reference list cut, page furniture dropped, line-break hyphens rejoined, lines
-reflowed into paragraphs) and split into fixed-size windows.
-`embedding`/`embed_model` are filled in by `transform/embeddings.py` (the
-`embed` stage, run after this one).
+The Gold builder (`transform/versioned_gold.py::build_dataset_gold`) writes a
+candidate version's `lit_dataset_articles` / `lit_dataset_chunks` rows; this
+module holds the per-article rules it applies, kept pure so they can be tested
+without a version:
 
-Chunks are reconciled, not rebuilt: a chunk whose text is unchanged is left
-untouched so it keeps its vector. This used to be a plain delete-and-rebuild,
-which silently threw away every embedding on each `gold` run -- and with them
-the basis of `lit_semantics`, leaving the semantic signals describing a corpus
-state that no longer existed.
+* chunks are the RAG ingestion unit: every article gets an 'abstract' chunk
+  (title + keywords + abstract), and articles with a linked PDF (has_pdf) also
+  get 'fulltext' chunks extracted via pypdf, cleaned (`transform/pdf_text.py`:
+  reference list cut, page furniture dropped, line-break hyphens rejoined,
+  lines reflowed into paragraphs) and split into fixed-size windows;
+* an approved duplicate merge keeps the reviewer's canonical record and only
+  fills its gaps from the duplicates (`_merge_silver_group`).
+
+Gold stores chunk text and embedding provenance only; the vectors themselves
+live in the version's Qdrant collection (ADR-08), filled by the `embed` stage.
+Because a vector is a function of the chunk text, any change to these rules
+changes chunk text and therefore what `embed` has to compute.
 """
 
 from __future__ import annotations
@@ -25,14 +28,9 @@ from dataclasses import dataclass
 from typing import Any
 
 from pypdf import PdfReader
-from sqlalchemy import delete, func, null, select, update
-from sqlalchemy.orm import Session
 
 from config import absolute_path
-from db.gold_models import Article as GoldArticle
-from db.gold_models import Chunk
 from db.silver_models import Article as SilverArticle
-from transform.duplicate_resolution import active_merge_plan
 from transform.pdf_text import clean_pdf_text
 from transform.publication_categories import preferred_classification
 
@@ -116,9 +114,9 @@ def _chunk_text(
 def _desired_chunks(row: SilverArticle, stats: Counter | None = None) -> list[dict]:
     """Every chunk `row` should produce, in `(chunk_type, seq)` order.
 
-    Split out so the reconciliation in `build_gold_articles` can compare the
-    desired set against what is already stored without restating the
-    abstract/PDF assembly rules.
+    Split out so the Gold builder can compare the desired set against what is
+    already stored (for its unchanged / new / changed stats) without restating
+    the abstract/PDF assembly rules.
     """
     chunks: list[dict] = []
     abstract_text = _build_abstract_text(row)
@@ -215,141 +213,3 @@ def _merge_silver_group(
         pdf_path=pdf_row.pdf_path if pdf_row is not None else None,
         is_non_article=bool(primary.is_non_article),
     )
-
-
-# MySQL has a practical cap on how many values fit in one IN (...) clause, and
-# a stale-chunk sweep can cover the whole corpus after a silver rebuild.
-_DELETE_BATCH = 500
-
-
-def build_gold_articles(silver_session: Session, gold_session: Session) -> dict:
-    pdf_stats: Counter[str] = Counter()
-    silver_rows = silver_session.scalars(select(SilverArticle)).all()
-    by_doi = {row.doi: row for row in silver_rows}
-    merge_plan = active_merge_plan(gold_session, set(by_doi))
-    merged_duplicates = {doi for duplicates in merge_plan.groups.values() for doi in duplicates}
-
-    # Articles are a plain delete-and-rebuild: nothing expensive is derived from
-    # them, and `Chunk.doi` is a value-FK, so churning article ids breaks no
-    # link. Chunks are reconciled instead -- see the module docstring.
-    gold_session.query(GoldArticle).delete()
-
-    # Deliberately without `Chunk.embedding`: that column is a ~384-float JSON
-    # per row (tens of MB over the corpus) and the reconciliation only needs to
-    # compare text.
-    stored: dict[tuple[str, str, int], tuple[int, str]] = {
-        (doi, chunk_type, seq): (chunk_id, text)
-        for chunk_id, doi, chunk_type, seq, text in gold_session.execute(
-            select(Chunk.id, Chunk.doi, Chunk.chunk_type, Chunk.seq, Chunk.text)
-        )
-    }
-
-    n_articles = 0
-    chunk_counts = {"abstract": 0, "fulltext": 0}
-    unchanged = invalidated = added = 0
-    seen: set[tuple[str, str, int]] = set()
-
-    for silver_row in silver_rows:
-        if silver_row.doi in merged_duplicates:
-            continue
-        duplicate_rows = [by_doi[doi] for doi in merge_plan.groups.get(silver_row.doi, ())]
-        row = _merge_silver_group(silver_row, duplicate_rows) if duplicate_rows else silver_row
-        gold_session.add(
-            GoldArticle(
-                doi=row.doi,
-                sources=row.sources or [],
-                publication_category=row.publication_category,
-                publication_category_basis=row.publication_category_basis,
-                title=row.title,
-                authors=row.authors or [],
-                year=row.year,
-                venue=row.venue,
-                keywords=row.keywords or [],
-                abstract=row.abstract,
-                citation_count=row.citation_count,
-                reference_count=row.reference_count,
-                countries=row.countries or [],
-                online_date=row.online_date,
-                document_type=row.document_type,
-                license=row.license,
-                url=row.url,
-                has_pdf=row.has_pdf,
-                pdf_path=row.pdf_path,
-                silver_id=row.id,
-                is_non_article=bool(getattr(row, "is_non_article", False)),
-            )
-        )
-        n_articles += 1
-
-        for chunk in _desired_chunks(row, pdf_stats):
-            key = (row.doi, chunk["chunk_type"], chunk["seq"])
-            seen.add(key)
-            chunk_counts[chunk["chunk_type"]] += 1
-            existing = stored.get(key)
-
-            if existing is None:
-                gold_session.add(
-                    Chunk(
-                        doi=row.doi,
-                        seq=chunk["seq"],
-                        chunk_type=chunk["chunk_type"],
-                        text=chunk["text"],
-                        char_len=len(chunk["text"]),
-                    )
-                )
-                added += 1
-            elif existing[1] == chunk["text"]:
-                # Left completely untouched -- this is what preserves the vector.
-                unchanged += 1
-            else:
-                # The stored vector describes text that no longer exists, so it
-                # has to go with it; `embed` will refill just these rows.
-                gold_session.execute(
-                    update(Chunk)
-                    .where(Chunk.id == existing[0])
-                    .values(
-                        text=chunk["text"],
-                        char_len=len(chunk["text"]),
-                        # `null()`, not None: on a JSON column SQLAlchemy
-                        # persists a bare None as JSON `null`, which is not SQL
-                        # NULL. The JSON mirror is no longer written or read,
-                        # but clearing it correctly keeps this legacy live-table
-                        # path from leaving a stale vector behind changed text.
-                        embedding=null(),
-                        embedding_bin=None,
-                        embed_model=None,
-                    )
-                )
-                invalidated += 1
-
-    stale_ids = [chunk_id for key, (chunk_id, _) in stored.items() if key not in seen]
-    for start in range(0, len(stale_ids), _DELETE_BATCH):
-        gold_session.execute(
-            delete(Chunk).where(Chunk.id.in_(stale_ids[start : start + _DELETE_BATCH]))
-        )
-
-    gold_session.flush()
-
-    # Reported so the caller can tell the operator that `embed` (and therefore
-    # `semantic`) has work to do, instead of it being discovered later as a
-    # silently stale dashboard.
-    missing_embedding = (
-        gold_session.scalar(
-            select(func.count()).select_from(Chunk).where(Chunk.embedding.is_(None))
-        )
-        or 0
-    )
-
-    return {
-        "articles": n_articles,
-        "abstract_chunks": chunk_counts["abstract"],
-        "fulltext_chunks": chunk_counts["fulltext"],
-        "chunks_unchanged": unchanged,
-        "chunks_invalidated": invalidated,
-        "chunks_new": added,
-        "chunks_removed": len(stale_ids),
-        "chunks_missing_embedding": missing_embedding,
-        "duplicate_records_merged": len(merged_duplicates),
-        "duplicate_overrides_inactive": merge_plan.inactive_overrides,
-        **{key: pdf_stats[key] for key in PDF_CLEANING_STATS},
-    }

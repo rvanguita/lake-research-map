@@ -10,8 +10,8 @@ import numpy as np
 import pytest
 from sqlalchemy import select
 
-import pipeline
 from apps.qdrant import cli as qdrant_cli
+from cli import main as cli_main
 from db.gold_models import (
     DatasetArticle,
     DatasetChunk,
@@ -25,11 +25,11 @@ from db.vector_store import (
 )
 from quality import embed_contract
 from transform.embeddings import EMBED_MODEL_NAME, EMBED_MODEL_REVISION
+from transform.publication import publish_vector_alias
 from transform.vector_payloads import chunk_payload
 from transform.versioned_gold import (
     build_dataset_embeddings,
     fill_vector_collection,
-    publish_vector_alias,
 )
 
 # float32 all the way: dividing by `np.sqrt(384)` (a float64 scalar) would promote
@@ -269,6 +269,43 @@ def test_the_contract_fails_on_lost_points_changed_text_and_an_unreachable_store
     ]
 
 
+def test_the_contract_fails_on_a_non_finite_vector(gold_session, vector_store):
+    """FR-06: a NaN in a stored vector blocks publication as `embed.finite`.
+
+    Qdrant refuses a NaN at upsert (local mode and server alike), so the bad
+    point is written the way one can actually arrive: an `inf` component, which
+    the COSINE collection's normalisation turns into NaN on the way in. Every
+    other check -- model, revision, dimension, text hash -- still matches, so
+    the failure is the finiteness gate's alone.
+    """
+    _version(
+        gold_session,
+        "v1",
+        {("10.1/a", "abstract", 0): "alpha", ("10.1/b", "abstract", 0): "beta"},
+    )
+    build_dataset_embeddings(gold_session, "v1", store=vector_store, embed_fn=CountingEmbedder())
+    key = point_id("10.1/a", "abstract", 0)
+    point = vector_store.fetch("v1", [key])[key]
+    poisoned = _UNIT.copy()
+    poisoned[0] = np.inf
+    with np.errstate(invalid="ignore"):  # inf / inf inside the store's normalisation
+        vector_store.upsert("v1", [VectorPoint(key, poisoned, point.payload)])
+    stored = vector_store.fetch("v1", [key], with_vectors=True)[key].vector
+    assert not np.isfinite(stored).all(), "the store must hold the non-finite vector"
+
+    results = {
+        result.check_id: result for result in embed_contract(gold_session, "v1", vector_store)
+    }
+
+    failed = {check_id for check_id, result in results.items() if not result.passed}
+    assert failed == {"embed.finite"}
+    finite = results["embed.finite"]
+    assert finite.severity == "error"
+    assert finite.observed == 1
+    chunk_id = gold_session.scalar(select(DatasetChunk.id).where(DatasetChunk.doi == "10.1/a"))
+    assert finite.details["chunk_ids"] == [chunk_id]
+
+
 def test_the_alias_is_moved_after_publication_and_a_failure_does_not_raise(vector_store):
     from qdrant_client import QdrantClient
 
@@ -359,4 +396,4 @@ def test_fill_without_compute_leaves_unknown_text_unresolved(gold_session, vecto
 def test_vector_repairs_take_the_pipeline_lock_and_status_does_not(action, locked):
     args = SimpleNamespace(command="vectors", vectors_action=action)
 
-    assert pipeline._mutates_published_inputs(args) is locked
+    assert cli_main._mutates_published_inputs(args) is locked

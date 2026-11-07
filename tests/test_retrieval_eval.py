@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from apps.dashboard.retrieval_eval import (
+from apps.api.evaluation import (
     benchmark_retrieval_modes,
     evaluate_rankings,
     ndcg_at_k,

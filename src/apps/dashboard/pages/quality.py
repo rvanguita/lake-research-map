@@ -15,9 +15,13 @@ from apps.api.api import (
     RetrievalUnavailable,
     mode_runner,
 )
+from apps.api.evaluation import (
+    benchmark_retrieval_modes,
+    evaluate_rankings,
+)
 from apps.api.filters import ArticleFilters
 from apps.dashboard import loaders
-from apps.dashboard.analytics import metadata_coverage_matrix, pdf_selection_bias
+from apps.dashboard.analytics.counts import metadata_coverage_matrix, pdf_selection_bias_views
 from apps.dashboard.charts import topn_hbar
 from apps.dashboard.components import (
     article_table,
@@ -26,10 +30,6 @@ from apps.dashboard.components import (
     page_header,
     render_chart,
     require_columns,
-)
-from apps.dashboard.retrieval_eval import (
-    benchmark_retrieval_modes,
-    evaluate_rankings,
 )
 from apps.dashboard.theme import (
     CATEGORICAL_PALETTE,
@@ -60,7 +60,6 @@ RETRIEVAL_BENCHMARK_K = 10
 
 def render() -> None:
     page_header(
-        "🧩",
         "Quality and RAG",
         "Diagnosis of the corpus as a source for RAG: metadata, full text and fragments (chunks).",
     )
@@ -97,7 +96,7 @@ def render() -> None:
     elif tab_content.open:
         with tab_content:
             _fulltext_coverage(articles_df, chunks_df)
-            _pdf_selection_bias(articles_df)
+            _pdf_selection_bias()
             if _chunks_intro(chunks_df):
                 content_view = st.segmented_control(
                     "Chunk breakdown",
@@ -416,41 +415,22 @@ def _fulltext_coverage(articles_df: pd.DataFrame, chunks_df: pd.DataFrame) -> No
     )
 
 
-def _pdf_selection_bias(articles_df: pd.DataFrame) -> None:
+def _pdf_selection_bias() -> None:
     """Test whether the full-text subset differs materially from the corpus."""
     st.subheader("PDF availability biases")
-    bias = pdf_selection_bias(articles_df)
-    finite = bias.dropna(subset=["smd"])
+    bias = loaders.pdf_selection_bias_table(loaders.filter_signature())
+    finite, audit = pdf_selection_bias_views(bias)
     if finite.empty:
         st.info("Articles with and without PDF and at least two observations per group are needed.")
         return
 
-    labels = {
-        "year": "Year",
-        "citation_count": "Citations",
-        "reference_count": "References",
-        "team_size": "Team size",
-        "abstract_chars": "Abstract length",
-        "keyword_count": "Number of keywords",
-    }
-    bias = bias.copy()
-    bias["Metrics"] = bias["metric"].map(labels)
-    finite = finite.copy()
-    finite["Metrics"] = finite["metric"].map(labels)
-    finite["error_upper"] = finite["ci_high"] - finite["smd"]
-    finite["error_lower"] = finite["smd"] - finite["ci_low"]
     # |SMD| < 0.1 is the conventional "negligible" band. It used to be drawn
     # as a shaded band with a zero line; the chart contract forbids guide
     # lines, so the band is carried by the marker color, the hover and the
     # caption instead.
-    finite["magnitude"] = (
-        finite["smd"]
-        .abs()
-        .ge(0.1)
-        .map({True: "|SMD| ≥ 0.1, not negligible", False: "|SMD| < 0.1, negligible"})
-    )
     colors = [
-        TREND_DOWN_COLOR if abs(value) >= 0.1 else CATEGORICAL_PALETTE[0] for value in finite["smd"]
+        TREND_DOWN_COLOR if flagged else CATEGORICAL_PALETTE[0]
+        for flagged in finite["not_negligible"]
     ]
     fig = go.Figure(
         go.Scatter(
@@ -485,20 +465,7 @@ def _pdf_selection_bias(articles_df: pd.DataFrame) -> None:
         "depends on the source and does not support causal interpretation.",
     )
 
-    audit = bias[
-        ["Metrics", "transform", "n_pdf", "n_no_pdf", "smd", "ci_low", "ci_high", "status"]
-    ].rename(
-        columns={
-            "transform": "Transformation",
-            "n_pdf": "n with PDF",
-            "n_no_pdf": "n without PDF",
-            "smd": "SMD",
-            "ci_low": "CI 2.5%",
-            "ci_high": "CI 97.5%",
-            "status": "Status",
-        }
-    )
-    st.dataframe(audit.round(3), hide_index=True, width="stretch")
+    st.dataframe(audit, hide_index=True, width="stretch")
 
 
 def _metadata_coverage(articles_df: pd.DataFrame) -> None:
@@ -562,8 +529,8 @@ def _chunks_intro(chunks_df: pd.DataFrame) -> bool:
     st.subheader("🧩 Chunks prepared for embedding")
     if chunks_df.empty:
         st.info(
-            "`lit_gold.chunks` has not yet been populated — run the complete pipeline "
-            "(sidebar button or `uv run lake-research-map --stage all`)."
+            "`gold.lit_chunks` has not yet been populated — run the complete pipeline "
+            "(`uv run lake-research-map --stage all`)."
         )
         return False
 
@@ -890,7 +857,7 @@ def _bibliometric_anomalies_audit(articles_df: pd.DataFrame) -> None:
     if not signals.empty and "relevance_score" in signals.columns:
         joined = pd.merge(joined, signals[["doi", "relevance_score"]], on="doi", how="left")
 
-    from apps.dashboard.analytics import detect_bibliometric_anomalies
+    from apps.dashboard.analytics.anomalies import detect_bibliometric_anomalies
 
     anomalies_df = detect_bibliometric_anomalies(joined, contamination=0.03)
     n_anomalies = int(anomalies_df["is_anomaly"].sum())
@@ -965,7 +932,7 @@ def _benchmark_runners(retriever, probe: str) -> tuple[dict, dict[str, str]]:
 def _retrieval_benchmark() -> None:
     """Score every retrieval mode over the versioned query set — `RQ-08`, `WP-13`.
 
-    The harness (`apps/dashboard/retrieval_eval.py`) and the pooled judgement sampler
+    The harness (`apps/api/evaluation.py`) and the pooled judgement sampler
     existed before the panel did; the panel is deliberately honest about what
     stands behind the numbers: a benchmark scored against one AI-assisted pass
     is a smoke test of the harness, not evidence that a mode is better.

@@ -1,5 +1,5 @@
 """Parse every supported IEEE and ScienceDirect .bib export into
-lit_raw.bib_entries.
+`raw.lit_bib_entries`.
 
 Uses bibtexparser (a real BibTeX parser) rather than naive line/`@`
 splitting -- the IEEE files close one entry and open the next on the same

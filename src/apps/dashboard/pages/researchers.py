@@ -10,8 +10,8 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from apps.dashboard import loaders
-from apps.dashboard.analytics import (
-    RECENT_WINDOW_YEARS,
+from apps.dashboard.analytics.authors import (
+    TEAM_TREND_MIN_YEAR,
     analyze_coauthorship_partners,
     author_count_series,
     author_impact_advanced_indices,
@@ -19,13 +19,17 @@ from apps.dashboard.analytics import (
     author_productivity_trend,
     coauthorship_community_detection,
     cumulative_researchers,
-    explode_keywords,
     gini_coefficient,
     graph_advanced_metrics,
     lorenz_curve,
     output_impact_correlation,
     researchers_by_year,
-    source_means,
+    team_size_by_year,
+    team_size_summary,
+)
+from apps.dashboard.analytics.counts import (
+    RECENT_WINDOW_YEARS,
+    explode_keywords,
     valid_years,
 )
 from apps.dashboard.charts import (
@@ -51,7 +55,6 @@ TOP_NETWORK_AUTHORS = 18
 
 def render() -> None:
     page_header(
-        "👥",
         "Researchers and collaboration",
         "Production, collaboration and lines of research of the authors of the corpus.",
     )
@@ -202,7 +205,7 @@ def _collaboration_section(articles_df: pd.DataFrame, author_rows: pd.DataFrame)
             _coauthorship_network(author_rows)
     elif sub_cognitive.open:
         with sub_cognitive:
-            _cognitive_distance_analysis(articles_df, author_rows)
+            _cognitive_distance_analysis()
 
 
 def _research_lines_section(articles_df: pd.DataFrame, author_rows: pd.DataFrame) -> None:
@@ -477,21 +480,18 @@ def _render_scientific_leadership_tab(articles_df: pd.DataFrame) -> None:
 
 def _render_team_collaboration_stats(articles_df: pd.DataFrame) -> None:
     st.subheader("👥 Size and Distribution of Authors' Teams")
-    with_authors = articles_df.assign(n_authors=author_count_series(articles_df))
-    with_authors = with_authors[with_authors["n_authors"] > 0]
-    if with_authors.empty:
+    summary = team_size_summary(articles_df)
+    if not summary["n_articles"]:
         st.info("Empty authority column in this layer.")
         return
 
-    means = source_means(with_authors, "n_authors")
-    solo_pct = float((with_authors["n_authors"] == 1).mean())
-
+    means = summary["mean"]
     metric_row(
         [
             (
                 "📊 General Mean",
                 f"{means['total']:.1f} authors/article",
-                f"Median: {with_authors['n_authors'].median():.0f}",
+                f"Median: {summary['median']:.0f}",
             ),
             (
                 "📘 Mean IEEE",
@@ -505,23 +505,16 @@ def _render_team_collaboration_stats(articles_df: pd.DataFrame) -> None:
             ),
             (
                 "👤 Single Author (Solo)",
-                f"{solo_pct:.1%}",
-                f"{len(with_authors):,} articles analyzed",
+                f"{summary['solo_share']:.1%}",
+                f"{summary['n_articles']:,} articles analyzed",
             ),
         ]
     )
 
     col_dist, col_trend = st.columns(2)
     with col_dist:
-        dist = (
-            with_authors["n_authors"]
-            .value_counts()
-            .sort_index()
-            .rename_axis("authors")
-            .reset_index(name="articles")
-        )
         fig_dist = px.bar(
-            dist,
+            summary["distribution"],
             x="authors",
             y="articles",
             title="Distribution of the Number of Authors per Article",
@@ -536,40 +529,25 @@ def _render_team_collaboration_stats(articles_df: pd.DataFrame) -> None:
         )
 
     with col_trend:
-        trend = with_authors.copy()
-        trend["year"] = valid_years(trend)
-        trend = trend.dropna(subset=["year"]).astype({"year": int})
-        trend = trend[trend["year"] >= 2000]
-        if not trend.empty:
-            if "source" in trend.columns:
-                by_year_auth = (
-                    trend.groupby(["year", "source"])["n_authors"].mean().reset_index(name="mean")
-                )
-                fig_trend = px.line(
-                    by_year_auth,
-                    x="year",
-                    y="mean",
-                    color="source",
-                    markers=True,
-                    title="Evolution of the Average Team Size along the Years",
-                    labels={"year": "Year", "mean": "Median authors", "source": "Source"},
-                )
-            else:
-                by_year_auth = (
-                    trend.groupby("year")["n_authors"].mean().rename("mean").reset_index()
-                )
-                fig_trend = px.line(
-                    by_year_auth,
-                    x="year",
-                    y="mean",
-                    markers=True,
-                    title="Evolution of the Average Team Size along the Years",
-                    labels={"year": "Year", "mean": "Median authors"},
-                )
-            fig_trend.update_layout(xaxis_title="Year", yaxis_title="Median authors/article")
+        by_year_auth = team_size_by_year(articles_df, min_year=TEAM_TREND_MIN_YEAR)
+        if not by_year_auth.empty:
+            # The series is a yearly *mean*, as the title and caption say; its
+            # axis used to read "Median authors" while plotting `.mean()`.
+            has_source = "source" in by_year_auth.columns
+            fig_trend = px.line(
+                by_year_auth,
+                x="year",
+                y="mean_authors",
+                color="source" if has_source else None,
+                markers=True,
+                title="Evolution of the Average Team Size along the Years",
+                labels={"year": "Year", "mean_authors": "Mean authors", "source": "Source"},
+            )
+            fig_trend.update_layout(xaxis_title="Year", yaxis_title="Mean authors per article")
             render_chart(
                 fig_trend,
-                caption="Time trend of expansion of the average size of the teams.",
+                caption=f"Time trend of the mean team size (authors per article) since "
+                f"{TEAM_TREND_MIN_YEAR}.",
             )
 
 
@@ -888,7 +866,7 @@ def _lotka_law(author_rows: pd.DataFrame) -> None:
     page rather than with Bradford/Zipf because its unit is the author, and it
     inherits the same heuristic-identity caveat as every other person-level view.
     """
-    from apps.dashboard.analytics import lotka_law_analysis
+    from apps.dashboard.analytics.bibliometrics import lotka_law_analysis
 
     st.subheader("📐 Lotka's law of author productivity")
     if author_rows.empty or "author_key" not in author_rows.columns:
@@ -1045,7 +1023,7 @@ def _network_null_model(graph, net_metrics: dict) -> None:
     keeps every author's degree and rewires the ties, which separates real
     collaborative structure from an artefact of corpus size and team sizes.
     """
-    from apps.dashboard.analytics import network_null_model_diagnostics
+    from apps.dashboard.analytics.authors import network_null_model_diagnostics
 
     result = network_null_model_diagnostics(graph)
     if not result.get("valid"):
@@ -1120,7 +1098,7 @@ def _periodized_ties(author_rows: pd.DataFrame) -> None:
     same number of repeat pairs. Splitting by the period in which a tie first
     appears is what separates them.
     """
-    from apps.dashboard.analytics import periodized_collaboration_ties
+    from apps.dashboard.analytics.authors import periodized_collaboration_ties
 
     ties = periodized_collaboration_ties(author_rows)
     if ties.empty or len(ties) < 2:
@@ -1479,7 +1457,7 @@ def _coauthorship_network(author_rows: pd.DataFrame) -> None:
         st.dataframe(display_df, hide_index=True, width="stretch")
 
 
-def _cognitive_distance_analysis(articles_df: pd.DataFrame, author_rows: pd.DataFrame) -> None:
+def _cognitive_distance_analysis() -> None:
     st.subheader("🧠 Cognitive distance in co-authorships vs. citation impact")
     st.caption(
         "The cognitive distance measures the conceptual dispersion among the co-authors of an article "
@@ -1493,66 +1471,23 @@ def _cognitive_distance_analysis(articles_df: pd.DataFrame, author_rows: pd.Data
         )
         return
 
-    scoped = loaders.with_semantics(articles_df)
-    valid_articles = scoped.dropna(subset=["map_x", "map_y", "citation_count"]).copy()
-    if len(valid_articles) < 10:
+    result = loaders.cognitive_distance(loaders.filter_signature())
+    if result["status"] == "few_articles":
         st.info("Insufficient articles with data sets of semantics and citations.")
         return
-
-    merged_author_art = author_rows.merge(valid_articles[["doi", "map_x", "map_y"]], on="doi")
-    author_pos = merged_author_art.groupby("author_key")[["map_x", "map_y"]].mean()
-
-    records = []
-    for doi, grp in merged_author_art.groupby("doi"):
-        authors = grp["author_key"].unique()
-        if len(authors) >= 2:
-            matched = author_pos.index.intersection(authors)
-            if len(matched) >= 2:
-                coords = author_pos.loc[matched].to_numpy()
-                diffs = coords[:, None, :] - coords[None, :, :]
-                dists = np.sqrt(np.sum(diffs**2, axis=-1))
-                i_upper = np.triu_indices(len(coords), k=1)
-                mean_dist = float(np.mean(dists[i_upper]))
-                row = valid_articles[valid_articles["doi"] == doi].iloc[0]
-                records.append(
-                    {
-                        "doi": doi,
-                        "title": str(row.get("title", "—"))[:80],
-                        "year": row.get("year"),
-                        "cognitive_distance": round(mean_dist, 3),
-                        "citation_count": int(row.get("citation_count", 0)),
-                        "team_size": len(authors),
-                    }
-                )
-
-    if len(records) < 5:
+    if result["status"] != "ok":
         st.info("Few articles with multiple authors positioned in the semantic space.")
         return
 
-    dist_df = pd.DataFrame(records)
-    r_pearson = float(
-        dist_df["cognitive_distance"].corr(dist_df["citation_count"], method="pearson")
-    )
-    r_spearman = float(
-        dist_df["cognitive_distance"].corr(dist_df["citation_count"], method="spearman")
-    )
-
+    dist_df = result["articles"]
     metric_row(
         [
             ("👥 Multi-authorship Articles Evaluated", f"{len(dist_df):,}", None),
-            (
-                "📐 Mean cognitive distance",
-                f"{dist_df['cognitive_distance'].mean():.2f}",
-                None,
-            ),
-            (
-                "📈 Pearson's correlation (r)",
-                f"{r_pearson:+.3f}",
-                "Linear relationship",
-            ),
+            ("📐 Mean cognitive distance", f"{result['mean_distance']:.2f}", None),
+            ("📈 Pearson's correlation (r)", f"{result['pearson']:+.3f}", "Linear relationship"),
             (
                 "📊 Spearman correlation (ρ)",
-                f"{r_spearman:+.3f}",
+                f"{result['spearman']:+.3f}",
                 "Monotonic relationship",
             ),
         ]

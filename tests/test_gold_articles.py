@@ -1,13 +1,28 @@
-from db.gold_models import Article as GoldArticle
-from db.gold_models import Chunk, DuplicateOverride
+"""Gold: the per-article chunk/merge rules (`transform/gold_articles.py`) and the
+builder that applies them to a candidate version (`versioned_gold.build_dataset_gold`)."""
+
+from collections import Counter
+from types import SimpleNamespace
+
+from sqlalchemy import select
+
+from db.gold_models import (
+    DatasetArticle,
+    DatasetChunk,
+    DatasetVersion,
+    DuplicateOverride,
+    PublicationState,
+)
 from db.silver_models import Article as SilverArticle
 from transform.gold_articles import (
     CHUNK_MAX_CHARS,
     CHUNK_OVERLAP_CHARS,
+    PDF_CLEANING_STATS,
     _build_abstract_text,
     _chunk_text,
-    build_gold_articles,
+    _extract_pdf_text,
 )
+from transform.versioned_gold import build_dataset_gold
 
 
 def test_chunk_text_empty_returns_empty_list():
@@ -66,45 +81,74 @@ def test_build_abstract_text_skips_missing_pieces():
 
 
 # ---------------------------------------------------------------------------
-# Chunk reconciliation: an embedding costs a full `embed` stage to recompute,
-# and losing one also orphans the `lit_semantics` row derived from it, so a
-# `gold` rebuild must not throw vectors away for text that didn't change.
+# Rebuilding a candidate. The stats classify every desired chunk against the
+# text already stored (the candidate's own rows after a killed run, else the
+# active version's): unchanged text is what `embed` copies a vector for instead
+# of re-embedding, so a rebuild must report it as reused, not as new work.
 # ---------------------------------------------------------------------------
 
 
-def _embed_everything(gold_session, vector=(0.1, 0.2, 0.3)):
-    """Stand in for the `embed` stage without loading the real model."""
-    for chunk in gold_session.query(Chunk).all():
-        chunk.embedding = list(vector)
-        chunk.embed_model = "test-model"
+def _candidate(gold_session, version_id: str = "v1", status: str = "candidate") -> None:
+    gold_session.add(DatasetVersion(version_id=version_id, status=status))
     gold_session.commit()
 
 
-def test_build_gold_articles_preserves_embeddings_when_text_is_unchanged(
-    silver_session, gold_session
-):
+def _chunks(gold_session, version_id: str = "v1") -> list[DatasetChunk]:
+    return gold_session.scalars(
+        select(DatasetChunk)
+        .where(DatasetChunk.dataset_version_id == version_id)
+        .order_by(DatasetChunk.doi, DatasetChunk.chunk_type, DatasetChunk.seq)
+    ).all()
+
+
+def _articles(gold_session, version_id: str = "v1") -> list[DatasetArticle]:
+    return gold_session.scalars(
+        select(DatasetArticle)
+        .where(DatasetArticle.dataset_version_id == version_id)
+        .order_by(DatasetArticle.doi)
+    ).all()
+
+
+def test_unchanged_rebuild_reuses_every_chunk_and_adds_no_rows(silver_session, gold_session):
     silver_session.add(_silver(doi="10.1109/example.1", abstract="An abstract."))
     silver_session.commit()
+    _candidate(gold_session)
 
-    build_gold_articles(silver_session, gold_session)
-    _embed_everything(gold_session)
+    first = build_dataset_gold(silver_session, gold_session, "v1")
+    gold_session.commit()
+    before = [(c.doi, c.chunk_type, c.seq, c.text_sha256) for c in _chunks(gold_session)]
 
-    stats = build_gold_articles(silver_session, gold_session)
+    stats = build_dataset_gold(silver_session, gold_session, "v1")
+    gold_session.commit()
 
-    assert stats["chunks_unchanged"] == 1
+    assert first["chunks_new"] == 1
+    assert stats["chunks_reused"] == 1
     assert stats["chunks_invalidated"] == 0
     assert stats["chunks_new"] == 0
-    assert stats["chunks_removed"] == 0
-    assert stats["chunks_missing_embedding"] == 0
-
-    chunk = gold_session.query(Chunk).one()
-    assert chunk.embedding == [0.1, 0.2, 0.3]
-    assert chunk.embed_model == "test-model"
+    # NFR-02: the same logical rows, not a second copy of them.
+    assert [(c.doi, c.chunk_type, c.seq, c.text_sha256) for c in _chunks(gold_session)] == before
+    assert len(_articles(gold_session)) == 1
 
 
-def test_build_gold_articles_drops_the_vector_only_where_the_text_changed(
-    silver_session, gold_session
-):
+def test_new_candidate_reuses_the_active_versions_unchanged_text(silver_session, gold_session):
+    silver_session.add(_silver(doi="10.1109/example.1", abstract="An abstract."))
+    silver_session.commit()
+    _candidate(gold_session, "v1")
+    build_dataset_gold(silver_session, gold_session, "v1")
+    gold_session.get(DatasetVersion, "v1").status = "active"
+    # The build created the publication state row; publish v1 through it.
+    gold_session.get(PublicationState, 1).active_version_id = "v1"
+    gold_session.commit()
+    _candidate(gold_session, "v2")
+
+    stats = build_dataset_gold(silver_session, gold_session, "v2")
+
+    assert (stats["chunks_reused"], stats["chunks_new"], stats["chunks_invalidated"]) == (1, 0, 0)
+    # The published snapshot is left exactly as it was.
+    assert [c.doi for c in _chunks(gold_session, "v1")] == ["10.1109/example.1"]
+
+
+def test_rebuild_marks_only_the_chunk_whose_text_changed(silver_session, gold_session):
     silver_session.add_all(
         [
             _silver(doi="10.1109/example.1", abstract="First abstract."),
@@ -112,30 +156,27 @@ def test_build_gold_articles_drops_the_vector_only_where_the_text_changed(
         ]
     )
     silver_session.commit()
-
-    build_gold_articles(silver_session, gold_session)
-    _embed_everything(gold_session)
+    _candidate(gold_session)
+    build_dataset_gold(silver_session, gold_session, "v1")
+    gold_session.commit()
+    untouched_hash = _chunks(gold_session)[1].text_sha256
 
     edited = silver_session.query(SilverArticle).filter_by(doi="10.1109/example.1").one()
     edited.abstract = "First abstract, revised."
     silver_session.commit()
 
-    stats = build_gold_articles(silver_session, gold_session)
+    stats = build_dataset_gold(silver_session, gold_session, "v1")
 
     assert stats["chunks_invalidated"] == 1
-    assert stats["chunks_unchanged"] == 1
-    assert stats["chunks_missing_embedding"] == 1
-
-    revised = gold_session.query(Chunk).filter_by(doi="10.1109/example.1").one()
-    untouched = gold_session.query(Chunk).filter_by(doi="10.1109/example.2").one()
-    assert revised.embedding is None
-    assert revised.embed_model is None
+    assert stats["chunks_reused"] == 1
+    revised, untouched = _chunks(gold_session)
     assert "revised" in revised.text
     assert revised.char_len == len(revised.text)
-    assert untouched.embedding == [0.1, 0.2, 0.3]
+    assert untouched.text_sha256 == untouched_hash
+    assert revised.text_sha256 != untouched_hash
 
 
-def test_build_gold_articles_removes_chunks_whose_article_is_gone(silver_session, gold_session):
+def test_rebuild_drops_the_chunks_of_an_article_that_is_gone(silver_session, gold_session):
     silver_session.add_all(
         [
             _silver(doi="10.1109/example.1", abstract="First abstract."),
@@ -143,21 +184,22 @@ def test_build_gold_articles_removes_chunks_whose_article_is_gone(silver_session
         ]
     )
     silver_session.commit()
-
-    build_gold_articles(silver_session, gold_session)
-    _embed_everything(gold_session)
+    _candidate(gold_session)
+    build_dataset_gold(silver_session, gold_session, "v1")
+    gold_session.commit()
 
     silver_session.query(SilverArticle).filter_by(doi="10.1109/example.2").delete()
     silver_session.commit()
 
-    stats = build_gold_articles(silver_session, gold_session)
+    stats = build_dataset_gold(silver_session, gold_session, "v1")
 
-    assert stats["chunks_removed"] == 1
-    assert stats["chunks_unchanged"] == 1
-    assert [c.doi for c in gold_session.query(Chunk).all()] == ["10.1109/example.1"]
+    assert stats["articles"] == 1
+    assert stats["chunks_reused"] == 1
+    assert [c.doi for c in _chunks(gold_session)] == ["10.1109/example.1"]
+    assert [a.doi for a in _articles(gold_session)] == ["10.1109/example.1"]
 
 
-def test_build_gold_articles_applies_approved_merge_with_conservative_enrichment(
+def test_approved_merge_keeps_the_canonical_record_and_only_fills_its_gaps(
     silver_session, gold_session
 ):
     silver_session.add_all(
@@ -198,8 +240,8 @@ def test_build_gold_articles_applies_approved_merge_with_conservative_enrichment
         ]
     )
     silver_session.commit()
-    build_gold_articles(silver_session, gold_session)
-    _embed_everything(gold_session)
+    _candidate(gold_session)
+    build_dataset_gold(silver_session, gold_session, "v1")
     gold_session.add_all(
         [
             DuplicateOverride(
@@ -220,15 +262,17 @@ def test_build_gold_articles_applies_approved_merge_with_conservative_enrichment
     )
     gold_session.commit()
 
-    stats = build_gold_articles(silver_session, gold_session)
+    stats = build_dataset_gold(silver_session, gold_session, "v1")
+    gold_session.commit()
 
     assert stats["articles"] == 1
     assert stats["duplicate_records_merged"] == 2
-    assert stats["chunks_removed"] == 2
+    # The canonical abstract chunk now carries the filled-in abstract.
     assert stats["chunks_invalidated"] == 1
-    article = gold_session.query(GoldArticle).one()
+    (article,) = _articles(gold_session)
     assert article.doi == "10.1/canonical"
     assert article.title == "Canonical title"
+    # Duplicates are visited in DOI order, so "duplicate-a" fills the gap first.
     assert article.abstract == "The deterministic richer abstract."
     assert article.sources == ["ieee", "elsevier"]
     assert article.authors == ["Primary Author", "Second Author", "Third Author"]
@@ -236,16 +280,13 @@ def test_build_gold_articles_applies_approved_merge_with_conservative_enrichment
     assert article.citation_count == 12
     assert article.reference_count == 30
     assert article.countries == ["Brazil", "Spain", "Portugal"]
-    assert {chunk.doi for chunk in gold_session.query(Chunk).all()} == {"10.1/canonical"}
+    assert {chunk.doi for chunk in _chunks(gold_session)} == {"10.1/canonical"}
 
-    _embed_everything(gold_session, vector=(0.4, 0.5, 0.6))
     gold_session.expunge_all()
-    repeat_stats = build_gold_articles(silver_session, gold_session)
-    repeated_chunk = gold_session.query(Chunk).one()
-    assert repeat_stats["chunks_unchanged"] == 1
+    repeat_stats = build_dataset_gold(silver_session, gold_session, "v1")
+    assert repeat_stats["chunks_reused"] == 1
     assert repeat_stats["chunks_invalidated"] == 0
-    assert repeat_stats["chunks_removed"] == 0
-    assert repeated_chunk.embedding == [0.4, 0.5, 0.6]
+    assert repeat_stats["chunks_new"] == 0
 
 
 def test_keep_and_undo_restore_duplicate_on_next_gold_build(silver_session, gold_session):
@@ -264,20 +305,19 @@ def test_keep_and_undo_restore_duplicate_on_next_gold_build(silver_session, gold
         reason="Same work",
     )
     gold_session.add(override)
+    _candidate(gold_session)
+    build_dataset_gold(silver_session, gold_session, "v1")
     gold_session.commit()
-    build_gold_articles(silver_session, gold_session)
-    assert gold_session.query(GoldArticle).count() == 1
+    assert [a.doi for a in _articles(gold_session)] == ["10.1/a"]
 
     gold_session.delete(override)
     gold_session.commit()
-    stats = build_gold_articles(silver_session, gold_session)
+    stats = build_dataset_gold(silver_session, gold_session, "v1")
+    gold_session.commit()
 
     assert stats["articles"] == 2
     assert stats["chunks_new"] == 1
-    assert {article.doi for article in gold_session.query(GoldArticle).all()} == {
-        "10.1/a",
-        "10.1/b",
-    }
+    assert [a.doi for a in _articles(gold_session)] == ["10.1/a", "10.1/b"]
 
     gold_session.expunge_all()
     gold_session.add(
@@ -290,7 +330,7 @@ def test_keep_and_undo_restore_duplicate_on_next_gold_build(silver_session, gold
         )
     )
     gold_session.commit()
-    keep_stats = build_gold_articles(silver_session, gold_session)
+    keep_stats = build_dataset_gold(silver_session, gold_session, "v1")
     assert keep_stats["articles"] == 2
     assert keep_stats["duplicate_records_merged"] == 0
 
@@ -308,8 +348,6 @@ def test_chunk_text_breaks_on_sentences_once_lines_are_reflowed():
 
 
 def _fake_pdf(monkeypatch, text: str) -> None:
-    from types import SimpleNamespace
-
     from transform import gold_articles
 
     page = SimpleNamespace(extract_text=lambda: text)
@@ -317,10 +355,6 @@ def _fake_pdf(monkeypatch, text: str) -> None:
 
 
 def test_extract_pdf_text_cleans_the_text_and_counts_what_changed(monkeypatch):
-    from collections import Counter
-
-    from transform.gold_articles import _extract_pdf_text
-
     body = "\n".join(f"Line {i} of the body about distri-\nbution planning." for i in range(30))
     _fake_pdf(monkeypatch, body + "\n12\nREFERENCES\n[1] A cited work.")
     stats: Counter = Counter()
@@ -338,11 +372,9 @@ def test_extract_pdf_text_cleans_the_text_and_counts_what_changed(monkeypatch):
     )
 
 
-def test_both_gold_builders_report_the_pdf_cleaning(silver_session, gold_session, monkeypatch):
-    from db.gold_models import DatasetVersion
-    from transform.gold_articles import PDF_CLEANING_STATS
-    from transform.versioned_gold import build_dataset_gold
-
+def test_pdf_linked_article_gets_cleaned_fulltext_chunks_and_the_stats_say_so(
+    silver_session, gold_session, monkeypatch
+):
     _fake_pdf(monkeypatch, "Body sentence.\n" * 300 + "References\n[1] Cited.")
     silver_session.add_all(
         [
@@ -351,16 +383,26 @@ def test_both_gold_builders_report_the_pdf_cleaning(silver_session, gold_session
         ]
     )
     silver_session.commit()
-    gold_session.add(DatasetVersion(version_id="v1", status="candidate"))
-    gold_session.commit()
+    _candidate(gold_session)
 
-    versioned = build_dataset_gold(silver_session, gold_session, "v1")
-    legacy = build_gold_articles(silver_session, gold_session)
+    stats = build_dataset_gold(silver_session, gold_session, "v1")
 
-    for stats in (versioned, legacy):
-        assert {key: stats[key] for key in PDF_CLEANING_STATS} == {
-            "pdf_texts_cleaned": 1,
-            "pdf_reference_sections_removed": 1,
-            "pdf_hyphens_joined": 0,
-            "pdf_short_lines_dropped": 0,
-        }
+    assert {key: stats[key] for key in PDF_CLEANING_STATS} == {
+        "pdf_texts_cleaned": 1,
+        "pdf_reference_sections_removed": 1,
+        "pdf_hyphens_joined": 0,
+        "pdf_short_lines_dropped": 0,
+    }
+    chunks = _chunks(gold_session)
+    fulltext = [c for c in chunks if c.chunk_type == "fulltext"]
+    # One abstract chunk (seq 0) per article; full text only for the linked PDF,
+    # numbered from 1, inside the window, and without the reference list.
+    assert [(c.doi, c.seq) for c in chunks if c.chunk_type == "abstract"] == [
+        ("10.1/pdf", 0),
+        ("10.1/plain", 0),
+    ]
+    assert stats["fulltext_chunks"] == len(fulltext) > 1
+    assert {c.doi for c in fulltext} == {"10.1/pdf"}
+    assert [c.seq for c in fulltext] == list(range(1, len(fulltext) + 1))
+    assert all(c.char_len == len(c.text) <= CHUNK_MAX_CHARS for c in fulltext)
+    assert not any("Cited" in c.text for c in fulltext)
