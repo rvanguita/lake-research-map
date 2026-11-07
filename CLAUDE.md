@@ -353,7 +353,9 @@ files contribute 1,468 distinct DOIs. Measured 2026-09-22: `online_date` and `do
 IEEE half. Calling this "the IEEE subset" therefore overstates it by 5×. **Any analysis built on these fields
 must say it covers the IEEE CSV subset**, and give that denominator.
 
-`countries` is a JSON column whose empty value is the array `[]`, not `NULL`, so `IS NOT NULL` and
+`countries` is a JSON column whose writers always store a list -- the empty value is `[]`, never `NULL`, even
+though the column itself is nullable (MySQL cannot give a JSON column a default, so the additive migration and
+the models both declare it `NULL`) -- so `IS NOT NULL` and
 `NOT IN ('', '[]')` both count all 3,115 rows as populated. Use `JSON_LENGTH(countries) > 0` in SQL, or a
 truthiness test on the parsed list in pandas — `apps/dashboard/pages/quality.py` already does the latter.
 
