@@ -28,6 +28,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select, text
 
+from lake_research_map.apps.qdrant import cli as qdrant_cli
 from lake_research_map.db.bootstrap import bootstrap
 from lake_research_map.db.engines import get_session
 from lake_research_map.db.vector_store import VectorStoreUnavailable, get_vector_store
@@ -1616,7 +1617,7 @@ def _run_evidence_command(args: argparse.Namespace) -> None:
             # Retrieval pools every benchmarked mode -- the chunk-level ones the
             # v1 judgements came from and the article-level ones -- over the
             # published version, so it needs the embedded corpus, not silver.
-            from lake_research_map.retrieval.api import (
+            from lake_research_map.apps.api.api import (
                 BENCHMARK_MODES,
                 RetrievalUnavailable,
                 build_retriever,
@@ -2063,156 +2064,9 @@ def _run_audit_command(args: argparse.Namespace) -> None:
         session.close()
 
 
-def _configure_vector_commands(subparsers) -> None:
-    from lake_research_map.db.vector_store import ACTIVE_ALIAS
-
-    vectors = subparsers.add_parser(
-        "vectors", help="Inspect and repair the Qdrant collections that hold the chunk vectors"
-    )
-    actions = vectors.add_subparsers(dest="vectors_action", required=True)
-    actions.add_parser("status", help="Compare each version's collection with its Gold chunks")
-    actions.add_parser(
-        "backfill",
-        help="Copy vectors still stored as MySQL BLOBs into Qdrant, without re-embedding",
-    )
-    rebuild = actions.add_parser(
-        "rebuild",
-        help="Restore a version's collection from its Gold text (embeds only what is missing)",
-    )
-    rebuild.add_argument(
-        "--version", dest="version_id", help="dataset version to restore (default: the active one)"
-    )
-    actions.add_parser("sync-alias", help=f"Point {ACTIVE_ALIAS} at the active version")
-
-
-def _backfill_targets(session) -> tuple[list[str], list[tuple[str, int, int]]]:
-    """Versions whose every chunk still holds a reusable pre-ADR-08 BLOB.
-
-    Reusable means the provenance the embed contract demands: the pinned model
-    and revision plus a text hash. A version with BLOBs but without that
-    provenance (the legacy import) is reported, not copied -- it could not pass
-    the contract, so its vectors would only look valid.
-    """
-    from sqlalchemy import and_, case
-
-    from lake_research_map.db.gold_models import DatasetChunk
-    from lake_research_map.transform.embeddings import EMBED_MODEL_NAME, EMBED_MODEL_REVISION
-
-    reusable = and_(
-        DatasetChunk.embedding_bin.is_not(None),
-        DatasetChunk.embed_model == EMBED_MODEL_NAME,
-        DatasetChunk.embed_revision == EMBED_MODEL_REVISION,
-        DatasetChunk.text_sha256.is_not(None),
-    )
-    rows = session.execute(
-        select(
-            DatasetChunk.dataset_version_id,
-            func.count(),
-            func.sum(case((reusable, 1), else_=0)),
-            func.sum(case((DatasetChunk.embedding_bin.is_not(None), 1), else_=0)),
-        ).group_by(DatasetChunk.dataset_version_id)
-    ).all()
-    eligible = sorted(version for version, total, ok, _ in rows if total and int(ok or 0) == total)
-    skipped = sorted(
-        (version, int(total), int(ok or 0))
-        for version, total, ok, blobs in rows
-        if int(blobs or 0) and int(ok or 0) != total
-    )
-    return eligible, skipped
-
-
-def _run_vector_command(args: argparse.Namespace) -> None:
-    from lake_research_map.db.gold_models import DatasetChunk, DatasetVersion
-    from lake_research_map.db.vector_store import ACTIVE_ALIAS, collection_name
-    from lake_research_map.transform.versioned_gold import (
-        active_version_id,
-        fill_vector_collection,
-    )
-
-    bootstrap()
-    store = get_vector_store()
-    session = get_session("gold")
-    try:
-        active = active_version_id(session)
-        action = args.vectors_action
-        if action == "status":
-            alias = store.alias_target()
-            in_sync = "in sync" if alias and alias == active else "OUT OF SYNC"
-            print(f"active version: {active or '-'}")
-            print(f"{ACTIVE_ALIAS} -> {alias or '-'} ({in_sync})")
-            stored = set(store.versions())
-            chunk_counts = dict(
-                session.execute(
-                    select(DatasetChunk.dataset_version_id, func.count()).group_by(
-                        DatasetChunk.dataset_version_id
-                    )
-                ).all()
-            )
-            for version in session.scalars(
-                select(DatasetVersion).order_by(DatasetVersion.created_at.desc())
-            ).all():
-                chunks = int(chunk_counts.get(version.version_id, 0))
-                points = store.count(version.version_id) if version.version_id in stored else None
-                state = (
-                    "no collection"
-                    if points is None
-                    else "complete"
-                    if points == chunks
-                    else f"{points}/{chunks} points"
-                )
-                print(
-                    f"{version.version_id} status={version.status} chunks={chunks} vectors={state}"
-                )
-            return
-        if action == "sync-alias":
-            if active is None:
-                raise ValueError("no dataset version is published yet")
-            if not store.has_collection(active):
-                raise ValueError(
-                    f"the active version {active} has no collection; run `vectors backfill` "
-                    "or `vectors rebuild` first"
-                )
-            store.point_alias(active)
-            print(f"{ACTIVE_ALIAS} -> {collection_name(active)}")
-            return
-
-        if action == "backfill":
-            targets, skipped = _backfill_targets(session)
-            for version_id, total, reusable in skipped:
-                print(
-                    f"{version_id} skipped: {reusable}/{total} chunks carry a reusable vector "
-                    "(pinned model, revision and text hash); this version cannot pass the "
-                    "embed contract"
-                )
-            if not targets:
-                print("No version holds a complete set of reusable MySQL vectors.")
-        else:
-            version_id = args.version_id or active
-            if version_id is None:
-                raise ValueError("no dataset version is published yet; pass --version")
-            if session.get(DatasetVersion, version_id) is None:
-                raise ValueError(f"unknown dataset version {version_id}")
-            targets = [version_id]
-        alias_ready = False
-        for version_id in targets:
-            stats = fill_vector_collection(
-                session, store, version_id, allow_compute=action == "rebuild"
-            )
-            results = embed_contract(session, version_id, store)
-            failed = [r.check_id for r in results if r.severity == "error" and not r.passed]
-            verdict = "passed" if not failed else "FAILED: " + ", ".join(failed)
-            print(f"{version_id} {stats} embed contract {verdict}")
-            if version_id == active and not failed:
-                alias_ready = True
-        if alias_ready and publish_vector_alias(store, active):
-            print(f"{ACTIVE_ALIAS} -> {collection_name(active)}")
-    finally:
-        session.close()
-
-
 def _configure_retrieval_commands(subparsers) -> None:
     """`search`, `screen` and `mcp` (read-only: none takes the pipeline lock)."""
-    from lake_research_map.retrieval.cli import configure
+    from lake_research_map.apps.api.cli import configure
 
     configure(subparsers)
 
@@ -2523,7 +2377,7 @@ def main(argv: list[str] | None = None) -> None:
     _configure_evidence_commands(subparsers)
     _configure_audit_commands(subparsers)
     _configure_maintenance_commands(subparsers)
-    _configure_vector_commands(subparsers)
+    qdrant_cli.configure(subparsers)
     _configure_retrieval_commands(subparsers)
     args = parser.parse_args(argv if argv is not None else sys.argv[1:])
     lock = (
@@ -2578,12 +2432,12 @@ def main(argv: list[str] | None = None) -> None:
                 parser.error(str(exc))
         elif args.command == "vectors":
             try:
-                _run_vector_command(args)
+                qdrant_cli.run(args)
             except (ValueError, VectorStoreUnavailable) as exc:
                 parser.error(str(exc))
         elif args.command in ("search", "screen", "mcp"):
-            from lake_research_map.retrieval.api import RetrievalUnavailable
-            from lake_research_map.retrieval.cli import run as run_retrieval
+            from lake_research_map.apps.api.api import RetrievalUnavailable
+            from lake_research_map.apps.api.cli import run as run_retrieval
 
             try:
                 run_retrieval(args)

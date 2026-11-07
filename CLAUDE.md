@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 `lake-research-map` — a systematic-literature-review pipeline over bibliographic exports on the topic
 *"distribution system planning"* (electric power distribution networks). The corpus is assembled by hand from
 publisher search UIs (IEEE Xplore + Elsevier/ScienceDirect), then consolidated by a medallion pipeline
-(`src/lake_research_map/`) into MySQL and explored through a Streamlit dashboard (`src/lake_research_map/dashboard/`).
+(`src/lake_research_map/`) into MySQL and explored through a Streamlit dashboard (`src/lake_research_map/apps/dashboard/`).
 
 `README.md` is the project overview; `docs/PRD.md` (why) and `docs/SDD.md` (how) go deeper. This file is the
 canonical reference for **source-data quirks** — the other docs cross-reference it rather than repeat it.
@@ -47,11 +47,20 @@ MySQL connection settings and `QDRANT_URL` live in `.env` (git-ignored; see `.en
 |---|---|
 | `medallion-transform` | authoring `ingest/`, `transform/`, `db/`, `pipeline.py` |
 | `pipeline-ops` | *running* stages from the CLI, `.env`, the Qdrant service, idempotency, debugging a run |
-| `streamlit-dashboard` | `dashboard/` page contract, chart contract, theme tokens, aggregation rules |
+| `streamlit-dashboard` | `apps/dashboard/` page contract, chart contract, theme tokens, aggregation rules |
 | `developing-with-streamlit` | Streamlit's own generic skill (a symlink into the installed `streamlit` package; resolves after `uv sync`) |
 | `python-testing-conventions` | pytest layout, per-layer SQLite fixtures, pure-function-first testing |
 
 ## Architecture
+
+### Layout: core and `apps/`
+
+The pipeline core is `config.py`, `pipeline.py`, `quality.py`, `db/`, `ingest/` and `transform/`. Everything
+user-facing sits under `apps/`, one folder per application: `apps/dashboard/` (Streamlit), `apps/api/` (the
+`Retriever`, the `search`/`screen` commands and the MCP server) and `apps/qdrant/` (the `vectors` commands).
+Apps import the core, never each other except the dashboard using `apps.api`; the Qdrant *client*
+(`db/vector_store.py`) stays in the core because the stages depend on it. One known inversion remains -- two
+`transform/` modules import helpers from `apps/dashboard/analytics.py` (SDD §12).
 
 ### Stage graph
 
@@ -156,7 +165,7 @@ Strict one-way layering — `data.py` (raw SQL → DataFrame, tolerates a missin
 `qualis.py` (pure pandas, no `streamlit` import, unit-tested) → `charts.py` (styled Plotly figures) →
 `components.py` → `pages/*.py` (one zero-arg `render()`, registered in `app.py`'s `PAGES`). Search is not a
 dashboard module any more: the Quality page's article search and benchmark call `loaders.retriever()` -- the
-`retrieval/` package's `Retriever`, one per published version, held as an `@st.cache_resource` (it owns
+`apps/api/` package's `Retriever`, one per published version, held as an `@st.cache_resource` (it owns
 indexes and a Qdrant client, which must not be pickled per lookup).
 
 Pages are read-only, with no exception: the pipeline runs only from the CLI, and the Pipeline page shows the
@@ -197,11 +206,11 @@ journal, other.
 `main.py` calls `app.main()` **as a function** on purpose: Streamlit re-executes the entry script on every
 rerun, and a module imported for its top-level side effects would only render once.
 
-### Retrieval (`retrieval/`)
+### Retrieval (`apps/api/`)
 
-The one entry point for "which articles are most relevant to X": `retrieval/api.py::Retriever`, behind the
-`search`/`screen` commands, the MCP server (`retrieval/mcp_server.py`, five tools) and the dashboard's article
-search. The package imports neither Streamlit nor `dashboard/`, and none of its commands takes the pipeline lock
+The one entry point for "which articles are most relevant to X": `apps/api/api.py::Retriever`, behind the
+`search`/`screen` commands, the MCP server (`apps/api/mcp_server.py`, five tools) and the dashboard's article
+search. The package imports neither Streamlit nor `apps/dashboard/`, and none of its commands takes the pipeline lock
 (a long-running MCP server must never block a run).
 
 - **One hit per article.** By default only the abstract chunks rank: one per article, so every article competes
@@ -211,7 +220,7 @@ search. The package imports neither Streamlit nor `dashboard/`, and none of its 
   server-side; BM25 runs over the same Gold rows with an index built once per process (IDF over the whole scope,
   so a filter changes which documents may rank, never how one scores); hybrid is RRF with k=60; ties break by
   DOI, so a query returns the same list on every run.
-- **One filter definition.** `retrieval/filters.py::ArticleFilters` becomes a pandas mask and a Qdrant payload
+- **One filter definition.** `apps/api/filters.py::ArticleFilters` becomes a pandas mask and a Qdrant payload
   filter; `tests/test_retrieval_filters.py` holds the two to the same article set, missing-margin rule included.
   The derivations behind the payload (`primary_source`, `abstract_is_missing`, `relevance_margin`) live in
   `transform/vector_payloads.py` and nowhere else.
@@ -219,7 +228,7 @@ search. The package imports neither Streamlit nor `dashboard/`, and none of its 
   by byte-identical model files). No mode -- reranked or not -- becomes a default until the WP-13 human labels
   exist (PRD §8.5).
 - **Truncation is measured, not assumed.** fastembed's tokenizer truncates before it counts, so
-  `retrieval/models.py::token_lengths` loads the embedder's `tokenizer.json` without truncation. A lexical-only
+  `apps/api/models.py::token_lengths` loads the embedder's `tokenizer.json` without truncation. A lexical-only
   search never loads a model for it.
 
 ### Why the `semantic` stage exists
@@ -255,7 +264,7 @@ data/references/Science Direct/   current ScienceDirect BibTeX exports
 data/articles/                    192 PDF files on disk; 97 currently link to Gold articles
 data/archive/                     retained publisher export archives
 data/enrichment_cache.json        hand-built {doi: {citation_count, reference_count}}, not produced by any code here
-data/classificações_publicadas_*.xlsx   official CAPES/Qualis export (see dashboard/qualis.py)
+data/classificações_publicadas_*.xlsx   official CAPES/Qualis export (see apps/dashboard/qualis.py)
 ```
 
 **`config.csv` is provenance, not data.** Every directory that contains publisher exports must have its own
@@ -327,7 +336,7 @@ must say it covers the IEEE CSV subset**, and give that denominator.
 
 `countries` is a JSON column whose empty value is the array `[]`, not `NULL`, so `IS NOT NULL` and
 `NOT IN ('', '[]')` both count all 3,115 rows as populated. Use `JSON_LENGTH(countries) > 0` in SQL, or a
-truthiness test on the parsed list in pandas — `dashboard/pages/quality.py` already does the latter.
+truthiness test on the parsed list in pandas — `apps/dashboard/pages/quality.py` already does the latter.
 
 ### BibTeX parsing gotcha
 

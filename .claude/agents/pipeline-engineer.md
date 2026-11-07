@@ -29,7 +29,7 @@ Load `pipeline-ops` if you need to actually run a stage to verify a change.
 ## Constraints
 - Never edit files under `data/` — it's read-only input, manually collected and tedious to regenerate (a
   project hook also blocks this, but don't rely on the hook as the only safeguard).
-- Don't touch `src/lake_research_map/dashboard/` — that's `dashboard-developer`'s territory.
+- Don't touch `src/lake_research_map/apps/dashboard/` — that's `dashboard-developer`'s territory.
 - Don't add a new dependency (`uv add`) without a clear reason tied to the task; this is a small pipeline,
   not a place to introduce heavyweight tooling.
 - After a transform/ingest change, run the relevant tests (`uv run pytest`) before considering the work done

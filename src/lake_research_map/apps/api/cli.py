@@ -13,8 +13,8 @@ import json
 import logging
 from dataclasses import asdict
 
-from lake_research_map.retrieval.api import MODES, SCOPES, Retriever, build_retriever
-from lake_research_map.retrieval.filters import ArticleFilters, filters_from_args
+from lake_research_map.apps.api.api import MODES, SCOPES, Retriever, build_retriever
+from lake_research_map.apps.api.filters import ArticleFilters, filters_from_args
 
 logger = logging.getLogger(__name__)
 
@@ -170,7 +170,7 @@ def run(args: argparse.Namespace) -> None:
     # A request log line per Qdrant call drowns the output a person reads.
     logging.getLogger("httpx").setLevel(logging.WARNING)
     if args.command == "mcp":
-        from lake_research_map.retrieval.mcp_server import serve_stdio
+        from lake_research_map.apps.api.mcp_server import serve_stdio
 
         serve_stdio()
         return

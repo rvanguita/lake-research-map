@@ -192,14 +192,14 @@ def config_hash(sources: list[ScannedSource]) -> str:
 # Presentation-only dashboard modules: nothing a pipeline stage imports, so
 # they cannot change a published output. Hashing them made a caption edit mint
 # a new dataset version and re-run bronze through semantic for identical data.
-# `dashboard/analytics.py` stays in the hash on purpose -- the semantic stage
+# `apps/dashboard/analytics.py` stays in the hash on purpose -- the semantic stage
 # persists `semantic_stability_diagnostics` from it into the version.
 PRESENTATION_ONLY = (
-    "src/lake_research_map/dashboard/pages/",
-    "src/lake_research_map/dashboard/app.py",
-    "src/lake_research_map/dashboard/charts.py",
-    "src/lake_research_map/dashboard/components.py",
-    "src/lake_research_map/dashboard/theme.py",
+    "src/lake_research_map/apps/dashboard/pages/",
+    "src/lake_research_map/apps/dashboard/app.py",
+    "src/lake_research_map/apps/dashboard/charts.py",
+    "src/lake_research_map/apps/dashboard/components.py",
+    "src/lake_research_map/apps/dashboard/theme.py",
     # Developer tools (hero image, pre-commit guard) never change what a version holds.
     "src/lake_research_map/devtools/",
 )

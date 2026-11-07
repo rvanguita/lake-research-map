@@ -7,21 +7,21 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from lake_research_map.dashboard import loaders
-from lake_research_map.dashboard.analytics import (
+from lake_research_map.apps.dashboard import loaders
+from lake_research_map.apps.dashboard.analytics import (
     source_counts_by,
     source_means,
     valid_years,
 )
-from lake_research_map.dashboard.charts import source_lines
-from lake_research_map.dashboard.components import (
+from lake_research_map.apps.dashboard.charts import source_lines
+from lake_research_map.apps.dashboard.components import (
     article_table,
     metric_row,
     page_header,
     render_chart,
     require_columns,
 )
-from lake_research_map.dashboard.theme import CATEGORICAL_PALETTE, SOURCE_COLORS
+from lake_research_map.apps.dashboard.theme import CATEGORICAL_PALETTE, SOURCE_COLORS
 
 MIN_CITED_ARTICLES = 3
 
@@ -371,7 +371,7 @@ def _heavy_tail_analysis(articles_df: pd.DataFrame) -> None:
         st.info("Citation counts are not available for this population.")
         return
 
-    from lake_research_map.dashboard.analytics import fit_heavy_tail_distributions
+    from lake_research_map.apps.dashboard.analytics import fit_heavy_tail_distributions
 
     cites = articles_df["citation_count"].dropna().to_numpy()
     fit_res = fit_heavy_tail_distributions(cites)
@@ -472,7 +472,7 @@ def _age_normalized_rankings(articles_df: pd.DataFrame) -> None:
         "recent that are reaching exceptional impact velocity. "
         f"Rates use observation year {observation_year} ({observation_basis})."
     )
-    from lake_research_map.dashboard.analytics import age_normalized_citations
+    from lake_research_map.apps.dashboard.analytics import age_normalized_citations
 
     norm_df = age_normalized_citations(articles_df, observation_year=observation_year)
     if "citation_rate_annual" not in norm_df.columns:
@@ -524,7 +524,7 @@ def _citation_determinants_glm_view(articles_df: pd.DataFrame) -> None:
         "encodes source-specific missingness. "
         f"Article age is measured at {observation_year} ({observation_basis})."
     )
-    from lake_research_map.dashboard.analytics import citation_determinants_glm
+    from lake_research_map.apps.dashboard.analytics import citation_determinants_glm
 
     glm_res = citation_determinants_glm(articles_df, observation_year=observation_year)
     if not glm_res.get("valid"):

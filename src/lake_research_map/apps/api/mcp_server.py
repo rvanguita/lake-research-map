@@ -18,8 +18,8 @@ import json
 from dataclasses import asdict
 from typing import Any
 
-from lake_research_map.retrieval.api import RetrievalUnavailable, Retriever, build_retriever
-from lake_research_map.retrieval.filters import filters_from_args
+from lake_research_map.apps.api.api import RetrievalUnavailable, Retriever, build_retriever
+from lake_research_map.apps.api.filters import filters_from_args
 
 INSTRUCTIONS = (
     "Systematic-review corpus on electric power distribution system planning "

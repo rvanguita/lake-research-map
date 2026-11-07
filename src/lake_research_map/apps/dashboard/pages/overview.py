@@ -6,18 +6,18 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from lake_research_map.dashboard import loaders
-from lake_research_map.dashboard.analytics import (
+from lake_research_map.apps.dashboard import loaders
+from lake_research_map.apps.dashboard.analytics import (
     RECENT_WINDOW_YEARS,
     valid_years,
 )
-from lake_research_map.dashboard.components import (
+from lake_research_map.apps.dashboard.components import (
     hero_banner,
     metric_row,
     page_header,
     render_chart,
 )
-from lake_research_map.dashboard.theme import (
+from lake_research_map.apps.dashboard.theme import (
     PUBLICATION_CATEGORY_COLORS,
     PUBLICATION_CATEGORY_LABELS,
     SOURCE_COLORS,

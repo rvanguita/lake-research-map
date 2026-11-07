@@ -578,7 +578,7 @@ def build_dataset_semantics(
     reduced = reduced_space(matrix)
     labels, theme_labels = discover_themes(reduced, texts)
     coords = project_2d(reduced)
-    from lake_research_map.dashboard.analytics import semantic_stability_diagnostics
+    from lake_research_map.apps.dashboard.analytics import semantic_stability_diagnostics
     from lake_research_map.transform.semantics import theme_sweep
 
     stability = semantic_stability_diagnostics(reduced, labels, coords)

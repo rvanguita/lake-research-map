@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pandas as pd
 
-from lake_research_map.dashboard import loaders
-from lake_research_map.dashboard.pages.overview import _publication_category_counts
+from lake_research_map.apps.dashboard import loaders
+from lake_research_map.apps.dashboard.pages.overview import _publication_category_counts
 
 
 def test_publication_category_filter_keeps_only_selected_categories(monkeypatch):

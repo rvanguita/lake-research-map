@@ -2,7 +2,7 @@
 
 import pandas as pd
 
-from lake_research_map.dashboard.analytics import technological_burst_detection
+from lake_research_map.apps.dashboard.analytics import technological_burst_detection
 
 
 def _sample_corpus_df() -> pd.DataFrame:

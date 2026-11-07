@@ -9,7 +9,7 @@ says so in its output; `evidence()` is the intended use of full text.
 
 Dense candidates come from the version's Qdrant collection with the filters
 applied server-side; lexical candidates come from BM25 over the same filtered
-Gold rows (`retrieval/filters.py` keeps the two populations identical); hybrid
+Gold rows (`apps/api/filters.py` keeps the two populations identical); hybrid
 fuses them by Reciprocal Rank Fusion (k=60), and an optional cross-encoder
 reorders the fused candidates. Ties break by DOI, so a query returns the same
 list on every run.
@@ -26,19 +26,19 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from lake_research_map.apps.api.filters import (
+    ArticleFilters,
+    article_filter_mask,
+    to_qdrant_filter,
+)
+from lake_research_map.apps.api.index import Corpus
+from lake_research_map.apps.api.rank import excerpt, first_per_key, rrf_fuse
 from lake_research_map.db.vector_store import (
     ACTIVE_ALIAS,
     QdrantVectorStore,
     VectorStoreUnavailable,
     collection_name,
 )
-from lake_research_map.retrieval.filters import (
-    ArticleFilters,
-    article_filter_mask,
-    to_qdrant_filter,
-)
-from lake_research_map.retrieval.index import Corpus
-from lake_research_map.retrieval.rank import excerpt, first_per_key, rrf_fuse
 
 logger = logging.getLogger(__name__)
 
@@ -146,7 +146,7 @@ class Retriever:
 
     def _embed(self, text: str) -> np.ndarray:
         if self._embed_fn is None:
-            from lake_research_map.retrieval.models import embed_query
+            from lake_research_map.apps.api.models import embed_query
 
             self._embed_fn = embed_query
         try:
@@ -156,7 +156,7 @@ class Retriever:
 
     def _rerank(self, query: str, texts: Sequence[str]) -> list[float]:
         if self._rerank_fn is None:
-            from lake_research_map.retrieval.models import rerank_scores
+            from lake_research_map.apps.api.models import rerank_scores
 
             self._rerank_fn = rerank_scores
         try:
@@ -166,14 +166,14 @@ class Retriever:
 
     def context_window(self) -> int:
         if self._context_window is None:
-            from lake_research_map.retrieval.models import context_window_tokens
+            from lake_research_map.apps.api.models import context_window_tokens
 
             self._context_window = context_window_tokens()
         return self._context_window
 
     def _token_lengths(self, texts: Sequence[str]) -> list[int] | None:
         if self._token_len_fn is None:
-            from lake_research_map.retrieval.models import token_lengths
+            from lake_research_map.apps.api.models import token_lengths
 
             self._token_len_fn = token_lengths
         try:
@@ -519,9 +519,9 @@ def build_retriever(version_id: str | None = None) -> Retriever:
     searches then raise `RetrievalUnavailable`, which every caller turns into a
     message rather than a crash.
     """
+    from lake_research_map.apps.api.index import load_corpus
     from lake_research_map.db.engines import get_session
     from lake_research_map.db.vector_store import get_vector_store
-    from lake_research_map.retrieval.index import load_corpus
 
     session = get_session("gold")
     try:

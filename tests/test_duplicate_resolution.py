@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from lake_research_map import pipeline
-from lake_research_map.dashboard import data as dashboard_data
+from lake_research_map.apps.dashboard import data as dashboard_data
 from lake_research_map.db.gold_models import (
     DatasetDuplicatePair,
     DatasetVersion,

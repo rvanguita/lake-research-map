@@ -6,7 +6,7 @@ import pathlib
 
 import pandas as pd
 
-from lake_research_map.dashboard.analytics import (
+from lake_research_map.apps.dashboard.analytics import (
     author_impact_advanced_indices,
     author_m_quotient_analysis,
     benchmark_feeders_analysis,
@@ -224,7 +224,7 @@ def test_author_m_quotient_analysis():
 
 
 def test_synthesis_page_import():
-    from lake_research_map.dashboard.pages import synthesis
+    from lake_research_map.apps.dashboard.pages import synthesis
 
     assert hasattr(synthesis, "render")
     assert hasattr(synthesis, "_render_methods_tab")
@@ -238,7 +238,7 @@ def test_synthesis_page_import():
 
 
 def test_retired_page_controllers_are_removed():
-    from lake_research_map.dashboard.pages import highlights, production
+    from lake_research_map.apps.dashboard.pages import highlights, production
 
     assert not hasattr(production, "_venue_comparison")
     assert not hasattr(production, "_collaboration")
@@ -256,7 +256,7 @@ def test_taxonomy_coverage_reports_what_the_chart_leaves_out():
     """
     import pandas as pd
 
-    from lake_research_map.dashboard.analytics import TAXONOMY_REGISTRY, taxonomy_coverage
+    from lake_research_map.apps.dashboard.analytics import TAXONOMY_REGISTRY, taxonomy_coverage
 
     frame = pd.DataFrame(
         {
@@ -288,7 +288,7 @@ def test_every_displayed_taxonomy_is_in_the_registry():
     """`WP-12` says *each* displayed taxonomy discloses coverage. The registry is
     what makes "each" enumerable rather than a promise, so it must stay in step
     with the page that renders them."""
-    from lake_research_map.dashboard.analytics import TAXONOMY_REGISTRY
+    from lake_research_map.apps.dashboard.analytics import TAXONOMY_REGISTRY
 
     assert set(TAXONOMY_REGISTRY) == {
         "Optimization methods",
@@ -299,7 +299,7 @@ def test_every_displayed_taxonomy_is_in_the_registry():
         "Mathematical complexity",
         "Benchmark feeders",
     }
-    page = pathlib.Path("src/lake_research_map/dashboard/pages/synthesis.py").read_text(
+    page = pathlib.Path("src/lake_research_map/apps/dashboard/pages/synthesis.py").read_text(
         encoding="utf-8"
     )
     for name in TAXONOMY_REGISTRY:
@@ -314,7 +314,7 @@ def test_precision_scores_only_decided_labels():
     """
     import pandas as pd
 
-    from lake_research_map.dashboard.analytics import (
+    from lake_research_map.apps.dashboard.analytics import (
         TAXONOMY_REGISTRY,
         taxonomy_precision_from_labels,
     )
@@ -359,7 +359,7 @@ def test_precision_scores_only_decided_labels():
 
 
 def test_assisted_review_labels_do_not_count_as_human_evidence():
-    from lake_research_map.dashboard.components import _partition_review_labels
+    from lake_research_map.apps.dashboard.components import _partition_review_labels
 
     labels = pd.DataFrame(
         {

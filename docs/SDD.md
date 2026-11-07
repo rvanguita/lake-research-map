@@ -47,12 +47,13 @@ Streamlit dashboard (read-only) ----------------┘
 | `transform/semantics.py` | Contrastive scoring, themes, projection, duplicate candidates | Semantic tables |
 | `transform/duplicate_resolution.py` | Validate persistent merge/keep/undo decisions | Duplicate overrides |
 | `pipeline.py` | Bootstrap, stage routing, CLI, and run telemetry | Pipeline-run records |
-| `retrieval/` | Article-level search, screening and evidence (`Retriever`), the `search`/`screen`/`mcp` commands and the MCP tools; imports neither Streamlit nor `dashboard/` | None (reads the published Gold version and its Qdrant collection) |
-| `dashboard/data.py` | Fault-tolerant SQL reads returning DataFrames | None |
-| `dashboard/loaders.py` | Cached normalization, joins, and filtered datasets | Streamlit cache only |
-| `dashboard/analytics.py`, `forecasting.py` | Pure analytical computation | None |
-| `dashboard/charts.py` | Plotly figure construction and chart contracts | None |
-| `dashboard/pages/` | English presentation controllers | None |
+| `apps/qdrant/cli.py` | The `vectors status|backfill|rebuild|sync-alias` commands; repairs write only Qdrant | Qdrant collections and the alias (never Gold rows) |
+| `apps/api/` | Article-level search, screening and evidence (`Retriever`), the `search`/`screen`/`mcp` commands and the MCP tools; imports neither Streamlit nor `apps/dashboard/` | None (reads the published Gold version and its Qdrant collection) |
+| `apps/dashboard/data.py` | Fault-tolerant SQL reads returning DataFrames | None |
+| `apps/dashboard/loaders.py` | Cached normalization, joins, and filtered datasets | Streamlit cache only |
+| `apps/dashboard/analytics.py`, `forecasting.py` | Pure analytical computation | None |
+| `apps/dashboard/charts.py` | Plotly figure construction and chart contracts | None |
+| `apps/dashboard/pages/` | English presentation controllers | None |
 
 ## 3. Data architecture and contracts
 
@@ -356,7 +357,7 @@ Isolation Forest results are audit priorities. They identify multivariate outlie
 
 Every published analytical population resolves to a deterministic dataset version derived from the ordered source manifest, search configuration, transformation code, dependency lock, and duplicate-curation decisions. Consumed source bytes are retained content-addressably, while candidate Gold articles, chunks, embeddings, semantics, and duplicate pairs remain isolated until blocking contracts pass. Re-running unchanged evidence reuses the same logical version; rollback reactivates an exact prior Gold snapshot.
 
-Analytical functions are pure Python functions without Streamlit imports. Database access belongs in `dashboard/data.py`, cached normalization and joins in `dashboard/loaders.py`, Plotly construction in `dashboard/charts.py`, and rendering in page controllers. Randomized algorithms use fixed seeds. Tests cover missingness, minimum sample sizes, degenerate inputs, deterministic behavior, source-change propagation, publication isolation, and method-specific invariants.
+Analytical functions are pure Python functions without Streamlit imports. Database access belongs in `apps/dashboard/data.py`, cached normalization and joins in `apps/dashboard/loaders.py`, Plotly construction in `apps/dashboard/charts.py`, and rendering in page controllers. Randomized algorithms use fixed seeds. Tests cover missingness, minimum sample sizes, degenerate inputs, deterministic behavior, source-change propagation, publication isolation, and method-specific invariants.
 
 ## 7. Observability and service objectives
 
@@ -603,10 +604,11 @@ Docker Compose keeps the dashboard and the opt-in Qdrant service.
 
 ## 12. Known technical debt
 
-- Analytical reads are already bound to the publication pointer: `dashboard/data.py::load_articles` routes Gold through `load_active_dataset_table`, which scopes every query by `active_dataset_version()`. The residual is narrower than previously recorded -- `assess_gold_articles` is still a structural check (non-empty, unique DOI, expected columns) rather than a read of the persisted `lit_quality_results` for that version.
+- Analytical reads are already bound to the publication pointer: `apps/dashboard/data.py::load_articles` routes Gold through `load_active_dataset_table`, which scopes every query by `active_dataset_version()`. The residual is narrower than previously recorded -- `assess_gold_articles` is still a structural check (non-empty, unique DOI, expected columns) rather than a read of the persisted `lit_quality_results` for that version.
 - No automatic stage retry or timeout since `ADR-09`: a failed stage is re-run by hand (every stage is idempotent and `embed` resumes).
 - OpenAlex responses are append-only observations with observation time, response state, HTTP status, response hash, retry count, longitudinal counts, outgoing edges, and access metadata. A real refresh still requires local API credentials.
 - Chunk and duplicate-candidate logical keys are not fully constrained in the database.
+- The core imports an application: `transform/evidence_samples.py` and `transform/versioned_gold.py` take `canonical_author` and `semantic_stability_diagnostics` from `apps/dashboard/analytics.py`. Moving those two functions into the core would make `apps/` a strict leaf.
 - Statistical functions need the validation improvements defined in `PRD.md` before confirmatory interpretation.
 
 Open work that is blocked on human evidence is listed in PRD §12.
@@ -646,7 +648,7 @@ Open ones are PRD §12. The full status notes and dated evidence records they su
 | `WP-25` | Scale-triggered storage and compute evolution | 2026-11-06 — Benchmark report and ADR comparing in-process linear/Faiss search, MySQL storage, and candidate managed systems on latency, recall, cost, recovery, and operations. |
 | `WP-26` | Qdrant vector store | 2026-11-06 — `db/vector_store.py` (one immutable collection per version, deterministic point ids, exact search, `lit_chunks_active` alias); the embed stage writing only Qdrant and copying reusable vectors by text hash before computing; the… |
 | `WP-27` | Full-text cleaning before chunking | 2026-11-06 — `transform/pdf_text.py` (four pure cleaners in a fixed order), applied by both Gold builders, which report `pdf_*` counts in their stats. |
-| `WP-28` | Article-level retrieval API, CLI and MCP server | 2026-11-06 — `retrieval/` (`Retriever.search/screen/evidence/article/status`, filters shared by pandas and Qdrant, BM25 index built once, RRF, optional pinned cross-encoder, untruncated token counts); `lake-research-map search|screen|mcp`;… |
+| `WP-28` | Article-level retrieval API, CLI and MCP server | 2026-11-06 — `apps/api/` (`Retriever.search/screen/evidence/article/status`, filters shared by pandas and Qdrant, BM25 index built once, RRF, optional pinned cross-encoder, untruncated token counts); `lake-research-map search|screen|mcp`;… |
 
 ## 14. Measured baselines
 

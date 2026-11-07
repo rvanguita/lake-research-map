@@ -11,6 +11,7 @@ import pytest
 from sqlalchemy import select
 
 from lake_research_map import pipeline
+from lake_research_map.apps.qdrant import cli as qdrant_cli
 from lake_research_map.db.gold_models import (
     DatasetArticle,
     DatasetChunk,
@@ -287,9 +288,9 @@ def _session_scope(session):
 
 
 def _patch_cli(monkeypatch, gold_session, vector_store) -> None:
-    monkeypatch.setattr(pipeline, "bootstrap", lambda: None)
-    monkeypatch.setattr(pipeline, "get_session", lambda layer: gold_session)
-    monkeypatch.setattr(pipeline, "get_vector_store", lambda: vector_store)
+    monkeypatch.setattr(qdrant_cli, "bootstrap", lambda: None)
+    monkeypatch.setattr(qdrant_cli, "get_session", lambda layer: gold_session)
+    monkeypatch.setattr(qdrant_cli, "get_vector_store", lambda: vector_store)
     monkeypatch.setattr(gold_session, "close", lambda: None)
 
 
@@ -316,7 +317,7 @@ def test_backfill_copies_complete_mysql_versions_and_reports_legacy_ones(
     row_id = row.id
     _patch_cli(monkeypatch, gold_session, vector_store)
 
-    pipeline._run_vector_command(SimpleNamespace(vectors_action="backfill"))
+    qdrant_cli.run(SimpleNamespace(vectors_action="backfill"))
 
     output = capsys.readouterr().out
     assert "legacy skipped" in output
@@ -337,7 +338,7 @@ def test_rebuild_restores_a_lost_active_collection(monkeypatch, capsys, gold_ses
         "lake_research_map.transform.versioned_gold._default_embed_fn", lambda: CountingEmbedder()
     )
 
-    pipeline._run_vector_command(SimpleNamespace(vectors_action="rebuild", version_id=None))
+    qdrant_cli.run(SimpleNamespace(vectors_action="rebuild", version_id=None))
 
     assert "embed contract passed" in capsys.readouterr().out
     assert vector_store.count("v1") == 1

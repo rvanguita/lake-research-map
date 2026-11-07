@@ -16,9 +16,9 @@ import pandas as pd
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from lake_research_map.apps.api.rank import BM25Index
 from lake_research_map.db.gold_models import DatasetArticle, DatasetChunk, DatasetSemantics
 from lake_research_map.db.vector_store import point_id
-from lake_research_map.retrieval.rank import BM25Index
 from lake_research_map.transform.vector_payloads import abstract_is_missing, primary_source
 from lake_research_map.transform.versioned_gold import active_version_id
 

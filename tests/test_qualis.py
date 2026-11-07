@@ -1,6 +1,6 @@
 import pandas as pd
 
-from lake_research_map.dashboard.qualis import load_qualis_reference, match_venues_to_qualis
+from lake_research_map.apps.dashboard.qualis import load_qualis_reference, match_venues_to_qualis
 
 
 def _qualis_df() -> pd.DataFrame:

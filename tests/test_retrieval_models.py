@@ -6,8 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from lake_research_map.retrieval import models
-from lake_research_map.retrieval.models import (
+from lake_research_map.apps.api import models
+from lake_research_map.apps.api.models import (
     RERANK_MODEL_FILES,
     RERANK_MODEL_REVISION,
     resolved_rerank_revision,

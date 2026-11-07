@@ -18,7 +18,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 
-from lake_research_map.dashboard.theme import (
+from lake_research_map.apps.dashboard.theme import (
     CATEGORICAL_PALETTE,
     OTHER_COLOR,
     PUBLICATION_CATEGORY_COLORS,

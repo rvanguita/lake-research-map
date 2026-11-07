@@ -9,8 +9,8 @@ from collections.abc import Sequence
 import pandas as pd
 import streamlit as st
 
-from lake_research_map.dashboard import loaders
-from lake_research_map.dashboard.theme import (
+from lake_research_map.apps.dashboard import loaders
+from lake_research_map.apps.dashboard.theme import (
     PUBLICATION_CATEGORY_LABELS,
     SOURCE_LABELS,
     polish_figure_layout,
@@ -480,7 +480,7 @@ def taxonomy_disclosure(df, taxonomy_name: str, *, key: str = "") -> None:
     Precision upgrades itself once human labels exist for this taxonomy. Draft
     labels from a reviewer whose identifier ends in ``-assisted`` are excluded.
     """
-    from lake_research_map.dashboard.analytics import (
+    from lake_research_map.apps.dashboard.analytics import (
         TAXONOMY_REGISTRY,
         taxonomy_coverage,
         taxonomy_precision_from_labels,

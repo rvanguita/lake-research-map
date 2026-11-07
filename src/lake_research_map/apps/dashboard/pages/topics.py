@@ -8,8 +8,8 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from lake_research_map.dashboard import loaders
-from lake_research_map.dashboard.analytics import (
+from lake_research_map.apps.dashboard import loaders
+from lake_research_map.apps.dashboard.analytics import (
     conceptual_atypicality_analysis,
     cumulative_by_category,
     detect_structural_breaks,
@@ -19,26 +19,26 @@ from lake_research_map.dashboard.analytics import (
     valid_years,
     zipf_law_analysis,
 )
-from lake_research_map.dashboard.charts import (
+from lake_research_map.apps.dashboard.charts import (
     source_bars,
     source_topn_hbar,
     stacked_area,
     topn_hbar,
 )
-from lake_research_map.dashboard.components import (
+from lake_research_map.apps.dashboard.components import (
     article_table,
     metric_row,
     page_header,
     render_chart,
     require_columns,
 )
-from lake_research_map.dashboard.qualis import (
+from lake_research_map.apps.dashboard.qualis import (
     ESTRATO_ORDER,
     MATCH_THRESHOLD,
     NOT_CLASSIFIED,
     QUALIS_AREA,
 )
-from lake_research_map.dashboard.theme import (
+from lake_research_map.apps.dashboard.theme import (
     CATEGORICAL_PALETTE,
     TREND_DOWN_COLOR,
     TREND_UP_COLOR,
@@ -484,7 +484,7 @@ def _rising_falling(kw_year: pd.DataFrame) -> None:
     counts = kw_year["keyword"].value_counts()
     eligible = counts[counts >= MIN_KEYWORD_OCCURRENCES].index
 
-    from lake_research_map.dashboard.analytics import linear_slope_with_ci
+    from lake_research_map.apps.dashboard.analytics import linear_slope_with_ci
 
     by_year_total = kw_year.groupby("year").size()
     fits: dict[str, dict[str, float]] = {}
@@ -549,7 +549,7 @@ def _rising_falling(kw_year: pd.DataFrame) -> None:
         "so the rest are ranked by a slope the data cannot separate from no trend.",
     )
 
-    from lake_research_map.dashboard.analytics import benjamini_hochberg, mann_kendall_trend
+    from lake_research_map.apps.dashboard.analytics import benjamini_hochberg, mann_kendall_trend
 
     # The test family is every eligible keyword, not the extremes plotted above.
     # Adjusting only the top/bottom slopes would correct a set already chosen for
@@ -903,7 +903,7 @@ def _bradford_analysis(articles_df: pd.DataFrame) -> None:
         "Bradford's Law divides the journals into 3 concentric zones of equal productivity (~1/3 of the articles each). "
         "The theoretical proportion of the number of journals in each zone follows approximately 1 : k : k2."
     )
-    from lake_research_map.dashboard.analytics import bradford_zones
+    from lake_research_map.apps.dashboard.analytics import bradford_zones
 
     res = bradford_zones(articles_df)
     zone_sum = res.get("zone_summary")

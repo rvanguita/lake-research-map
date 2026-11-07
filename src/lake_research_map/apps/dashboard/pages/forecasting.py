@@ -10,22 +10,22 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from lake_research_map.dashboard import loaders
-from lake_research_map.dashboard.analytics import technological_burst_detection
-from lake_research_map.dashboard.components import (
+from lake_research_map.apps.dashboard import loaders
+from lake_research_map.apps.dashboard.analytics import technological_burst_detection
+from lake_research_map.apps.dashboard.components import (
     hero_banner,
     metric_row,
     page_header,
     render_chart,
 )
-from lake_research_map.dashboard.forecasting import (
+from lake_research_map.apps.dashboard.forecasting import (
     COVERAGE_HOLDOUT_FOLDS,
     CV_YEARS,
     HOLDOUT_YEAR,
     TRAIN_END_YEAR,
     ForecastResult,
 )
-from lake_research_map.dashboard.theme import (
+from lake_research_map.apps.dashboard.theme import (
     CATEGORICAL_PALETTE,
     SOURCE_COLORS,
     SOURCE_LABELS,
@@ -501,7 +501,7 @@ def _bass_diffusion_analysis() -> None:
         "separating innovators' external influence (p) from internal imitation effects (q). It also "
         "estimates theoretical saturation (m) and the peak publication year (t*)."
     )
-    from lake_research_map.dashboard.forecasting import fit_bass_diffusion_nls
+    from lake_research_map.apps.dashboard.forecasting import fit_bass_diffusion_nls
 
     status, rows, results_by_keyword, _ = _keyword_forecasts()
     if status != "ok" or not results_by_keyword:

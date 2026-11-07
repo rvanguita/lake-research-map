@@ -7,7 +7,7 @@ description: Conventions for adding/editing pipeline code under ingest/, transfo
 
 This is the authoring-side skill for the pipeline itself (`src/lake_research_map/{ingest,transform,db}/`
 and `pipeline.py`) — how to actually *run* it is the `pipeline-ops` skill instead.
-Dashboard code (`dashboard/`) has its own `streamlit-dashboard` skill.
+Dashboard code (`apps/dashboard/`) has its own `streamlit-dashboard` skill.
 
 ## One database per layer, same table names
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from lake_research_map.retrieval.rank import (
+from lake_research_map.apps.api.rank import (
     BM25Index,
     excerpt,
     first_per_key,

@@ -190,13 +190,13 @@ its requirement, or says plainly that none exists.
 | `FR-05` | Reused vs. invalidated chunk counts on an unchanged rebuild; copy-before-compute and orphan deletion in the embed stage | `transform/versioned_gold.py`; `tests/test_gold_articles.py`, `tests/test_vector_collections.py` |
 | `FR-06` | Dimension, model, revision, finiteness, orphan and coverage gates on the Qdrant points before publication | `quality.embed_contract`, `quality.publication_contract`; `tests/test_vector_collections.py` |
 | `FR-07` | Parent execution and stage rows sharing one version | `tests/test_versioning_contracts.py` |
-| `FR-08` | Article reader bound to the publication pointer | `dashboard/data.py::load_articles`; `tests/test_dashboard_pages.py` |
+| `FR-08` | Article reader bound to the publication pointer | `apps/dashboard/data.py::load_articles`; `tests/test_dashboard_pages.py` |
 | `FR-09` | Durable labels joined to calibration, with both approval digests | `reviews calibrate`; `tests/test_review_label_reader.py` |
-| `FR-10` | Component ranks and scores exposed per mode | `retrieval/rank.py`, `retrieval/api.py::ArticleHit`; `tests/test_retrieval_rank.py`, `tests/test_retrieval_api.py` |
-| `FR-11` | No write call anywhere under `dashboard/` | `tests/test_theme.py` |
+| `FR-10` | Component ranks and scores exposed per mode | `apps/api/rank.py`, `apps/api/api.py::ArticleHit`; `tests/test_retrieval_rank.py`, `tests/test_retrieval_api.py` |
+| `FR-11` | No write call anywhere under `apps/dashboard/` | `tests/test_theme.py` |
 | `FR-12` | Every page rendered headless in populated and empty states | `tests/test_dashboard_pages.py` |
 | `FR-13` | Per-version collection, deterministic point ids, exact search, alias moved after publication, backfill/rebuild repairs | `db/vector_store.py`; `tests/test_vector_store.py`, `tests/test_vector_collections.py`, opt-in `tests/test_qdrant_server.py`; `vectors status` |
-| `FR-14` | One hit per article, filters before ranking, pandas/Qdrant filter parity, JSON-only stdout, no pipeline lock, five MCP tools | `retrieval/`; `tests/test_retrieval_api.py`, `tests/test_retrieval_filters.py`, `tests/test_retrieval_cli.py`, `tests/test_mcp_server.py` |
+| `FR-14` | One hit per article, filters before ranking, pandas/Qdrant filter parity, JSON-only stdout, no pipeline lock, five MCP tools | `apps/api/`; `tests/test_retrieval_api.py`, `tests/test_retrieval_filters.py`, `tests/test_retrieval_cli.py`, `tests/test_mcp_server.py` |
 | `FR-15` | Cleaner unit tests and the measured before/after on the 97 linked PDFs; `pdf_*` keys in the Gold stats | `transform/pdf_text.py`; `tests/test_pdf_text.py`, `tests/test_gold_articles.py`; SDD §14 |
 | `NFR-01` | Source/config/code/curation fingerprints; per-page dataset-version caption | `ingest/snapshots.py::build_fingerprint`; `tests/test_population_provenance.py` |
 | `NFR-02` | Unchanged re-run produces no new logical rows | `tests/test_gold_articles.py`, `tests/test_raw_bib.py` |

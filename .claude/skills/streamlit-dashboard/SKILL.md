@@ -1,6 +1,6 @@
 ---
 name: streamlit-dashboard
-description: Conventions for the lake-research-map Streamlit dashboard (src/lake_research_map/dashboard/) — page contract, chart contract, theme tokens, aggregation rules, and data pitfalls. Use whenever adding or editing a dashboard page, chart, or shared helper.
+description: Conventions for the lake-research-map Streamlit dashboard (src/lake_research_map/apps/dashboard/) — page contract, chart contract, theme tokens, aggregation rules, and data pitfalls. Use whenever adding or editing a dashboard page, chart, or shared helper.
 ---
 
 # lake-research-map Streamlit dashboard
@@ -11,9 +11,9 @@ rules exist to keep it from drifting back.
 
 ## Page contract
 
-- One module per page under `dashboard/pages/`, exposing a single zero-arg
+- One module per page under `apps/dashboard/pages/`, exposing a single zero-arg
   `render() -> None`.
-- Register it in `dashboard/app.py`'s `PAGES` list — `(render_fn, title, icon,
+- Register it in `apps/dashboard/app.py`'s `PAGES` list — `(render_fn, title, icon,
   url_path)` — and it's automatically wired into `st.navigation`.
 - Start every page with `articles_df = loaders.require_articles()` (or
   `loaders.filtered_chunks()` for chunk-only pages). This applies the global
@@ -38,12 +38,12 @@ rules exist to keep it from drifting back.
   purpose: it covered the data with dotted lines and text boxes. If a mean or
   benchmark matters, put it in a `metric_row` card or the chart's `caption`
   instead.
-- Build the figure with a helper from `dashboard/charts.py` when the shape
+- Build the figure with a helper from `apps/dashboard/charts.py` when the shape
   matches: `source_bars`/`source_lines` for IEEE/Elsevier/Total comparisons,
   `topn_hbar` for ranked top-N bars, `stacked_area` for composition-over-time.
   Add a new builder there rather than hand-rolling `px`/`go` calls in a page
   a second time.
-- Compute the data for a chart in `dashboard/analytics.py` (pure pandas, no
+- Compute the data for a chart in `apps/dashboard/analytics.py` (pure pandas, no
   `streamlit` import) — not inline in the page function. Reuse
   `valid_years`, `source_counts_by`, `cumulative_by_source`,
   `cumulative_by_venue`, `source_means`, `explode_authors`,
@@ -76,7 +76,7 @@ rules exist to keep it from drifting back.
   `theme.py`), not a reference line. `source_counts_by`/`cumulative_by_source`
   already return an explicit `total` column for this.
 
-## Theme tokens (`dashboard/theme.py`)
+## Theme tokens (`apps/dashboard/theme.py`)
 
 - `SOURCE_COLORS` / `SOURCE_LABELS` — IEEE blue / Elsevier orange, from each
   publisher's brand guidelines. Use these, don't invent new colors for the
@@ -160,10 +160,10 @@ got long). Two rules keep this from recurring:
 
 ## Aggregation rule
 
-Pure pandas logic lives in `dashboard/analytics.py` (no Streamlit import, so
+Pure pandas logic lives in `apps/dashboard/analytics.py` (no Streamlit import, so
 it's testable/cacheable independently). UI-facing caching wrappers live in
-`dashboard/loaders.py` with `@st.cache_data(ttl=60)`; raw SQL against the
-medallion databases lives in `dashboard/data.py`. A page function should
+`apps/dashboard/loaders.py` with `@st.cache_data(ttl=60)`; raw SQL against the
+medallion databases lives in `apps/dashboard/data.py`. A page function should
 mostly be: call a loader, call an analytics function, call a chart builder,
 call `render_chart`.
 
@@ -196,7 +196,7 @@ call `render_chart`.
   the page rather than implying otherwise. No page starts a run (ADR-09): the
   Pipeline page shows the CLI commands instead.
 - The **current year in the corpus is always a partial year** — it's
-  collected by hand mid-year, not a closed dataset. `dashboard/forecasting.py`
+  collected by hand mid-year, not a closed dataset. `apps/dashboard/forecasting.py`
   (used by `pages/forecasting.py`) treats its `HOLDOUT_YEAR` this way
   explicitly: it's used for model validation but every note/label calls it
   "parcial" rather than presenting it as a finished year. Any new

@@ -6,8 +6,8 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from lake_research_map.dashboard import loaders
-from lake_research_map.dashboard.analytics import (
+from lake_research_map.apps.dashboard import loaders
+from lake_research_map.apps.dashboard.analytics import (
     OTHERS_LABEL,
     cumulative_by_source,
     cumulative_by_venue,
@@ -16,15 +16,15 @@ from lake_research_map.dashboard.analytics import (
     source_counts_by,
     valid_years,
 )
-from lake_research_map.dashboard.charts import (
+from lake_research_map.apps.dashboard.charts import (
     publication_category_bars,
     source_bars,
     source_lines,
     stacked_area,
 )
-from lake_research_map.dashboard.components import page_header, render_chart, require_columns
-from lake_research_map.dashboard.qualis import ESTRATO_ORDER, NOT_CLASSIFIED, QUALIS_AREA
-from lake_research_map.dashboard.theme import (
+from lake_research_map.apps.dashboard.components import page_header, render_chart, require_columns
+from lake_research_map.apps.dashboard.qualis import ESTRATO_ORDER, NOT_CLASSIFIED, QUALIS_AREA
+from lake_research_map.apps.dashboard.theme import (
     venue_color_map,
 )
 

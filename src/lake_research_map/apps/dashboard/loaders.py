@@ -19,8 +19,8 @@ import pandas as pd
 import streamlit as st
 from sqlalchemy.exc import SQLAlchemyError
 
-from lake_research_map.dashboard import qualis
-from lake_research_map.dashboard.data import (
+from lake_research_map.apps.dashboard import qualis
+from lake_research_map.apps.dashboard.data import (
     active_dataset_version,
     bronze_doi_dropped_counts,
     layer_row_counts,
@@ -152,7 +152,7 @@ def _retriever_for(version_id: str):
     Qdrant client, which must not be pickled on every cache lookup. Keyed by
     version so a new publication builds a new one (and evicts the old).
     """
-    from lake_research_map.retrieval.api import build_retriever
+    from lake_research_map.apps.api.api import build_retriever
 
     return build_retriever(version_id)
 
@@ -377,7 +377,7 @@ def filtered_articles() -> tuple[str, pd.DataFrame]:
 @st.cache_data(ttl=60)
 def author_table(filter_sig: tuple) -> pd.DataFrame:
     """Canonicalized author rows for the active global-filter signature."""
-    from lake_research_map.dashboard.analytics import (
+    from lake_research_map.apps.dashboard.analytics import (
         author_display_name,
         canonical_author,
         explode_authors_with_position,
@@ -397,7 +397,7 @@ def author_table(filter_sig: tuple) -> pd.DataFrame:
 @st.cache_data(ttl=60)
 def author_year_matrix_cached(filter_sig: tuple) -> pd.DataFrame:
     """Author-by-year output matrix for the active global-filter signature."""
-    from lake_research_map.dashboard.analytics import author_year_matrix
+    from lake_research_map.apps.dashboard.analytics import author_year_matrix
 
     _, articles_df = filtered_articles()
     return author_year_matrix(articles_df)
@@ -406,7 +406,7 @@ def author_year_matrix_cached(filter_sig: tuple) -> pd.DataFrame:
 @st.cache_data(ttl=60)
 def volume_forecast(source: str | None):
     """Cached publication-volume forecast for one source or the full corpus."""
-    from lake_research_map.dashboard.forecasting import fit_and_forecast, yearly_counts
+    from lake_research_map.apps.dashboard.forecasting import fit_and_forecast, yearly_counts
 
     _, articles_df = articles()
     return fit_and_forecast(yearly_counts(articles_df, source=source))
@@ -415,8 +415,8 @@ def volume_forecast(source: str | None):
 @st.cache_data(ttl=60)
 def keyword_forecasts(min_occurrences: int = 20):
     """Fit and cache temporal models for sufficiently frequent keywords."""
-    from lake_research_map.dashboard.analytics import explode_keywords
-    from lake_research_map.dashboard.forecasting import TRAIN_END_YEAR, fit_and_forecast
+    from lake_research_map.apps.dashboard.analytics import explode_keywords
+    from lake_research_map.apps.dashboard.forecasting import TRAIN_END_YEAR, fit_and_forecast
 
     _, articles_df = articles()
     exploded = explode_keywords(articles_df)
@@ -657,6 +657,6 @@ def semantic_novelty_scores() -> pd.DataFrame:
 @st.cache_data(ttl=60)
 def review_labels(workflow: str) -> pd.DataFrame:
     """Latest-revision reviewed labels for one evidence workflow."""
-    from lake_research_map.dashboard.data import load_review_labels
+    from lake_research_map.apps.dashboard.data import load_review_labels
 
     return load_review_labels(workflow)

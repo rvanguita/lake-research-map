@@ -335,7 +335,7 @@ def test_projection_measures_separate_invented_from_lost_neighbours():
     """Trustworthiness alone cannot fail a projection that tears a cluster apart."""
     import numpy as np
 
-    from lake_research_map.dashboard.analytics import semantic_stability_diagnostics
+    from lake_research_map.apps.dashboard.analytics import semantic_stability_diagnostics
 
     rng = np.random.default_rng(7)
     matrix = np.vstack([rng.normal(-3, 0.1, (20, 4)), rng.normal(3, 0.1, (20, 4))])

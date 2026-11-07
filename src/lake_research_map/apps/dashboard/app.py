@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import streamlit as st
 
-from lake_research_map.dashboard.components import render_sidebar
-from lake_research_map.dashboard.pages import (
+from lake_research_map.apps.dashboard.components import render_sidebar
+from lake_research_map.apps.dashboard.pages import (
     forecasting,
     highlights,
     overview,

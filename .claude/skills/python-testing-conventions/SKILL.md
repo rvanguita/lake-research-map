@@ -6,7 +6,7 @@ description: pytest conventions for lake-research-map — pure-function-first te
 # lake-research-map testing conventions
 
 Applies repo-wide — both `src/lake_research_map/{ingest,transform}/` pipeline code and
-`src/lake_research_map/dashboard/analytics.py`/`forecasting.py` and `retrieval/rank.py` (all pure, no `streamlit`
+`src/lake_research_map/apps/dashboard/analytics.py`/`forecasting.py` and `apps/api/rank.py` (all pure, no `streamlit`
 import, exactly so they're unit-testable). Run with `uv run pytest` (`testpaths = ["tests"]` in
 `pyproject.toml`).
 

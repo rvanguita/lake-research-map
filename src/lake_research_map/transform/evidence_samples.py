@@ -173,7 +173,7 @@ def author_ambiguity_pairs(author_names: list[str], *, limit: int = 40) -> tuple
 
     A sample drawn from only one mode would measure only half the error.
     """
-    from lake_research_map.dashboard.analytics import canonical_author
+    from lake_research_map.apps.dashboard.analytics import canonical_author
 
     unique = sorted({name.strip() for name in author_names if name and name.strip()})
     if len(unique) < 2:
@@ -264,7 +264,7 @@ def stratify_taxonomy(
     taxonomy that silently drops a third of the corpus is the failure mode
     most worth catching.
     """
-    from lake_research_map.dashboard.analytics import (
+    from lake_research_map.apps.dashboard.analytics import (
         OPTIMIZATION_METHOD_PATTERNS,
         taxonomy_haystack,
     )
@@ -500,7 +500,7 @@ def _describe_author(subjects: list[str], silver_session: Session | None) -> dic
     described: dict[str, dict[str, str]] = {subject: {} for subject in subjects}
     if silver_session is None:
         return described
-    from lake_research_map.dashboard.analytics import canonical_author
+    from lake_research_map.apps.dashboard.analytics import canonical_author
 
     titles: dict[str, list[str]] = defaultdict(list)
     for row in silver_session.scalars(select(SilverArticle)).all():

@@ -8,13 +8,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from lake_research_map.db.vector_store import VectorPoint, point_id
-from lake_research_map.retrieval.filters import (
+from lake_research_map.apps.api.filters import (
     ArticleFilters,
     apply_article_filters,
     filters_from_args,
     to_qdrant_filter,
 )
+from lake_research_map.db.vector_store import VectorPoint, point_id
 from lake_research_map.transform.vector_payloads import (
     abstract_is_missing,
     article_payload,

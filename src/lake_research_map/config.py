@@ -67,7 +67,7 @@ SEARCH_CONFIG_PATHS = (
 )
 
 # Official CAPES/Qualis journal-classification export (2017-2020 quadriênio, all
-# evaluation areas) -- see dashboard/qualis.py. Not checked into git (see
+# evaluation areas) -- see apps/dashboard/qualis.py. Not checked into git (see
 # .gitignore): large, externally-sourced reference data, not project-authored.
 _CAPES_QUALIS_CANDIDATES = (
     DATA_DIR / "capes-qualis.xlsx",

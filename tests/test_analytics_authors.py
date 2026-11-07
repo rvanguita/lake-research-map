@@ -1,6 +1,6 @@
 import pandas as pd
 
-from lake_research_map.dashboard.analytics import (
+from lake_research_map.apps.dashboard.analytics import (
     analyze_coauthorship_partners,
     author_productivity_trend,
     author_year_matrix,
@@ -307,7 +307,7 @@ def test_network_null_model_reports_assortativity_and_robustness():
 
     import networkx as nx
 
-    from lake_research_map.dashboard.analytics import network_null_model_diagnostics
+    from lake_research_map.apps.dashboard.analytics import network_null_model_diagnostics
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
@@ -333,7 +333,7 @@ def test_network_null_model_reports_assortativity_and_robustness():
 
 def test_periodized_ties_separate_new_from_returning_collaborations():
     """A static recurrent-edge count cannot tell recruitment from consolidation."""
-    from lake_research_map.dashboard.analytics import periodized_collaboration_ties
+    from lake_research_map.apps.dashboard.analytics import periodized_collaboration_ties
 
     rows = []
     for doi, year, names in [

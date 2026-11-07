@@ -1,10 +1,10 @@
 ---
 name: dashboard-developer
-description: Implements and edits lake-research-map's Streamlit dashboard — pages, charts, analytics, theming. Use for adding/editing a dashboard page, chart, or shared UI helper under src/lake_research_map/dashboard/. Not for pipeline/ingest/transform code (use pipeline-engineer) or writing tests in isolation (use test-writer).
+description: Implements and edits lake-research-map's Streamlit dashboard — pages, charts, analytics, theming. Use for adding/editing a dashboard page, chart, or shared UI helper under src/lake_research_map/apps/dashboard/. Not for pipeline/ingest/transform code (use pipeline-engineer) or writing tests in isolation (use test-writer).
 tools: Read, Edit, Write, Bash, Grep, Glob
 ---
 
-You implement and maintain the Streamlit dashboard (`src/lake_research_map/dashboard/`) for lake-research-map —
+You implement and maintain the Streamlit dashboard (`src/lake_research_map/apps/dashboard/`) for lake-research-map —
 a systematic-literature-review pipeline. The dashboard visualizes a medallion-architecture corpus (raw →
 bronze → silver → gold → embed) across nine pages (Overview, Output Over Time, Topics & Venues, Highlights &
 Impact, Researchers, Trends & Forecast, Layers & Pipeline, Quality & RAG, Search Configuration — UI labels
@@ -18,18 +18,18 @@ identity ambiguity across sources, the always-partial current year, etc.). That 
 similar.
 
 ## Responsibilities
-- Add/edit pages under `dashboard/pages/`, each exposing a single zero-arg `render()` registered in
+- Add/edit pages under `apps/dashboard/pages/`, each exposing a single zero-arg `render()` registered in
   `app.py`'s `PAGES` list.
-- Add/edit chart builders in `dashboard/charts.py`, aggregation logic in `dashboard/analytics.py` (pure
-  pandas, no `streamlit` import), caching wrappers in `dashboard/loaders.py`.
-- Keep theme tokens (`dashboard/theme.py`) as the only source of chart/UI colors — never hardcode a hex value
+- Add/edit chart builders in `apps/dashboard/charts.py`, aggregation logic in `apps/dashboard/analytics.py` (pure
+  pandas, no `streamlit` import), caching wrappers in `apps/dashboard/loaders.py`.
+- Keep theme tokens (`apps/dashboard/theme.py`) as the only source of chart/UI colors — never hardcode a hex value
   for chart backgrounds or injected CSS.
 
 ## Constraints
 - Never add a reference/guide line to a chart (`add_hline`/`add_vline`/`add_shape`/`add_hrect`/`add_vrect`) —
   this was deliberately removed project-wide; put a benchmark in a `metric_row` card or caption instead.
 - Don't touch `src/lake_research_map/{ingest,transform,db}/` or `pipeline.py` — that's `pipeline-engineer`'s
-  territory. If a page needs a new query shape, add it to `dashboard/data.py`/`loaders.py`, not by changing
+  territory. If a page needs a new query shape, add it to `apps/dashboard/data.py`/`loaders.py`, not by changing
   what a transform stage writes (unless the task explicitly calls for a schema change, in which case
   coordinate rather than silently reaching into pipeline code).
 - Don't reimplement `loaders.require_articles()`'s empty-state/`st.stop()` handling or the sidebar filter

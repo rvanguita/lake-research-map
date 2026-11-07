@@ -9,8 +9,8 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from lake_research_map.dashboard import loaders
-from lake_research_map.dashboard.analytics import (
+from lake_research_map.apps.dashboard import loaders
+from lake_research_map.apps.dashboard.analytics import (
     RECENT_WINDOW_YEARS,
     analyze_coauthorship_partners,
     author_count_series,
@@ -28,21 +28,21 @@ from lake_research_map.dashboard.analytics import (
     source_means,
     valid_years,
 )
-from lake_research_map.dashboard.charts import (
+from lake_research_map.apps.dashboard.charts import (
     lorenz_chart,
     source_bars,
     source_lines,
     source_topn_hbar,
     topn_hbar,
 )
-from lake_research_map.dashboard.components import (
+from lake_research_map.apps.dashboard.components import (
     article_table,
     hero_banner,
     metric_row,
     page_header,
     render_chart,
 )
-from lake_research_map.dashboard.theme import CATEGORICAL_PALETTE, theme_tokens
+from lake_research_map.apps.dashboard.theme import CATEGORICAL_PALETTE, theme_tokens
 
 TOP_AUTHORS = 25
 MIN_PAPERS_FOR_NETWORK = 4
@@ -890,7 +890,7 @@ def _lotka_law(author_rows: pd.DataFrame) -> None:
     page rather than with Bradford/Zipf because its unit is the author, and it
     inherits the same heuristic-identity caveat as every other person-level view.
     """
-    from lake_research_map.dashboard.analytics import lotka_law_analysis
+    from lake_research_map.apps.dashboard.analytics import lotka_law_analysis
 
     st.subheader("📐 Lotka's law of author productivity")
     if author_rows.empty or "author_key" not in author_rows.columns:
@@ -1047,7 +1047,7 @@ def _network_null_model(graph, net_metrics: dict) -> None:
     keeps every author's degree and rewires the ties, which separates real
     collaborative structure from an artefact of corpus size and team sizes.
     """
-    from lake_research_map.dashboard.analytics import network_null_model_diagnostics
+    from lake_research_map.apps.dashboard.analytics import network_null_model_diagnostics
 
     result = network_null_model_diagnostics(graph)
     if not result.get("valid"):
@@ -1122,7 +1122,7 @@ def _periodized_ties(author_rows: pd.DataFrame) -> None:
     same number of repeat pairs. Splitting by the period in which a tie first
     appears is what separates them.
     """
-    from lake_research_map.dashboard.analytics import periodized_collaboration_ties
+    from lake_research_map.apps.dashboard.analytics import periodized_collaboration_ties
 
     ties = periodized_collaboration_ties(author_rows)
     if ties.empty or len(ties) < 2:

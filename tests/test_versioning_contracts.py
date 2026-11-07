@@ -297,7 +297,7 @@ def test_versioned_gold_build_does_not_mutate_live_publication(
 def test_semantic_run_persists_the_diagnostics_that_produced_its_map(
     gold_session, monkeypatch, vector_store
 ):
-    from lake_research_map.dashboard import analytics
+    from lake_research_map.apps.dashboard import analytics
     from lake_research_map.transform import semantics, versioned_gold
 
     gold_session.add(DatasetVersion(version_id="v1", status="candidate"))
@@ -953,8 +953,8 @@ def test_new_enrichment_observations_mint_a_new_version(tmp_path):
 def test_a_presentation_only_edit_does_not_mint_a_new_version(tmp_path):
     from lake_research_map.ingest.snapshots import code_fingerprint
 
-    page = tmp_path / "src/lake_research_map/dashboard/pages/overview.py"
-    analytics = tmp_path / "src/lake_research_map/dashboard/analytics.py"
+    page = tmp_path / "src/lake_research_map/apps/dashboard/pages/overview.py"
+    analytics = tmp_path / "src/lake_research_map/apps/dashboard/analytics.py"
     page.parent.mkdir(parents=True)
     page.write_text("CAPTION = 'a'\n")
     analytics.write_text("K = 1\n")

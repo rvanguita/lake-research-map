@@ -9,10 +9,17 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from lake_research_map.dashboard import loaders
-from lake_research_map.dashboard.analytics import metadata_coverage_matrix, pdf_selection_bias
-from lake_research_map.dashboard.charts import topn_hbar
-from lake_research_map.dashboard.components import (
+from lake_research_map.apps.api.api import (
+    BENCHMARK_MODES,
+    ArticleHit,
+    RetrievalUnavailable,
+    mode_runner,
+)
+from lake_research_map.apps.api.filters import ArticleFilters
+from lake_research_map.apps.dashboard import loaders
+from lake_research_map.apps.dashboard.analytics import metadata_coverage_matrix, pdf_selection_bias
+from lake_research_map.apps.dashboard.charts import topn_hbar
+from lake_research_map.apps.dashboard.components import (
     article_table,
     hero_banner,
     metric_row,
@@ -20,24 +27,17 @@ from lake_research_map.dashboard.components import (
     render_chart,
     require_columns,
 )
-from lake_research_map.dashboard.retrieval_eval import (
+from lake_research_map.apps.dashboard.retrieval_eval import (
     benchmark_retrieval_modes,
     evaluate_rankings,
 )
-from lake_research_map.dashboard.theme import (
+from lake_research_map.apps.dashboard.theme import (
     CATEGORICAL_PALETTE,
     CHART_HEIGHT,
     SOURCE_COLORS,
     TREND_DOWN_COLOR,
     theme_tokens,
 )
-from lake_research_map.retrieval.api import (
-    BENCHMARK_MODES,
-    ArticleHit,
-    RetrievalUnavailable,
-    mode_runner,
-)
-from lake_research_map.retrieval.filters import ArticleFilters
 from lake_research_map.transform.evidence_samples import RETRIEVAL_QUERIES
 from lake_research_map.transform.gold_articles import CHUNK_MAX_CHARS
 from lake_research_map.transform.vector_payloads import ABSTRACT_MIN_CHARS, abstract_is_missing
@@ -880,7 +880,7 @@ def _bibliometric_anomalies_audit(articles_df: pd.DataFrame) -> None:
     if not signals.empty and "relevance_score" in signals.columns:
         joined = pd.merge(joined, signals[["doi", "relevance_score"]], on="doi", how="left")
 
-    from lake_research_map.dashboard.analytics import detect_bibliometric_anomalies
+    from lake_research_map.apps.dashboard.analytics import detect_bibliometric_anomalies
 
     anomalies_df = detect_bibliometric_anomalies(joined, contamination=0.03)
     n_anomalies = int(anomalies_df["is_anomaly"].sum())
@@ -955,7 +955,7 @@ def _benchmark_runners(retriever, probe: str) -> tuple[dict, dict[str, str]]:
 def _retrieval_benchmark() -> None:
     """Score every retrieval mode over the versioned query set — `RQ-08`, `WP-13`.
 
-    The harness (`dashboard/retrieval_eval.py`) and the pooled judgement sampler
+    The harness (`apps/dashboard/retrieval_eval.py`) and the pooled judgement sampler
     existed before the panel did; the panel is deliberately honest about what
     stands behind the numbers: a benchmark scored against one AI-assisted pass
     is a smoke test of the harness, not evidence that a mode is better.

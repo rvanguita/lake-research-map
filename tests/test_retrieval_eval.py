@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from lake_research_map.dashboard.retrieval_eval import (
+from lake_research_map.apps.dashboard.retrieval_eval import (
     benchmark_retrieval_modes,
     evaluate_rankings,
     ndcg_at_k,

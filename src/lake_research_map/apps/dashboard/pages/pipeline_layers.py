@@ -7,15 +7,15 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from lake_research_map.dashboard import loaders
-from lake_research_map.dashboard.components import (
+from lake_research_map.apps.dashboard import loaders
+from lake_research_map.apps.dashboard.components import (
     hero_banner,
     metric_row,
     page_header,
     render_chart,
     render_pipeline_commands,
 )
-from lake_research_map.dashboard.theme import (
+from lake_research_map.apps.dashboard.theme import (
     CATEGORICAL_PALETTE,
     OTHER_COLOR,
     SOURCE_COLORS,

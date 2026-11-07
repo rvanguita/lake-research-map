@@ -7,8 +7,8 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from lake_research_map.dashboard import loaders
-from lake_research_map.dashboard.analytics import (
+from lake_research_map.apps.dashboard import loaders
+from lake_research_map.apps.dashboard.analytics import (
     benchmark_feeders_analysis,
     computational_solvers_analysis,
     mathematical_complexity_spectrum,
@@ -17,13 +17,13 @@ from lake_research_map.dashboard.analytics import (
     planning_time_horizons_analysis,
     uncertainty_paradigms_analysis,
 )
-from lake_research_map.dashboard.components import (
+from lake_research_map.apps.dashboard.components import (
     page_header,
     render_chart,
     summary_card_row,
     taxonomy_disclosure,
 )
-from lake_research_map.dashboard.theme import CATEGORICAL_PALETTE
+from lake_research_map.apps.dashboard.theme import CATEGORICAL_PALETTE
 
 
 def render() -> None:

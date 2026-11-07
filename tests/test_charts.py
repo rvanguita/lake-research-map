@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 import plotly.graph_objects as go
 
-from lake_research_map.dashboard.charts import (
+from lake_research_map.apps.dashboard.charts import (
     lorenz_chart,
     publication_category_bars,
     source_bars,
@@ -20,7 +20,11 @@ from lake_research_map.dashboard.charts import (
     stacked_area,
     topn_hbar,
 )
-from lake_research_map.dashboard.components import _warn_unnamed_axes, metric_row, summary_card_row
+from lake_research_map.apps.dashboard.components import (
+    _warn_unnamed_axes,
+    metric_row,
+    summary_card_row,
+)
 
 
 def _by_source() -> pd.DataFrame:

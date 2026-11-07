@@ -3,7 +3,7 @@
 [![Python 3.13](https://img.shields.io/badge/python-3.13-blue.svg)](https://www.python.org/downloads/)
 [![Tests: 490 passed](https://img.shields.io/badge/tests-490%20passed-brightgreen.svg)](tests/)
 [![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
-[![Streamlit Dashboard](https://img.shields.io/badge/dashboard-Streamlit-FF4B4B.svg)](src/lake_research_map/dashboard/)
+[![Streamlit Dashboard](https://img.shields.io/badge/dashboard-Streamlit-FF4B4B.svg)](src/lake_research_map/apps/dashboard/)
 [![Vector Store: Qdrant](https://img.shields.io/badge/vectors-Qdrant-DC244C.svg)](docker-compose.yml)
 [![Database: MySQL Medallion](https://img.shields.io/badge/lake-MySQL%20Medallion-00758F.svg)](src/lake_research_map/db/)
 [![Code Style: Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
@@ -113,7 +113,7 @@ for hit in hits:
 
 ## 📊 Interactive Analytical Dashboard (10 Pages)
 
-The Streamlit dashboard (`src/lake_research_map/dashboard/`) is partitioned into **10 workflow-oriented pages**. A fixed dark theme, responsive containers (`width="stretch"`), English interface text, and global publication-category filtering keep the interface consistent.
+The Streamlit dashboard (`src/lake_research_map/apps/dashboard/`) is partitioned into **10 workflow-oriented pages**. A fixed dark theme, responsive containers (`width="stretch"`), English interface text, and global publication-category filtering keep the interface consistent.
 
 | Page | Analytical Scope & Dedicated Tabs |
 |---|---|
@@ -132,7 +132,7 @@ The Streamlit dashboard (`src/lake_research_map/dashboard/`) is partitioned into
 
 ## 🔬 Scientometric, Econometric & Machine Learning Rigor
 
-All analytical functions reside in `dashboard/analytics.py` and `dashboard/forecasting.py` as **pure, stateless mathematical functions** independent of Streamlit and MySQL:
+All analytical functions reside in `apps/dashboard/analytics.py` and `apps/dashboard/forecasting.py` as **pure, stateless mathematical functions** independent of Streamlit and MySQL:
 
 ```
                                   ANALYTICAL RIGOR
@@ -322,23 +322,26 @@ lake-research-map/
 │   │   ├── semantics.py          # Contrastive screening, KMeans, UMAP/t-SNE/PCA
 │   │   └── screening_calibration.py # SLR sensitivity/recall threshold calibration
 │   ├── devtools/                 # Hero-image generator and the docs-on-main pre-commit guard
-│   ├── retrieval/                # Article-level retrieval, shared by CLI, MCP and dashboard
-│   │   ├── api.py                # Retriever: search, screen, evidence, article, status
-│   │   ├── filters.py            # ArticleFilters as a pandas mask and as a Qdrant filter
-│   │   ├── rank.py               # BM25 index, RRF, per-article collapse
-│   │   ├── index.py              # Published version's articles and chunk texts
-│   │   ├── models.py             # Pinned reranker, untruncated token counts
-│   │   ├── cli.py                # search / screen / mcp commands
-│   │   └── mcp_server.py         # Five MCP tools over stdio
-│   └── dashboard/                # Multipage Streamlit application
-│       ├── app.py                # Dashboard navigation & router
-│       ├── data.py               # Raw SQL data layer
-│       ├── loaders.py            # @st.cache_data caching and normalization
-│       ├── analytics.py          # Pure mathematical, scientometric & network analytics
-│       ├── forecasting.py        # Regression benchmarking, quantiles, Bass diffusion
-│       ├── theme.py              # Fixed-dark theme tokens and transparent polar styling
-│       ├── components.py         # Reusable Streamlit UI widgets & metric cards
-│       └── pages/                # 10 workflow-oriented analytical controllers
+│   └── apps/                     # User-facing applications on top of the pipeline core
+│       ├── api/                  # Article-level retrieval, shared by CLI, MCP and dashboard
+│       │   ├── api.py                # Retriever: search, screen, evidence, article, status
+│       │   ├── filters.py            # ArticleFilters as a pandas mask and as a Qdrant filter
+│       │   ├── rank.py               # BM25 index, RRF, per-article collapse
+│       │   ├── index.py              # Published version's articles and chunk texts
+│       │   ├── models.py             # Pinned reranker, untruncated token counts
+│       │   ├── cli.py                # search / screen / mcp commands
+│       │   └── mcp_server.py         # Five MCP tools over stdio
+│       ├── qdrant/               # `vectors status|backfill|rebuild|sync-alias` maintenance commands
+│       │   └── cli.py
+│       └── dashboard/            # Multipage Streamlit application
+│           ├── app.py                # Dashboard navigation & router
+│           ├── data.py               # Raw SQL data layer
+│           ├── loaders.py            # @st.cache_data caching and normalization
+│           ├── analytics.py          # Pure mathematical, scientometric & network analytics
+│           ├── forecasting.py        # Regression benchmarking, quantiles, Bass diffusion
+│           ├── theme.py              # Fixed-dark theme tokens and transparent polar styling
+│           ├── components.py         # Reusable Streamlit UI widgets & metric cards
+│           └── pages/                # 10 workflow-oriented analytical controllers
 ├── docs/                         # Product and design specs
 │   ├── PRD.md                    # Product Requirements Document
 │   └── SDD.md                    # System Design Document

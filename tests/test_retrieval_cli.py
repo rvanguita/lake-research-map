@@ -9,9 +9,9 @@ import pytest
 from test_retrieval_api import _embed, _publish
 
 from lake_research_map import pipeline
-from lake_research_map.retrieval import cli
-from lake_research_map.retrieval.api import Retriever
-from lake_research_map.retrieval.index import load_corpus
+from lake_research_map.apps.api import cli
+from lake_research_map.apps.api.api import Retriever
+from lake_research_map.apps.api.index import load_corpus
 
 
 @pytest.fixture
@@ -111,8 +111,8 @@ def test_evidence_pooling_runs_every_mode_and_names_the_ones_it_skips(
     import csv
     import logging
 
+    from lake_research_map.apps.api import api
     from lake_research_map.db import engines
-    from lake_research_map.retrieval import api
 
     _publish(gold_session, vector_store)
 
