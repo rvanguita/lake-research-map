@@ -1,6 +1,6 @@
 ---
 name: medallion-transform
-description: Conventions for adding/editing pipeline code under ingest/, transform/, db/, and pipeline.py — the raw→bronze→silver→gold→embed medallion stages. Use whenever adding an ingest loader, a transform builder, a new model column, or wiring a stage into the CLI.
+description: Conventions for adding/editing pipeline code under ingest/, transform/, db/, and pipeline.py — the raw→bronze→silver→gold→embed→semantic medallion stages. Use whenever adding an ingest loader, a transform builder, a new model column, or wiring a stage into the CLI.
 ---
 
 # lake-research-map medallion pipeline
@@ -40,39 +40,47 @@ through `dataset_version_id` first.
 ## Adding a new column
 
 `db/bootstrap.py`'s `create_tables()` runs `Base.metadata.create_all()` per layer, which only creates
-*missing tables*, not new columns on an existing table. For a column on an already-deployed layer, add an
-explicit `ALTER TABLE ... ADD COLUMN` block there too (see the existing `reference_count` and `gold.sources`
-examples) — otherwise the column only appears for people who drop and recreate their database.
+*missing tables*, not new columns on an existing table. For a column on an already-deployed table, add an entry
+to `_ADDITIVE_COLUMNS` in `db/bootstrap.py` (keyed by table, then column → `(DDL, layers)`): the DDL must be
+`NULL`able and purely additive, and it must not add an index -- it runs unattended on every pipeline start, and
+an index on a large table (`lit_dataset_chunks`) would rebuild it there. Never hand-write an `ALTER TABLE` block.
+The one index migration that exists, `_migrate_config_uniqueness` (`raw.lit_config`), is a documented exception,
+not a precedent.
 
-Note the asymmetry: raw/bronze data persists across runs, but **silver and gold are fully truncated and
-rebuilt every run** (`silver_session.query(SilverArticle).delete()` in `build_silver_articles`, similarly in
-gold) — so a new silver/gold column just needs the builder function updated; only raw/bronze changes need to
-worry about migrating already-populated rows.
+Every stage except raw rebuilds what it owns, so a new column needs its builder updated, not a backfill of old
+rows: bronze deletes `lit_articles` and rebuilds it from raw (`build_bronze_articles`), silver does the same from
+bronze, and gold deletes and rebuilds the *candidate version's* rows (`versioned_gold.build_dataset_gold`) --
+published versions are immutable snapshots and are never rewritten. Raw is the layer whose rows persist
+(content-hash idempotency), so a raw column is the one case where already-ingested rows stay without it until
+their source file changes.
 
-## Stage-function boilerplate (`pipeline.py`)
+## Stage functions (`pipeline.py`)
 
-Every `run_*()` function follows the same shape:
+Do not write a stage from a short template: copy `run_silver` in `pipeline.py`, which is the reference. Every
+`run_<stage>()` does, in order:
 
-```python
-def run_X() -> dict:
-    a_session = get_session("layer_a")
-    b_session = get_session("layer_b")
-    try:
-        stats = build_x(a_session, b_session)
-        print(f"[x] {stats}")
-        return stats
-    finally:
-        a_session.close()
-        b_session.close()
-```
+1. open its sessions with `_layer_sessions(...)` (an `ExitStack`, so a failure anywhere still closes them --
+   and the module-level `get_session` it calls is the tests' injection point);
+2. resolve the working version (`_working_version`) and record the execution (`_ensure_execution`, commit);
+3. `_begin_stage` (a `lit_pipeline_runs` row in `running`);
+4. the skip check: `_is_unchanged_full_run` → `_complete_skipped_stage` (an unchanged `--stage all` run of an
+   active version does nothing);
+5. the builder (`build_*`, sessions and `store` passed in, never opened inside);
+6. the stage's `quality.*_contract`, persisted with `_record_results` and committed **before**
+   `assert_contract` raises, so a failed gate is still on record;
+7. commit the layer session, `_finish_stage(..., status="success")`, `_finalize_execution` when the workflow is
+   this stage alone, commit, then `print(f"[stage] {stats}")` and return the stats dict;
+8. on any exception: roll back the layer session and call `_handle_stage_failure` (rollback, error status on the
+   run and the execution, failed version), then re-raise.
 
-Keep new/changed stages in this shape: always close every session in `finally`, always return and print a
-stats dict. Wire a new stage into `STAGES` and `run_all()`/`run()` in `pipeline.py`; the CLI is the only
-entry point (there is no orchestrator since ADR-09), so that is all the wiring a stage needs.
+`run_semantic` adds the publication (`_version_ready`, `materialize_version`, then `publish_vector_alias` after
+the commit). Wire a new stage into `STAGES`, `_STAGE_SEQUENCE` (derived), `run_all()` and `run()`; the CLI is the
+only entry point (there is no orchestrator since ADR-09). A new CLI command that changes what the next
+publication contains must also be listed in `_mutates_published_inputs` so it takes the pipeline lock.
 
 ## Ingest loader idempotency (`ingest/raw_*.py`)
 
-Every raw-layer loader follows the same pattern via `ingest/hashing.py`: hash the source file
+Every raw-layer loader (`raw_{csv,bib,pdfs,config}.py`) follows the same pattern via `ingest/hashing.py` (on top of the content-addressed snapshot `run_raw` takes through `ingest/snapshots.py`): hash the source file
 (`sha256_file`), check it against `raw.lit_source_files` via `record_source_file()`, and skip re-ingesting an
 unchanged file. Follow this pattern for any new `ingest/raw_*.py` loader rather than inventing a new
 change-detection scheme.
@@ -80,7 +88,7 @@ change-detection scheme.
 ## The two `normalize_doi` implementations
 
 `transform/bronze_articles.normalize_doi` and `ingest/enrichment._normalize_doi` are **deliberately
-duplicated** (comments in both explain this avoids a circular import). If DOI normalization logic changes
+duplicated** (a comment in `enrichment.py` explains it avoids a circular import). If DOI normalization logic changes
 (e.g. handling a new URL prefix format), update both — a divergence here silently breaks either bronze
 building or citation-count enrichment lookups.
 

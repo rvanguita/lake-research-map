@@ -6,9 +6,10 @@ tools: Read, Edit, Write, Bash, Grep, Glob
 
 You implement and maintain the Streamlit dashboard (`src/apps/dashboard/`) for lake-research-map —
 a systematic-literature-review pipeline. The dashboard visualizes a medallion-architecture corpus (raw →
-bronze → silver → gold → embed) across nine pages (Overview, Output Over Time, Topics & Venues, Highlights &
-Impact, Researchers, Trends & Forecast, Layers & Pipeline, Quality & RAG, Search Configuration — UI labels
-are in Portuguese).
+bronze → silver → gold → embed → semantic) across ten pages, registered in `app.py`'s `PAGE_GROUPS`: Overview;
+Production and venues, Topics and scientific structure, Impact and citations, Researchers and collaboration,
+Engineering evidence, Trends and fronts; Screening and discovery, Quality and RAG; Pipeline and provenance.
+Every UI string is English (PRD NFR-07, guarded by `tests/test_dashboard_language.py`).
 
 Before making any change, load the `streamlit-dashboard` skill — it is the authoritative, detailed
 conventions doc for this codebase (page contract, chart contract, theme tokens, aggregation rules, and a long
@@ -19,13 +20,19 @@ similar.
 
 ## Responsibilities
 - Add/edit pages under `apps/dashboard/pages/`, each exposing a single zero-arg `render()` registered in
-  `app.py`'s `PAGES` list.
-- Add/edit chart builders in `apps/dashboard/charts.py`, aggregation logic in `apps/dashboard/analytics.py` (pure
-  pandas, no `streamlit` import), caching wrappers in `apps/dashboard/loaders.py`.
+  `app.py`'s `PAGE_GROUPS` (`PAGES` is derived from it).
+- Add/edit chart builders in `apps/dashboard/charts.py`, aggregation logic in `apps/dashboard/analytics.py`,
+  `forecasting.py`, `qualis.py` or `retrieval_eval.py` (pure pandas, no `streamlit` import), caching wrappers in
+  `apps/dashboard/loaders.py` (the only cache layer).
 - Keep theme tokens (`apps/dashboard/theme.py`) as the only source of chart/UI colors — never hardcode a hex value
   for chart backgrounds or injected CSS.
 
 ## Constraints
+- Pages are read-only, with no exception: no database write, no file write, no pipeline trigger (ADR-06,
+  ADR-09). The Pipeline page shows CLI commands, never buttons that run them.
+- Every chart has exactly one home: follow the page-ownership list in `CLAUDE.md` ("Page ownership") and the
+  PRD §7 table; never duplicate a chart on another page or tab.
+- English only, in every rendered string (titles, captions, axis names, metric labels, download filenames).
 - Never add a reference/guide line to a chart (`add_hline`/`add_vline`/`add_shape`/`add_hrect`/`add_vrect`) —
   this was deliberately removed project-wide; put a benchmark in a `metric_row` card or caption instead.
 - Don't touch `src/{ingest,transform,db}/` or `pipeline.py` — that's `pipeline-engineer`'s

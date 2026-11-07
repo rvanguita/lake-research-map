@@ -202,7 +202,7 @@ its requirement, or says plainly that none exists.
 | `NFR-02` | Unchanged re-run produces no new logical rows | `tests/test_gold_articles.py`, `tests/test_raw_bib.py` |
 | `NFR-03` | Contract violation blocks publication and keeps the prior version active | `quality.assert_contract`; `tests/test_versioning_contracts.py` (`test_quality_gates_reject_incompatible_embedding`, `test_materialization_rechecks_publication_contract`) |
 | `NFR-04` | Rejections, overrides, quality results and run errors persisted | `lit_rejected`, `lit_quality_results`, `lit_pipeline_runs` |
-| `NFR-05` | **Not measured.** Latency and memory were benchmarked once by hand (2026-09-21); no performance test guards them | SDD §14: 11.06 MiB vector matrix, 92.72 ms warm-search P95 on 2026-09-21 |
+| `NFR-05` | **Not measured.** Latency and memory were benchmarked once by hand (2026-09-21), on the pre-Qdrant in-process search; nothing has been measured on the current Qdrant architecture, and no performance test guards either | SDD §14: 11.06 MiB vector matrix, 92.72 ms warm-search P95 on 2026-09-21 (superseded architecture) |
 | `NFR-06` | Secret hygiene only. The per-table privilege boundary was traded away on 2026-09-22 and is **not** enforced | `.gitignore`; `WP-08` evidence |
 | `NFR-07` | Portuguese-shaped copy, empty headings and empty metric labels all fail the build | `tests/test_dashboard_language.py` |
 | `NFR-08` | `analytics.py` and `forecasting.py` import no Streamlit; every page has `AppTest` coverage | `tests/test_theme.py`, `tests/test_dashboard_pages.py` |

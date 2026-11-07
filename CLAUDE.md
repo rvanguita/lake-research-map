@@ -79,8 +79,10 @@ by hand; every stage is idempotent and `embed` resumes where it stopped.
   chunks from a linked PDF via pypdf).
 - `embed` — embeds the chunks locally via `fastembed` (`BAAI/bge-small-en-v1.5`, ONNX, no API key) into the
   version's **Qdrant** collection, and records each vector's provenance on its Gold chunk row.
-- `semantic` — reads those vectors from Qdrant, writes `lit_semantics` + `lit_duplicate_pairs`, and copies the
-  screening signals back onto the points as payload.
+- `semantic` — reads those vectors from Qdrant, writes the candidate's `lit_dataset_semantics`,
+  `lit_dataset_duplicate_pairs` and `lit_semantic_runs`, copies the screening signals back onto the points as
+  payload, and then publishes: the live `lit_articles`/`lit_chunks`/`lit_semantics`/`lit_duplicate_pairs` are
+  replaced from the version's snapshot only after the publication contract passes.
 
 **Vectors live in Qdrant, not MySQL (ADR-08, 2026-11-06).** Gold stays the source of truth for chunk text,
 metadata, embedding provenance and the publication pointer; `db/vector_store.py` (`get_vector_store()`, the
@@ -90,7 +92,8 @@ through the Gold pointer, never the alias. No `embedding_bin` is written any mor
 published snapshots stay untouched, because those snapshots are immutable.
 
 **A vector is a function of (text, model, revision), so `embed` never re-embeds text any store has seen.**
-`gold` only reconciles chunk *text* (the run stats say how many chunks were unchanged / invalidated / added);
+`gold` rebuilds the candidate's rows and only *compares* chunk text with the stored chunks (the run stats say
+how many were reused / invalidated / new: `chunks_reused`, `chunks_invalidated`, `chunks_new`);
 `embed` then copies every reusable vector by text hash -- from the candidate's own collection after a killed
 run, then from the active version's, then from a pre-ADR-08 BLOB of the candidate or the active version -- and
 sends only new text to the model. (A delete-and-rebuild that threw away every embedding on each run, and with
@@ -102,17 +105,24 @@ rewrites its own tables from whatever is embedded now.
 Each stage has its own re-run contract; preserve it when editing.
 
 - `raw` — content-hash manifest (`ingest/hashing.py` ↔ `lit_source_files`); unchanged files are skipped.
-- `bronze` — upsert keyed on `(source, source_id)`; pagination duplicates within a source collapse naturally.
-  Note `_upsert` writes field by field, so a `None` literal *overwrites* — that's why `ingest/enrichment.py`
-  re-applies the citation/reference-count backfill after every bronze build.
+- `bronze` — delete-and-rebuild (`build_bronze_articles` deletes `lit_articles` first), so removals propagate.
+  Rows are keyed on `(source, source_id)` with a file-qualified `source_id`, so `_upsert` only merges a key
+  repeated within one run -- and because it writes field by field, a `None` literal *overwrites* there. The
+  citation/reference-count backfill runs after the rebuild, in `transform/bronze_articles.py::_enrich_citation_counts`
+  (filling only nulls, from `ingest/enrichment.py::merge_enrichment`: the cache plus the OpenAlex observations).
 - `silver` — delete-and-rebuild: fully derived from the layer above.
-- `gold` — articles delete-and-rebuild; chunks reconcile against the desired set (`(chunk_type, seq)` per
-  DOI). The run stats say how many were unchanged / invalidated / added.
+- `gold` — deletes and rebuilds the *candidate version's* rows (`lit_dataset_articles`, `lit_dataset_chunks`,
+  and its semantic rows) in `transform/versioned_gold.py::build_dataset_gold`; a published version is refused.
+  The unchanged / invalidated / added stats come from comparing each desired chunk's text with the stored one
+  (`(doi, chunk_type, seq)`), not from reconciling rows.
 - `embed` — a chunk is pending only when its Qdrant point is missing or carries another text hash or model
   revision, or its Gold provenance is missing; running it twice is a no-op. Each batch is upserted before Gold
   commits the provenance, so a killed run resumes from its own collection. Points with no Gold chunk are
   deleted.
-- `semantic` — truncates the two tables it owns, never touches curated article rows.
+- `semantic` — `build_dataset_semantics` deletes and rewrites the candidate version's own rows in
+  `lit_dataset_semantics`, `lit_semantic_runs` and `lit_dataset_duplicate_pairs` (reviewed pairs filtered out),
+  never touches article or chunk rows, and refuses a published version. Publication then replaces the live
+  tables from the snapshot.
 
 ### Databases
 
@@ -125,7 +135,9 @@ column sets differ — never assume a column on one layer's model exists on anot
 
 `db/bootstrap.py` runs on every pipeline start: `create_all` (new tables only) plus the additive migrations in
 `_ADDITIVE_COLUMNS`. Adding a column to an existing table requires an entry there, and every entry must be
-nullable and purely additive — it runs unattended. Those migrations add no indexes: `lit_dataset_chunks.text_sha256`
+nullable and purely additive — it runs unattended. Those migrations add no indexes. The single deliberate
+exception is `_migrate_config_uniqueness`, which on every MySQL start ensures `raw.lit_config` has a unique key on
+`source_file` and a plain index on `source` (a no-op once in shape); it is not a precedent. `lit_dataset_chunks.text_sha256`
 is unindexed on the deployed schema, so look rows up through `dataset_version_id` (indexed) and filter after --
 a lookup by hash alone scans the whole table (7 s per 64 hashes, measured 2026-11-06).
 
@@ -165,7 +177,8 @@ string, so absolute paths duplicate every row on a cross-environment run.
 Strict one-way layering — `data.py` (raw SQL → DataFrame, tolerates a missing table) → `loaders.py` (the only
 `@st.cache_data` layer, plus list-column/`source` normalization) → `analytics.py` / `forecasting.py` /
 `qualis.py` (pure pandas, no `streamlit` import, unit-tested) → `charts.py` (styled Plotly figures) →
-`components.py` → `pages/*.py` (one zero-arg `render()`, registered in `app.py`'s `PAGES`). Search is not a
+`components.py` → `pages/*.py` (one zero-arg `render()`, registered in `app.py`'s `PAGE_GROUPS`; `PAGES` is
+derived from it). Search is not a
 dashboard module any more: the Quality page's article search and benchmark call `loaders.retriever()` -- the
 `apps/api/` package's `Retriever`, one per published version, held as an `@st.cache_resource` (it owns
 indexes and a Qdrant client, which must not be pickled per lookup).
@@ -191,7 +204,8 @@ to empty when the store does not answer; the article search degrades to BM25 wit
 - `highlights` — two tabs: *Theoretical grounding* and *Citation dynamics & econometrics* (heavy-tail
   diagnostics, age normalization, the exposure-adjusted count GLM).
 - `researchers` — productivity, leadership, trajectories, collaboration networks, research lines, bibliometric laws.
-- `synthesis` — six engineering-evidence dimensions: methods, objectives, uncertainty, horizons, test systems, solvers.
+- `synthesis` — seven engineering-evidence taxonomies (`analytics.TAXONOMY_REGISTRY`): methods, objectives,
+  uncertainty, horizons, solvers, mathematical complexity, benchmark feeders (test systems).
 - `forecasting` — complete-year volume forecasts with rolling validation and conformal bands, topic
   trajectories, Bass diagnostics, Kleinberg bursts.
 - `semantics` — screening calibration, projections, themes, semantic isolation, duplicate-review history.
@@ -258,15 +272,18 @@ trustworthiness beside the map, since a flat silhouette means the boundaries des
 
 `data/` is excluded from git, so it exists only on this machine and paths referenced in code will not resolve for
 anyone else. Treat it as read-only input: it is raw publisher output, re-downloading it is manual and tedious.
-(A `PreToolUse` hook in `.claude/settings.json` blocks edits to it, except `config.csv`.)
+(A `PreToolUse` hook in `.claude/settings.json` denies Edit/Write on `data/articles/*`, `data/ieee/*`,
+`data/sciencedirect.zip` and `data/enrichment_cache.json`, and always allows any `config.csv`; nothing else under
+`data/` -- the `.bib` exports in `data/references/` included -- is guarded, so the rule is yours to keep.)
 
 ```
-data/references/IEEE Xplore/      current IEEE Xplore BibTeX exports
-data/references/Science Direct/   current ScienceDirect BibTeX exports
+data/references/IEEE Xplore/      current IEEE Xplore BibTeX exports plus their config.csv
+data/references/Science Direct/   current ScienceDirect BibTeX exports plus their config.csv
 data/articles/                    192 PDF files on disk; 97 currently link to Gold articles
-data/archive/                     retained publisher export archives
+data/.lake_research_map/          content-addressed archive of every consumed source (objects/) and pipeline.log
 data/enrichment_cache.json        hand-built {doi: {citation_count, reference_count}}, not produced by any code here
-data/classificações_publicadas_*.xlsx   official CAPES/Qualis export (see apps/dashboard/qualis.py)
+data/capes-qualis.xlsx            official CAPES/Qualis export (config.CAPES_QUALIS_XLSX; falls back to
+                                  data/classificações_publicadas_*.xlsx; see apps/dashboard/qualis.py)
 ```
 
 **`config.csv` is provenance, not data.** Every directory that contains publisher exports must have its own

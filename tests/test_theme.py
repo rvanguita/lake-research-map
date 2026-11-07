@@ -167,7 +167,7 @@ def test_color_literal_detector_flags_chrome_but_not_data_scales() -> None:
         'px.scatter(df, color_continuous_scale=["#4a3aa7", "#eda100"])\n'
         'go.Scatter(marker={"colorscale": ["#000000", "#ffffff"]})\n'
         'go.Scatter(line=dict(color="rgba(255,255,255,0.4)"))\n'
-        'label = f"<span style=\'color:#888;\'>x</span>"\n'
+        "label = f\"<span style='color:#888;'>x</span>\"\n"
         'community = f"#{index + 1}"\n'
     )
     assert sorted(line for line, _ in _color_literals(source)) == [1, 4, 5]

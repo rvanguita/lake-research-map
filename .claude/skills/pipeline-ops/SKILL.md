@@ -49,14 +49,16 @@ only ever create or touch `lit_`-prefixed tables within them, never anything els
 
 | Stage | Re-run behavior |
 |---|---|
-| raw | Skips unchanged source files via sha256 hash + `raw.lit_source_files` manifest |
-| bronze | Rebuilt from raw each run |
+| raw | Skips unchanged source files via sha256 hash + `raw.lit_source_files` manifest; `--source-policy snapshot` propagates removals |
+| bronze | Deletes and rebuilds `bronze.lit_articles` from raw each run, then backfills counts |
 | silver | Fully truncated + rebuilt from bronze each run |
-| gold | Fully truncated + rebuilt from silver each run |
+| gold | Deletes and rebuilds the **candidate version's** rows (`lit_dataset_articles`/`lit_dataset_chunks`); a published version is never rewritten, and the live tables change only at publication |
 | embed | Fills only chunks whose Qdrant point is missing or stale, copying any vector already stored for the same text before embedding — safe to re-run, resumes cleanly if interrupted (each batch is upserted, then Gold commits its provenance) |
+| semantic | Rewrites the candidate's `lit_dataset_semantics`/`lit_semantic_runs`/`lit_dataset_duplicate_pairs` and its point payloads, then publishes the version (contract-checked) and moves the `lit_chunks_active` alias |
 
-`embed` is the one stage safe to run repeatedly with no wasted work; the others (except raw) simply
-regenerate everything downstream of the layer they read from every time.
+`embed` is the one stage safe to run repeatedly with no wasted work; the others (except raw) regenerate what they
+own from the layer they read. A `--stage all` run whose version is already active skips bronze through semantic
+(`no_change`).
 
 ## Where run stats actually go
 

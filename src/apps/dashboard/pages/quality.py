@@ -33,8 +33,8 @@ from apps.dashboard.retrieval_eval import (
 )
 from apps.dashboard.theme import (
     CATEGORICAL_PALETTE,
-    FLAG_COLORS,
     CHART_HEIGHT,
+    FLAG_COLORS,
     SOURCE_COLORS,
     TREND_DOWN_COLOR,
     theme_tokens,
@@ -443,8 +443,11 @@ def _pdf_selection_bias(articles_df: pd.DataFrame) -> None:
     # as a shaded band with a zero line; the chart contract forbids guide
     # lines, so the band is carried by the marker color, the hover and the
     # caption instead.
-    finite["magnitude"] = finite["smd"].abs().ge(0.1).map(
-        {True: "|SMD| ≥ 0.1, not negligible", False: "|SMD| < 0.1, negligible"}
+    finite["magnitude"] = (
+        finite["smd"]
+        .abs()
+        .ge(0.1)
+        .map({True: "|SMD| ≥ 0.1, not negligible", False: "|SMD| < 0.1, negligible"})
     )
     colors = [
         TREND_DOWN_COLOR if abs(value) >= 0.1 else CATEGORICAL_PALETTE[0] for value in finite["smd"]

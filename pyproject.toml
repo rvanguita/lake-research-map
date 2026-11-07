@@ -64,7 +64,7 @@ target-version = "py313"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
-# Dashboard pages carry long human-readable Portuguese UI strings/captions;
+# Dashboard pages carry long human-readable (English) UI captions and help text;
 # enforcing a hard wrap on those hurts readability more than it helps.
 ignore = ["E501"]
 
@@ -73,6 +73,5 @@ testpaths = ["tests"]
 addopts = "-p no:anyio"
 markers = [
     "mysql: destructive-only-to-lit_* integration checks against a disposable or explicitly selected MySQL server",
-    "live_api: credentialed external-provider contract checks",
     "qdrant: integration checks against a running Qdrant server (RUN_QDRANT_INTEGRATION=1)",
 ]

@@ -5,27 +5,35 @@ description: Conventions for the lake-research-map Streamlit dashboard (src/apps
 
 # lake-research-map Streamlit dashboard
 
-This dashboard grew past 2,600 lines with real duplication before a refactor
-(see git history around "Refatoração do dashboard + novas análises"). These
-rules exist to keep it from drifting back.
+This dashboard once grew past 2,600 lines with real duplication before a
+refactor (it predates the repository's current git history). These rules exist
+to keep it from drifting back.
 
 ## Page contract
 
 - One module per page under `apps/dashboard/pages/`, exposing a single zero-arg
   `render() -> None`.
-- Register it in `apps/dashboard/app.py`'s `PAGES` list — `(render_fn, title, icon,
-  url_path)` — and it's automatically wired into `st.navigation`.
-- Start every page with `articles_df = loaders.require_articles()` (or
-  `loaders.filtered_chunks()` for chunk-only pages). This applies the global
-  sidebar filters and handles the empty-state / `st.stop()` case — don't
-  reimplement either.
+- Register it in `apps/dashboard/app.py`'s `PAGE_GROUPS` (sidebar section → list of
+  `(render_fn, title, icon, url_path)`) — it's then wired into `st.navigation`. `PAGES` is
+  a flat view derived from `PAGE_GROUPS`; don't edit it.
+- Pages are read-only, with no exception (ADR-06, ADR-09): no database write, no file
+  write, no run trigger. Every rendered string is English (`tests/test_dashboard_language.py`).
+- Respect page ownership: every chart has exactly one home (CLAUDE.md "Page ownership" and
+  the PRD §7 table). Never duplicate a chart on a second page or tab.
+- Start every page with `articles_df = loaders.require_articles()`. This applies the
+  global sidebar filters, handles the empty-state / `st.stop()` case, shows the
+  degraded-mode warning, and renders the dataset-version caption
+  (`render_population_provenance`) — don't reimplement any of them.
 - `render_sidebar()` runs before `navigation.run()` in `app.py`, so global
-  filter state (`global_year_range`, `global_sources`, `global_venues`) is
-  already in `st.session_state` by the time your page renders.
+  filter state (`global_year_range`, `global_sources`, `global_venues`,
+  `global_publication_categories`, and the relevance-margin filter
+  `global_min_margin`) is already in `st.session_state` by the time your page
+  renders. `loaders.filter_signature()` is the cheap cache key over all five.
 - **Exception: `pages/forecasting.py` calls `loaders.articles()` directly,
   not `require_articles()`.** A time-series forecast needs the full year
   history to fit a trend — applying the sidebar's global year filter would
-  silently truncate the training data. It says so in its own `hero_banner`.
+  silently truncate the training data. It says so in its header and `hero_banner`
+  ("trained only on complete years"), and still renders the provenance caption.
   Any other page that needs the *entire* corpus regardless of sidebar state
   should follow the same pattern (and disclose it the same way) rather than
   quietly ignoring `require_articles()`.
@@ -40,7 +48,9 @@ rules exist to keep it from drifting back.
   instead.
 - Build the figure with a helper from `apps/dashboard/charts.py` when the shape
   matches: `source_bars`/`source_lines` for IEEE/Elsevier/Total comparisons,
-  `topn_hbar` for ranked top-N bars, `stacked_area` for composition-over-time.
+  `publication_category_bars` for the journal/conference/review/other split,
+  `topn_hbar` / `source_topn_hbar` for ranked top-N bars (overall / per source),
+  `lorenz_chart` for concentration curves, `stacked_area` for composition-over-time.
   Add a new builder there rather than hand-rolling `px`/`go` calls in a page
   a second time.
 - Compute the data for a chart in `apps/dashboard/analytics.py` (pure pandas, no
@@ -54,10 +64,10 @@ rules exist to keep it from drifting back.
   `st.plotly_chart` directly in a page.
 - **Name both axes.** Every chart with visible axes declares them — via the
   builders' `x_title`/`y_title`, a px `labels={...}`, or `update_layout`.
-  Portuguese, sentence case, with the unit in parentheses only when it isn't
-  obvious from the name: `Ano de publicação`, `Quantidade de artigos`,
-  `Tamanho do chunk (caracteres)`, `Preenchimento (%)`. The category axis of a
-  top-N horizontal bar counts too (`Autor`, `Periódico`, `Palavra-chave`).
+  English, sentence case, with the unit in parentheses only when it isn't
+  obvious from the name: `Publication year`, `Articles`,
+  `Chunk length (characters)`, `Fill rate (%)`. The category axis of a
+  top-N horizontal bar counts too (`Author`, `Venue`, `Keyword`).
   A `go.Figure` starts with *no* axis titles and a px figure falls back to the
   raw column name (`count`, `stage`), so neither gives you a usable label for
   free. `render_chart` logs a warning naming any chart that still has a bare
@@ -66,7 +76,7 @@ rules exist to keep it from drifting back.
   An axis whose coordinates genuinely mean nothing — the t-SNE semantic map,
   the co-authorship network — hides its **tick values** (`showticklabels=False`,
   plus `showgrid`/`zeroline`/`ticks` off for a graph canvas) but still carries a
-  name (`Dimensão 1 (t-SNE)`, `Posição no layout circular (sem unidade)`), with
+  name (`Semantic Axis 1 (Latent Space)`, `Position in the circular layout (no unit)`), with
   a comment and a caption saying why the numbers are gone. Both used to set
   `title=""`/`visible=False` and shipped as anonymous axes; hiding the *name* is
   never the answer, and silencing `render_chart`'s warning is not a reason to.
@@ -87,8 +97,8 @@ rules exist to keep it from drifting back.
   stand out against both `SOURCE_COLORS`. It used to be a dull gray and
   nearly disappeared next to the two saturated brand colors — don't revert
   it to a neutral tone.
-- `OTHER_COLOR` — always for the catch-all "Outros" bucket, via
-  `venue_color_map(order, others_label=...)`.
+- `OTHER_COLOR` — always for the catch-all "Others" bucket (`analytics.OTHERS_LABEL`),
+  via `venue_color_map(order, others_label=OTHERS_LABEL)`.
 - `CHART_HEIGHT` — the shared height for side-by-side chart pairs.
 - New chart-design decisions (color formula, mark selection, KPI-tile layout)
   should go through the `dataviz` skill first; this dashboard's palette
@@ -149,7 +159,7 @@ got long). Two rules keep this from recurring:
    `st.subheader`/`st.markdown` header directly above the chart** — that's
    true for most charts in this dashboard. Only give a chart its own title
    when it sits in a column next to a sibling chart under one shared
-   subheader (e.g. `production._venue_comparison`'s IEEE/Elsevier pair) or
+   subheader (e.g. the titled cumulative charts in `production._cumulative_production`) or
    the title carries dynamic information the header doesn't (e.g. the
    Pearson-r value in `highlights._references_vs_citations`).
 2. `polish_figure_layout()` still defends against the collision when a title
@@ -160,18 +170,26 @@ got long). Two rules keep this from recurring:
 
 ## Aggregation rule
 
-Pure pandas logic lives in `apps/dashboard/analytics.py` (no Streamlit import, so
-it's testable/cacheable independently). UI-facing caching wrappers live in
-`apps/dashboard/loaders.py` with `@st.cache_data(ttl=60)`; raw SQL against the
-medallion databases lives in `apps/dashboard/data.py`. A page function should
-mostly be: call a loader, call an analytics function, call a chart builder,
-call `render_chart`.
+Pure pandas logic lives in `apps/dashboard/analytics.py`, `forecasting.py`,
+`qualis.py` and `retrieval_eval.py` (no Streamlit import, so they're
+testable independently). `apps/dashboard/loaders.py` is the only cache layer
+(`@st.cache_data` with a TTL, plus `@st.cache_resource` for the retriever); raw
+SQL against the medallion databases lives in `apps/dashboard/data.py`. A page
+function should mostly be: call a loader, call an analytics function, call a
+chart builder, call `render_chart`.
+
+Article search is not a dashboard module: the Quality page's search and its
+benchmark call `loaders.retriever()`, which holds one `apps.api.api.Retriever`
+per published version as an `@st.cache_resource` (it owns indexes and a Qdrant
+client, which must not be pickled per lookup). Don't reimplement ranking in the
+dashboard.
 
 ## Data pitfalls specific to this corpus
 
 - `citation_count` / `reference_count` are **NULL for "not collected", never
   0**. Elsevier's counts come from an offline enrichment cache
-  (`data/enrichment_cache.json`, applied in `ingest/enrichment.py` during the
+  (`data/enrichment_cache.json` merged with the OpenAlex observations by
+  `ingest/enrichment.py`, applied by `transform/bronze_articles.py` during the
   bronze stage) — don't treat a null as zero impact.
 - `gold.articles` has a `sources` column (JSON list, mirrors silver) — added
   so gold can be split IEEE/Elsevier like every other layer. If you add a new
@@ -185,26 +203,28 @@ call `render_chart`.
   uses `Last, First`. `analytics.canonical_author` folds these to `"initial
   surname"` — a real simplification that can also merge distinct people who
   share an initial+surname. Any author-identity chart must disclose this
-  (see `hero_banner` on the Pesquisadores page for the wording to reuse).
+  (see the `hero_banner` on the Researchers and collaboration page for the
+  wording to reuse).
 - `year` ranges 1926–2027 (2027 = in-press). Use `analytics.valid_years` with
   an explicit window rather than a bare `pd.to_numeric` — a stray old/future
   row will otherwise dominate any trend/rate calculation.
 - Run history lives in `gold.lit_pipeline_executions` / `lit_pipeline_runs`
   (stage stats JSON) and `lit_quality_results`; the Pipeline page's audit tab
-  reads them. Silver/gold are rebuilt every run, so any layer funnel chart is
+  reads them. Bronze/silver are rebuilt every run, so any layer funnel chart is
   computed live from current row counts, not from that history — say so in
   the page rather than implying otherwise. No page starts a run (ADR-09): the
   Pipeline page shows the CLI commands instead.
 - The **current year in the corpus is always a partial year** — it's
   collected by hand mid-year, not a closed dataset. `apps/dashboard/forecasting.py`
   (used by `pages/forecasting.py`) treats its `HOLDOUT_YEAR` this way
-  explicitly: it's used for model validation but every note/label calls it
-  "parcial" rather than presenting it as a finished year. Any new
+  explicitly: it's only monitored, never trained on, and every note/label calls
+  it "partial" rather than presenting it as a finished year. Any new
   year-over-year comparison involving the current year should do the same.
-- Forecasting uses plain regression (`sklearn.linear_model.LinearRegression`,
-  optionally with `PolynomialFeatures`, plus a log-linear fit for exponential
-  growth), not a heavier model — the usable series is short (~16 yearly
-  points from `MIN_TRAIN_YEAR = 2010` onward). Don't reach for a model class
+- Forecasting compares a persistence baseline with plain linear and log-linear
+  trends (`sklearn.linear_model.LinearRegression`), selected by rolling-origin
+  validation with per-horizon backtests, with conformal bands from held-out
+  errors — not a heavier model: the usable series is short (yearly points from
+  `MIN_TRAIN_YEAR = 2010` onward). Don't reach for a model class
   that needs more data than the corpus has just because it's "more ML."
 - The semantic signals (`gold.lit_semantics`, joined on `doi` by
   `loaders.with_semantics`) carry **two** scores: `relevance_score` (cosine to
@@ -212,14 +232,14 @@ call `render_chart`.
   reading of the same query). What screens an article is the derived
   `relevance_margin` between them, and its **zero** is the threshold — not a
   percentile, which the two overlapping distributions made unusable. Both the
-  sidebar filter and the Semântica page fall back to the old percentile view
+  sidebar filter and the Screening and discovery page fall back to the old percentile view
   when `offtopic_score` is absent, i.e. when the database's last `semantic` run
   predates the contrastive anchor; keep that fallback when editing either.
 - Chunk vectors live in **Qdrant**, one collection per dataset version
   (ADR-08), filled by the `embed` stage (`fastembed`'s local ONNX model
   `BAAI/bge-small-en-v1.5`, no API key) — not by `--stage gold`. Pages get
-  them through `data.attach_chunk_vectors` / `data.load_abstract_embeddings_data`,
-  which return empty when the store does not answer; treat that as "no
+  the abstract vectors through `data.load_abstract_embeddings_data` (via
+  `loaders`), which returns empty when the store does not answer; treat that as "no
   vectors", never as an error. The readiness gauge on Quality and RAG reads
   the *provenance* Gold records (`has_embedding` = `embed_revision IS NOT
   NULL`), so a page render never calls Qdrant. If it reads 0%, the stage

@@ -30,7 +30,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "f=$(jq -r '.tool_input.file_path // empty'); case \"$f\" in */config.csv) exit 0;; */data/articles/*|*/data/ieee/*|*/data/sciencedirect.zip|*/data/enrichment_cache.json) echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"data/ is read-only, manually-collected corpus input (see CLAUDE.md) - this path is binary/regenerable and not meant to be edited by Claude. config.csv files remain editable.\"}}';; esac",
+            "command": "f=$(jq -r '.tool_input.file_path // empty'); case \"$f\" in */config.csv) exit 0;; */data/*) echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"data/ is read-only, hand-collected corpus input (see CLAUDE.md): publisher exports, PDFs, the enrichment cache and the .lake_research_map archive are never edited by Claude. Only the config.csv search reports remain editable.\"}}';; esac",
             "statusMessage": "checking data/ read-only guard"
           }
         ]

@@ -7,32 +7,37 @@ tools: Read, Edit, Write, Bash, Grep, Glob
 You implement and maintain the medallion pipeline in `src/{ingest,transform,db}/` and
 `pipeline.py` for the lake-research-map project — a systematic-literature-review pipeline turning IEEE Xplore
 and Elsevier/ScienceDirect bibliographic exports into a deduplicated, RAG-ready corpus (raw → bronze → silver
-→ gold → embed, one MySQL database per layer via SQLAlchemy).
+→ gold → embed → semantic, one MySQL database per layer via SQLAlchemy, vectors in Qdrant).
 
 Before making changes, load the `medallion-transform` skill for this project's specific conventions (model-
-per-layer pattern, stage-function boilerplate, ingest idempotency pattern, the two independently-duplicated
+per-layer pattern, the stage-function checklist (`run_silver` is the reference), ingest idempotency pattern, the two independently-duplicated
 `normalize_doi` implementations that must stay in sync, and how to wire a stage into `pipeline.py`).
 Load `pipeline-ops` if you need to actually run a stage to verify a change.
 
 ## Responsibilities
 - Add/modify `ingest/raw_*.py` loaders, following the existing `hashing.record_source_file()` idempotency
   pattern.
-- Add/modify `transform/{bronze,silver,gold}_articles.py` and `transform/embeddings.py` builders.
-- Add/modify SQLAlchemy models in `db/{raw,bronze,silver,gold}_models.py`, including additive `ALTER TABLE`
-  handling in `db/bootstrap.py` for columns on already-deployed layers.
-- Wire new/changed stages into `pipeline.py`'s `STAGES`/`run_all()` -- the CLI is the only entry point
-  (no orchestrator since ADR-09).
+- Add/modify the builders: `transform/bronze_articles.py` and `transform/silver_articles.py`, and for gold,
+  embed and semantic `transform/versioned_gold.py` (`build_dataset_gold`, `build_dataset_embeddings`,
+  `build_dataset_semantics`), which call helpers in `transform/gold_articles.py`, `pdf_text.py`,
+  `semantics.py` and `vector_payloads.py`. `transform/embeddings.py` only pins and loads the model.
+- Add/modify SQLAlchemy models in `db/{raw,bronze,silver,gold}_models.py`; a column on an already-deployed
+  table also needs an `_ADDITIVE_COLUMNS` entry in `db/bootstrap.py` (nullable, no index).
+- Wire new/changed stages into `pipeline.py`'s `STAGES`/`run_all()`/`run()` -- the CLI is the only entry
+  point (no orchestrator since ADR-09); a command that changes the next publication goes in
+  `_mutates_published_inputs` so it takes the pipeline lock.
 - Read `CLAUDE.md` before touching anything DOI/BibTeX/PDF-matching related — it documents real, non-obvious
   quirks in the corpus (IEEE's no-separator `.bib` format, DOI format differences between sources, lossy PDF
   filename matching, IEEE keyword double-counting) that are easy to get wrong without that context.
 
 ## Constraints
 - Never edit files under `data/` — it's read-only input, manually collected and tedious to regenerate (a
-  project hook also blocks this, but don't rely on the hook as the only safeguard).
+  project hook blocks only some of its paths, so don't rely on it as the safeguard).
 - Don't touch `src/apps/dashboard/` — that's `dashboard-developer`'s territory.
 - Don't add a new dependency (`uv add`) without a clear reason tied to the task; this is a small pipeline,
   not a place to introduce heavyweight tooling.
 - After a transform/ingest change, run the relevant tests (`uv run pytest`) before considering the work done
   — don't leave verification to a separate agent by default.
-- Keep the `stats = {...}; print(f"[stage] {stats}")` return convention every existing stage function uses;
-  don't introduce a different logging/reporting style for one stage only.
+- Keep the convention every existing stage function uses: record the stats on the `lit_pipeline_runs` row
+  (`_finish_stage`), the contract results in `lit_quality_results`, then `print(f"[stage] {stats}")` and return
+  the dict; don't introduce a different reporting style for one stage only.

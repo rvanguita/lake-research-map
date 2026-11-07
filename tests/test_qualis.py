@@ -120,9 +120,9 @@ def test_reading_a_workbook_writes_no_cache_next_to_it(tmp_path):
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     workbook = data_dir / "capes-qualis.xlsx"
-    pd.DataFrame(
-        [{"ISSN": "1234-5678", "Título": "Renewable Energy", "Estrato": "A1"}]
-    ).to_excel(workbook, sheet_name="RelatorioQualis", index=False)
+    pd.DataFrame([{"ISSN": "1234-5678", "Título": "Renewable Energy", "Estrato": "A1"}]).to_excel(
+        workbook, sheet_name="RelatorioQualis", index=False
+    )
     before = _tree(tmp_path)
 
     result = load_qualis_reference(workbook)

@@ -1,20 +1,19 @@
 # lake-research-map
 
 [![Python 3.13](https://img.shields.io/badge/python-3.13-blue.svg)](https://www.python.org/downloads/)
-[![Tests: 490 passed](https://img.shields.io/badge/tests-490%20passed-brightgreen.svg)](tests/)
 [![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
 [![Streamlit Dashboard](https://img.shields.io/badge/dashboard-Streamlit-FF4B4B.svg)](src/apps/dashboard/)
 [![Vector Store: Qdrant](https://img.shields.io/badge/vectors-Qdrant-DC244C.svg)](docker-compose.yml)
 [![Database: MySQL Medallion](https://img.shields.io/badge/lake-MySQL%20Medallion-00758F.svg)](src/db/)
 [![Code Style: Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)
 
 ![lake-research-map: Medallion Data Lake & Scientometric Research Mapping Platform](src/images/lake_research_map_hero.png)
 
 `lake-research-map` is a production-grade **Medallion Data Lake**, automated ETL pipeline, and scientometric research platform engineered for a Systematic Literature Review (SLR) on:
 > **"Distribution System Planning" (Electric Power Distribution Networks)**
 
-It transforms raw, heterogeneous, and partial bibliographic search exports from **IEEE Xplore** and **Elsevier ScienceDirect** into a structured, versioned, audit-ready, RAG-enabled corpus. The active 2026-09-21 audit contains 3,115 Gold articles and 7,552 text chunks. Without writing direct SQL queries, researchers explore scientometric, econometric, network, and semantic evidence through an interactive 10-page Streamlit analytical dashboard, and a retrieval client finds the most relevant articles through the `search` command or the MCP server.
+It transforms raw, heterogeneous, and partial bibliographic search exports from **IEEE Xplore** and **Elsevier ScienceDirect** into a structured, versioned, audit-ready, RAG-enabled corpus. The active dataset version (`7cbb67e3…`, published 2026-11-06) contains 3,115 Gold articles and 6,738 text chunks (3,115 abstracts and 3,623 cleaned full-text chunks). Without writing direct SQL queries, researchers explore scientometric, econometric, network, and semantic evidence through an interactive 10-page Streamlit analytical dashboard, and a retrieval client finds the most relevant articles through the `search` command or the MCP server.
 
 ---
 
@@ -62,7 +61,7 @@ The pipeline implements a 6-tier Medallion architecture run by a single CLI and 
 | Stage | Target Database / Table | Core Responsibilities |
 |---|---|---|
 | **1. Raw** | `raw.lit_*` | Content-addressed retention of consumed IEEE/Elsevier exports, search configuration, enrichment cache, and PDFs. The default append policy combines new files with archived active sources; `--source-policy snapshot` explicitly mirrors only the files currently on disk. |
-| **2. Bronze** | `bronze.lit_articles` | Transactional cross-source schema harmonization with file-qualified natural keys and dataset lineage. Records are classified as `journal`, `conference`, `review`, or `other`, and citation/reference backfills are applied from `data/enrichment_cache.json`. |
+| **2. Bronze** | `bronze.lit_articles` | Transactional delete-and-rebuild cross-source schema harmonization with file-qualified natural keys and dataset lineage. Records are classified as `journal`, `conference`, `review`, or `other`, and missing citation/reference counts are backfilled from `data/enrichment_cache.json` merged with the persisted OpenAlex observations. |
 | **3. Silver** | `silver.lit_articles`<br>`silver.lit_rejected` | Deduplicates records by normalized DOI into single authoritative paper records while preserving publication category and classification basis. Tags non-article items, executes fuzzy PDF matching via `rapidfuzz` ($\ge 85$), and audits DOI-less rows in `silver.lit_rejected`. |
 | **4. Gold** | `gold.lit_articles`<br>`gold.lit_chunks`<br>`gold.lit_dataset_*`<br>`gold.lit_pipeline_*` | Builds an isolated, immutable candidate snapshot, applies reviewed duplicate decisions, records each chunk's text hash, and records parent/stage lineage. The live Gold projection is replaced only after publication gates pass. |
 | **5. Embed** | Qdrant `lit_chunks_<version_id>`<br>`gold.lit_dataset_chunks` (provenance) | In-process vectorization using local ONNX-accelerated `fastembed` (`BAAI/bge-small-en-v1.5`, 384 dimensions) into the version's Qdrant collection, copying any vector already stored for the same text. Completeness, model, dimension, finite-value, text-hash and orphan contracts on the Qdrant points block incompatible candidates. |
@@ -82,7 +81,7 @@ Chunk vectors live in [Qdrant](https://qdrant.tech/) (`ADR-08` in `docs/SDD.md`)
 - **One immutable collection per dataset version** (`lit_chunks_<version_id>`), filled while the version is a candidate and contract-checked before the publication pointer can move to it. Rolling back a version moves the pointer; its vectors are already there.
 - **`lit_chunks_active` alias** for retrieval clients: it always names the published version's collection.
 - **Payload per point**: `doi`, `chunk_type`, `seq`, the chunk `text`, embedding provenance, the article fields the dashboard filters on (`year`, `source`, `venue`, `publication_category`, `is_non_article`, `has_pdf`, `abstract_missing`) and the screening signals (`relevance_score`, `offtopic_score`, `relevance_margin`, `theme_id`, `theme_label`).
-- **Exact search**: brute force over ~7.5k vectors, so a query returns the same ranking on every run.
+- **Exact search**: brute force over ~6.7k vectors (6,738 in the 2026-11-06 version), so a query returns the same ranking on every run.
 
 A RAG client can query it directly; embed the query with the same model so it lands in the same space:
 
@@ -122,7 +121,7 @@ The Streamlit dashboard (`src/apps/dashboard/`) is partitioned into **10 workflo
 | **Topics & Scientific Structure** | Vocabulary, co-occurrence, semantic themes, Bradford/Zipf diagnostics, and descriptive keyword-combination novelty. |
 | **Impact & Citations** | Reference and citation distributions, age-normalized impact, heavy-tail diagnostics, and an exposure-adjusted count GLM with robust intervals. |
 | **Researchers & Collaboration** | Corpus-scoped author productivity and impact, temporal trajectories, co-authorship networks, research lines, and bibliometric laws. |
-| **Engineering Evidence** | Optimization paradigms, objectives, uncertainty, planning horizons, test feeders, and solver evidence. |
+| **Engineering Evidence** | Seven exploratory regex taxonomies: optimization methods, objectives, uncertainty, planning horizons, solvers, mathematical complexity, and benchmark feeders. |
 | **Trends & Fronts** | Complete-year volume forecasts with rolling validation and conformal bands, topic trajectories, Bass diagnostics, and two-state Kleinberg bursts. |
 | **Screening & Discovery** | Contrastive relevance margins, semantic projections and themes, isolation scores, and persistent near-duplicate review history. |
 | **Data Quality & RAG** | Metadata coverage, full-text and embedding readiness, anomaly audit, and hybrid retrieval diagnostics. |
@@ -257,9 +256,9 @@ Both host ports are set in `.env` (`DASHBOARD_PORT`, `QDRANT_PORT`; defaults 850
 
 ## 🧪 Testing & Quality Assurance
 
-The codebase features an exhaustive automated test suite:
-- **More than 230 automated tests**, with a **< 5-second reference-environment target** for the default SQLite suite and separate MySQL/API acceptance runs.
-- **Zero Live MySQL Dependency**: All tests execute against isolated, in-memory SQLite fixtures (`tests/conftest.py`) replicating the multi-layer medallion schemas.
+The default suite needs no running service:
+- **In-memory stores**: tests run against isolated in-memory SQLite fixtures (`tests/conftest.py`, one per medallion layer) and `qdrant-client`'s in-process local mode for the vector store.
+- **Opt-in server checks**: a few tests marked `mysql` / `qdrant` run only against real servers (`RUN_MYSQL_INTEGRATION=1`, `RUN_QDRANT_INTEGRATION=1 uv run pytest -m qdrant`); the default run skips them.
 
 ```bash
 # Run full automated test suite
@@ -294,8 +293,9 @@ lake-research-map/
 │   │   ├── lake_research_map_hero.svg # Vector source for hero illustration
 │   │   ├── architecture.svg      # Legacy pipeline architecture diagram
 │   │   └── medallion_architecture.svg # Modern white-background medallion architecture diagram
-│   ├── config.py                 # Pydantic environment & database configuration
-│   ├── pipeline.py               # Medallion CLI controller (run_raw, run_bronze, etc.)
+│   ├── config.py                 # Paths and per-layer database settings (dataclasses + python-dotenv)
+│   ├── pipeline.py               # Stage functions (run_raw, run_bronze, ...) and the whole CLI
+│   ├── quality.py                # Executable per-stage data contracts and publication gates
 │   ├── db/                       # SQLAlchemy 2.0 multi-database models
 │   │   ├── raw_models.py         # lit_source_files, lit_config, lit_bib_entries
 │   │   ├── bronze_models.py      # lit_articles union schema
@@ -314,12 +314,13 @@ lake-research-map/
 │   ├── transform/                # Medallion transformations
 │   │   ├── bronze_articles.py    # Schema unification
 │   │   ├── silver_articles.py    # Normalized DOI dedup & RapidFuzz PDF matching
-│   │   ├── gold_articles.py      # Curated RAG chunks with hash reconciliation
+│   │   ├── gold_articles.py      # Chunking, PDF extraction and merge helpers for Gold
+│   │   ├── versioned_gold.py     # Candidate Gold/embed/semantic builders, publication, Qdrant alias
 │   │   ├── pdf_text.py           # PDF text cleaning before chunking (references, hyphens, reflow)
 │   │   ├── duplicate_resolution.py # Persistent merge/keep review decisions
 │   │   ├── embeddings.py         # Local ONNX fastembed model identity, pin and loader
 │   │   ├── vector_payloads.py    # What each Qdrant point carries
-│   │   ├── semantics.py          # Contrastive screening, KMeans, UMAP/t-SNE/PCA
+│   │   ├── semantics.py          # Contrastive screening, PCA(50) + KMeans themes, t-SNE map
 │   │   └── screening_calibration.py # SLR sensitivity/recall threshold calibration
 │   ├── devtools/                 # Hero-image generator and the docs-on-main pre-commit guard
 │   └── apps/                     # User-facing applications on top of the pipeline core
@@ -345,7 +346,7 @@ lake-research-map/
 ├── docs/                         # Product and design specs
 │   ├── PRD.md                    # Product Requirements Document
 │   └── SDD.md                    # System Design Document
-├── tests/                        # 490 tests (in-memory SQLite + Qdrant local mode)
+├── tests/                        # pytest suite (in-memory SQLite + Qdrant local mode)
 ├── CLAUDE.md                     # Agent instructions + source-data quirks (single source)
 ├── docker-compose.yml            # Dashboard + Qdrant (profile `qdrant`) containers
 └── pyproject.toml                # Project metadata, dependencies, and Ruff config
@@ -364,4 +365,4 @@ For in-depth documentation and contributor guidelines:
 
 ## ⚖️ License
 
-This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License.

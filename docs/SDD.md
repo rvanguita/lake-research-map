@@ -37,23 +37,46 @@ Streamlit dashboard (read-only) ----------------┘
 | Component | Responsibility | Writes |
 |---|---|---|
 | `ingest/` | Parse publisher files, source configuration, PDF inventory, and enrichment cache | Raw tables and enrichment cache |
+| `config.py` | Paths under `data/`, per-layer database names and URLs from `.env` (dataclasses + `python-dotenv`) | Nothing |
+| `pipeline.py` | Stage functions, run telemetry, the pipeline lock and the whole CLI (§4.3) | Pipeline-run records |
+| `quality.py` | Executable per-stage contracts (`raw_contract` … `semantic_contract`, `publication_contract`), `persist_results`, `assert_contract` | `gold.lit_quality_results` |
+| `db/engines.py` | One cached engine and session factory per layer (`get_engine`, `get_session`) | Nothing |
+| `db/bootstrap.py` | `CREATE DATABASE IF NOT EXISTS`, `create_all`, the `_ADDITIVE_COLUMNS` migrations and the `lit_config` uniqueness migration | Schema only |
+| `db/time.py` | Naive-UTC timestamp helper shared by the models | Nothing |
+| `ingest/openalex.py` | Batched, resumable OpenAlex client: DOI refresh, `cites:` crawl, reference-year resolution | Bronze observation tables |
+| `ingest/crossref.py` | Quota-free Crossref reference deposits and their years | `lit_crossref_*`, `lit_doi_years` |
+| `ingest/enrichment.py` | Load the enrichment cache and observations and merge them (`merge_enrichment`) | Nothing; Bronze applies the result |
+| `ingest/reconciliation.py` | Reconcile the active Raw projection with an immutable source snapshot | Raw tables |
+| `ingest/snapshots.py` | Content-addressed source archive, manifests, `diff_manifests`, `build_fingerprint` | `data/.lake_research_map/objects`, Raw `lit_source_*` |
 | `transform/bronze_articles.py` | Harmonize IEEE and Elsevier records | `bronze.lit_articles` |
+| `transform/publication_categories.py` | Deterministic journal/conference/review/other classification with its basis | Nothing |
 | `transform/silver_articles.py` | DOI deduplication, rejection audit, non-article flags, PDF matching | Silver tables |
-| `transform/gold_articles.py` | Apply approved merges; build curated articles and reconcile chunks | Gold articles/chunks |
+| `transform/gold_articles.py` | Chunking, PDF extraction and merge helpers the Gold builder calls (plus a legacy live-table `build_gold_articles` that only tests call) | Nothing in a pipeline run |
+| `transform/versioned_gold.py` | The candidate builders the stages run (`build_dataset_gold`, `build_dataset_embeddings`, `build_dataset_semantics`), `fill_vector_collection`, `materialize_version`, `publish_vector_alias` | `lit_dataset_*`, `lit_semantic_runs`, live Gold on publication, Qdrant |
 | `transform/pdf_text.py` | Clean pypdf output before chunking: reference list, page furniture, line-break hyphens, reflow | Nothing; called by the Gold builders |
 | `transform/embeddings.py` | Model identity, revision check (by snapshot or byte-identical model files), batch/thread bounds, the one model loader | Nothing; the writer is `versioned_gold.py` |
 | `transform/vector_payloads.py` | What each Qdrant point carries: text, provenance, article filter fields, screening signals | Nothing |
 | `db/vector_store.py` | The Qdrant access point: one immutable collection per version, exact search, the `lit_chunks_active` alias | Qdrant collections (through `versioned_gold.py` and `vectors` repairs only) |
-| `transform/semantics.py` | Contrastive scoring, themes, projection, duplicate candidates | Semantic tables |
+| `transform/semantics.py` | Contrastive scoring, themes, projection, duplicate candidates (plus a legacy live-table `build_semantics` no stage calls) | Nothing in a pipeline run; `versioned_gold.py` writes |
 | `transform/duplicate_resolution.py` | Validate persistent merge/keep/undo decisions | Duplicate overrides |
-| `pipeline.py` | Bootstrap, stage routing, CLI, and run telemetry | Pipeline-run records |
+| `transform/review_workflows.py` | Protocols, dual assignments, append-only labels, adjudication, approvals | `lit_review_*`, `lit_model_approvals` |
+| `transform/screening_calibration.py` | Label validation, consensus, agreement, threshold calibration and its digests | Nothing |
+| `transform/evidence_samples.py` | Stratified subjects for the `evidence` commands (PDF, rejections, authors, taxonomy, retrieval) | Nothing; `reviews setup` persists them |
 | `apps/qdrant/cli.py` | The `vectors status|backfill|rebuild|sync-alias` commands; repairs write only Qdrant | Qdrant collections and the alias (never Gold rows) |
-| `apps/api/` | Article-level search, screening and evidence (`Retriever`), the `search`/`screen`/`mcp` commands and the MCP tools; imports neither Streamlit nor `apps/dashboard/` | None (reads the published Gold version and its Qdrant collection) |
+| `apps/api/` | Article-level search, screening and evidence (`Retriever` in `api.py`); imports neither Streamlit nor `apps/dashboard/` | None (reads the published Gold version and its Qdrant collection) |
+| `apps/api/index.py` | The published version's articles and chunk texts, loaded once per process | None |
+| `apps/api/filters.py` | `ArticleFilters`, one definition as a pandas mask and a Qdrant filter | None |
+| `apps/api/rank.py` | Pure BM25 index, RRF fusion, per-article collapse, excerpts | None |
+| `apps/api/models.py` | Pinned optional cross-encoder and the untruncating token counter | None |
+| `apps/api/cli.py`, `mcp_server.py` | The `search`/`screen`/`mcp` commands and the five MCP tools (stdio) | None |
 | `apps/dashboard/data.py` | Fault-tolerant SQL reads returning DataFrames | None |
 | `apps/dashboard/loaders.py` | Cached normalization, joins, and filtered datasets | Streamlit cache only |
 | `apps/dashboard/analytics.py`, `forecasting.py` | Pure analytical computation | None |
+| `apps/dashboard/qualis.py` | Pure CAPES/Qualis venue lookup (ENGENHARIAS IV) | None |
+| `apps/dashboard/retrieval_eval.py` | Pure ranking metrics and per-mode latency measurement for the retrieval benchmark | None |
 | `apps/dashboard/charts.py` | Plotly figure construction and chart contracts | None |
 | `apps/dashboard/pages/` | English presentation controllers | None |
+| `devtools/` | `docs_branch_guard.py` (pre-commit hook refusing docs-only commits on `main`) and `hero.py` (README illustration generator) | Nothing at runtime |
 
 ## 3. Data architecture and contracts
 
@@ -84,9 +107,9 @@ JSON list fields are convenient at current scale but are not substitutes for ide
 
 ### 3.3 Bronze database
 
-`bronze.lit_articles` has one harmonized source record, keyed by `(source, source_id)`. It normalizes DOI, authors, keywords, numeric fields, and publication metadata while retaining Raw back-references. IEEE-only metadata is nullable/not applicable for Elsevier.
+`bronze.lit_articles` has one harmonized source record, keyed by `(source, source_id)`; `source_id` is file-qualified (`csv:<file token>:<row>`, `bib:<file token>:<key>`), and the stage deletes and rebuilds the table on every run. It normalizes DOI, authors, keywords, numeric fields, and publication metadata while retaining Raw back-references. IEEE-only metadata is nullable/not applicable for Elsevier.
 
-Current enrichment fills missing citation/reference counts from `data/enrichment_cache.json`; IEEE values take precedence when present. The append-only `lit_enrichment_observations` table and as-of selector govern live OpenAlex refreshes, but the active reference corpus currently contains no persisted provider observations, so citation timing falls back to the documented environment/calendar basis.
+Current enrichment fills missing citation/reference counts after the rebuild (`bronze_articles._enrich_citation_counts`); IEEE CSV values take precedence when present. The fill comes from `ingest/enrichment.py::merge_enrichment`, which combines `data/enrichment_cache.json` with the append-only `lit_enrichment_observations` -- the 2026-09-23 OpenAlex refresh persisted observations for 3,099 of the 3,115 DOIs (§14) -- and never lets an observed zero overwrite a positive curated count.
 
 **Current contract:**
 
@@ -108,7 +131,7 @@ Required invariants:
 - PDF links reference active Raw PDF inventory rows.
 - Source-specific fields carry explicit applicability/coverage semantics.
 
-PDF matching currently uses `rapidfuzz.fuzz.token_sort_ratio` with threshold 85. The project guideline that specifies `token_set_ratio` conflicts with the implementation; `WP-05` requires benchmarking both on a reviewed match set before one becomes the canonical contract.
+PDF matching currently uses `rapidfuzz.fuzz.token_sort_ratio` with threshold 85 (`silver_articles.PDF_MATCH_THRESHOLD`). No project guideline prescribes another scorer; `WP-05` requires benchmarking it against alternatives (`token_set_ratio` among them) on a reviewed match set before the scorer and threshold become the canonical contract.
 
 ### 3.5 Gold database
 
@@ -124,7 +147,7 @@ PDF matching currently uses `rapidfuzz.fuzz.token_sort_ratio` with threshold 85.
 | `lit_dataset_versions` | One logical corpus state | Deterministic SHA-256 | Source/config/code/curation hashes and candidate/active/superseded/failed state |
 | `lit_quality_results` | One contract result per stage attempt/check | `(stage_run_id, check_id)` | Severity, observed/expected values, details, and pass/fail |
 
-Gold articles are rebuilt, while chunks are reconciled by comparing stored and desired text; every candidate chunk row records the SHA-256 of its text. Vectors are not carried by the Gold rebuild: they live in Qdrant (ADR-08), and the embed stage reuses any stored vector whose text hash and model revision match, so unchanged text is never re-embedded and changed text always is.
+The Gold stage deletes and rebuilds the candidate version's article and chunk rows (and clears its semantic rows); stored and desired chunk text are compared only to report `chunks_reused`/`chunks_new`/`chunks_invalidated`, and every candidate chunk row records the SHA-256 of its text. Vectors are not carried by the Gold rebuild: they live in Qdrant (ADR-08), and the embed stage reuses any stored vector whose text hash and model revision match, so unchanged text is never re-embedded and changed text always is.
 
 **Current:** Gold is the canonical input for corpus-level dashboard analyses when its minimum readiness contract passes: the table must be non-empty; DOI must be populated and unique; and the common analytical columns must exist. If that contract fails, the selector falls back to Silver and then Bronze, and every analytical page displays a degraded-mode warning with the reason. This protects approved Gold merges without turning incomplete initialization into a hard dashboard failure.
 
@@ -144,11 +167,11 @@ Embeddings use `BAAI/bge-small-en-v1.5` (384-dimension float32, unit norm) and a
 
 Semantic outputs derive from abstract embeddings. The current stage calculates two anchor similarities, KMeans themes in a shared PCA space, t-SNE coordinates, and near-duplicate pairs.
 
-The current quality gate rejects publication unless every candidate chunk has a compatible finite vector in the version's Qdrant collection and every eligible abstract has a semantic row. The stage reads the abstract matrix from Qdrant and writes the signals back onto the points as payload (including `relevance_margin`), so a retrieval client can filter by screening margin server-side. Semantic rows and duplicate candidates are versioned and materialized atomically with articles/chunks. Persisting the full parameter/model-revision manifest remains in `WP-06`.
+The current quality gate rejects publication unless every candidate chunk has a compatible finite vector in the version's Qdrant collection and every eligible abstract has a semantic row. The stage reads the abstract matrix from Qdrant and writes the signals back onto the points as payload (including `relevance_margin`), so a retrieval client can filter by screening margin server-side. Semantic rows and duplicate candidates are versioned and materialized atomically with articles/chunks. Each semantic run persists its manifest in `lit_semantic_runs` -- model, revision, dimension, article count, anchor hashes and the stability diagnostics (`WP-06`, delivered); the clustering and projection constants in `transform/semantics.py` are covered by the code fingerprint rather than stored per run.
 
 The current dashboard can export a deterministic four-stratum review sample and ingest one or more long-form CSV files in memory. It normalizes labels, rejects invalid/unknown decisions, preserves raw reviewers, gives explicit adjudication precedence, reports pairwise agreement when support is sufficient, and selects a candidate threshold on a 70% calibration split before evaluating it on a 30% holdout with stratified bootstrap intervals. Fewer than 40 resolved decisions or fewer than 10 observations in either class disables threshold recommendation. The result never changes filters or database state.
 
-Screening labels remain target governed data rather than dashboard session state. A durable label records DOI, reviewer, decision, reason, protocol version, timestamps, dataset version, and assignment. Adjudicated labels and calibrated thresholds remain distinct from raw reviewer labels.
+**Current:** screening labels are durable governed data, not dashboard session state. `reviews setup` stores a versioned protocol (`lit_review_protocols`) and deterministic dual assignments (`lit_review_assignments`: workflow, dataset version, protocol, subject, reviewer, stratum); `reviews import` appends raw labels with rationale and payload hash (`lit_review_labels`, never overwritten); `reviews adjudicate` records a final label separately (`lit_review_adjudications`); `reviews calibrate` evaluates the threshold against the stored labels and `reviews approve` persists a hash-bound decision (`lit_model_approvals`). The machinery is delivered; no screening label has been imported yet (PRD §12, `WP-09`).
 
 ## 4. Data flow, idempotency, and recovery
 
@@ -172,26 +195,82 @@ Screening labels remain target governed data rather than dashboard session state
 5. Run schema, uniqueness, referential, coverage, range, and business-rule checks.
 6. Publish the new version only if required gates pass; otherwise retain the previous active version.
 7. Record stage metrics, quality results, lineage, duration, and error details against the parent run.
-8. Invalidate dashboard caches after successful publication.
+8. **Target:** invalidate dashboard caches after successful publication. **Current:** nothing invalidates them; cached loaders expire on their TTLs (10 s to 5 min, reference-data caches never) and the Pipeline page's *Refresh data* button clears them by hand (§12).
 
 There is no automatic stage retry: the per-stage retry and timeout policy lived in the Airflow DAGs and left with them (`ADR-09`). A failed stage is re-run by hand -- every stage is idempotent and `embed` resumes from its own collection -- and the next run's start-up sweep recovers the abandoned execution. External enrichment keeps its own bounded retries, timeouts, and durable response status; a failed batch does not masquerade as “not found.” Backfills create new versions rather than rewriting the evidential history.
 
 Abandoned executions are recovered without human intervention. `run()` sweeps executions still marked `running` whenever it actually acquired the MySQL advisory lock, because holding that lock proves no other writer is live and therefore that every surviving `running` row was left by a dead process. Under SQLite the lock is bypassed, the flag is false, and no sweep occurs. The manual `maintenance recover-stale` command shares the same implementation and keeps its age cutoff for operators who want one.
 
+### 4.3 Command-line surface
+
+**Current:** `lake-research-map` (`pipeline:main`) is the only entry point. "Lock" means the command takes the
+project's MySQL advisory lock (`pipeline._pipeline_lock`), so it cannot overlap a stage run; the rule is
+`pipeline._mutates_published_inputs` -- a command takes it when it changes what the next publication would contain.
+
+| Command | What it does | Lock |
+|---|---|---|
+| `--stage raw\|bronze\|silver\|gold\|embed\|semantic\|all` | Run one stage, or the chain (`all`, the default) | Yes |
+| `--execution-id ID --workflow STAGE` | Run one stage of a workflow under a shared execution, so separate processes record one execution | Yes |
+| `--source-policy append\|snapshot` | Raw scanning: keep archived sources absent from disk (`append`, default) or mirror the files on disk | (with the stage) |
+| `duplicates list` | Unresolved cross-DOI candidates | No |
+| `duplicates merge\|keep\|undo` | Record or remove a persistent duplicate decision | Yes |
+| `versions list` | Dataset versions and publication status | No |
+| `versions activate` | Reactivate a validated Gold snapshot | Yes |
+| `reviews setup` | Create a protocol and dual-review assignments | No |
+| `reviews export` / `import` | Export one reviewer's assignments; import append-only labels | No |
+| `reviews adjudicate` | Record a final adjudication | No |
+| `reviews calibrate` | Evaluate the screening threshold against stored labels | No |
+| `reviews approve` | Persist an evaluated model decision | No |
+| `reviews status` | Labelling progress, agreement, disagreement queue | No |
+| `enrichment refresh-openalex` | Refresh the active DOI population's OpenAlex observations | Yes |
+| `enrichment refresh-citations` | Crawl incoming citation edges (`cites:`) for observed works | No (feeds audits only) |
+| `enrichment crossref-references` | Collect Crossref reference deposits and date their references | No (feeds audits only) |
+| `enrichment resolve-references` | Record the publication year of every cited work | No (feeds audits only) |
+| `evidence pdf-matches\|rejections\|authors\|taxonomy\|retrieval` | Stratified candidate sets for human review (PDF links around the threshold, silver rejections, author-name pairs, taxonomy classes plus an unclassified stratum, pooled retrieval results) | No |
+| `audit reference-corpus\|citation-graph\|citation-years` | Read-only acceptance audits (§7.2) | No |
+| `maintenance recover-stale` | Fail executions still `running` past an age cutoff | Yes (taken in its handler) |
+| `vectors status` | Compare each version's collection with its Gold chunks and the alias | No |
+| `vectors backfill\|rebuild\|sync-alias` | Copy pre-ADR-08 BLOBs, restore a collection from Gold text, re-point `lit_chunks_active`; write only Qdrant | Yes |
+| `search` / `screen` | Article-level ranking for a query; score every abstract against a subject (`--json` for one JSON document) | No |
+| `mcp` | The same operations as five MCP tools over stdio | No (a long-running server must never block a run) |
+
+The `reviews` commands write only the review tables, which no stage reads, so they run unlocked.
+
 ## 5. Additive schema evolution
 
 All unattended bootstrap changes remain additive. New columns are nullable during deployment, backfilled and validated, then enforced through application checks; destructive or non-null migrations require a separately reviewed migration path.
 
-| Proposed dataset | Purpose | Minimum fields |
+Every dataset below is **implemented** (`db/*_models.py`). Two rows of the original proposal never shipped
+under their proposed names: `gold.lit_screening_labels` became the review tables (`lit_review_*`), which serve
+every human-evidence workflow rather than screening alone, and `gold.lit_screening_models` became
+`lit_model_approvals`.
+
+| Dataset | Purpose | Key fields |
 |---|---|---|
-| `gold.lit_dataset_versions` | Identify reproducible corpus states | **Implemented:** version ID, source/config/code/curation hashes, parent, status, timestamps |
-| `gold.lit_quality_results` | Persist contract outcomes | **Implemented:** version/run, check ID, severity, observed/expected, pass/fail, details |
-| `gold.lit_pipeline_executions` | Correlate stage attempts | **Implemented:** execution/workflow/trigger/version/status/timestamps |
-| `gold.lit_publication_state` | Separate published and working state | **Implemented:** active and working version pointers plus publishing execution |
-| `raw.lit_source_*` | Preserve source evidence and reconciliation | **Implemented:** blobs, revisions, version manifests, and per-file changes |
-| `gold.lit_screening_labels` | Preserve independent review evidence | DOI, reviewer, label, reason, protocol/version, timestamps |
-| `gold.lit_screening_models` | Preserve calibrated decisions | dataset/label version, anchors, threshold, metrics/CIs, validation split |
-| `bronze.lit_enrichment_observations` | Version time-varying external metadata | DOI, provider, observed time, counts, status, response hash |
+| `gold.lit_dataset_versions` | Identify reproducible corpus states | Version ID, source/config/code/curation hashes, parent, status, timestamps |
+| `gold.lit_quality_results` | Persist contract outcomes | Version/run, check ID, severity, observed/expected, pass/fail, details |
+| `gold.lit_pipeline_executions` | Correlate stage attempts | Execution/workflow/trigger/version/status/timestamps |
+| `gold.lit_publication_state` | Separate published and working state | Active and working version pointers plus publishing execution |
+| `gold.lit_dataset_articles` | Immutable Gold article snapshot per version | `(dataset_version_id, doi)` unique; the curated article columns |
+| `gold.lit_dataset_chunks` | Immutable chunk snapshot per version, with embedding provenance | `(dataset_version_id, doi, chunk_type, seq)` unique; text, `text_sha256` (unindexed), model/revision/dimension/dtype/normalized/embedded-at; legacy `embedding_bin` |
+| `gold.lit_dataset_semantics` | Per-article screening signals and map position per version | `(dataset_version_id, doi)` unique; relevance/off-topic scores, theme, `map_x`/`map_y` |
+| `gold.lit_dataset_duplicate_pairs` | Near-duplicate candidates per version | `(dataset_version_id, doi_a, doi_b)` unique, `doi_a < doi_b`, similarity |
+| `gold.lit_semantic_runs` | Manifest of one semantic derivation | Model, revision, dimension, article count, anchor hashes, stability diagnostics |
+| `gold.lit_review_protocols` | Versioned reviewer instructions (SDD Appendix A) | Workflow, protocol version, instruction text and SHA-256 |
+| `gold.lit_review_assignments` | Deterministic dual-review assignment | Workflow, dataset version, protocol, subject, reviewer, stratum |
+| `gold.lit_review_labels` | Append-only raw human label (replaces the proposed `lit_screening_labels`) | Assignment, label revision, label, rationale, payload hash, import time |
+| `gold.lit_review_adjudications` | Final label after disagreement, kept apart from raw labels | Workflow, dataset version, subject, final label, adjudicator, rationale |
+| `gold.lit_model_approvals` | Hash-bound approval of a measured threshold or retrieval default (replaces the proposed `lit_screening_models`) | Workflow, dataset version, model hash, parameters, metrics, label-set hash, approved/by/at |
+| `raw.lit_source_*` | Preserve source evidence and reconciliation | Blobs, revisions, version manifests, and per-file changes |
+| `bronze.lit_enrichment_observations` | Version time-varying external metadata (current) | DOI, provider, provider work id, observed time, status/HTTP status, counts, response hash, retry count, payload |
+| `bronze.lit_external_works` | Corpus works as OpenAlex identifies them, with forward-crawl state | Provider work id, DOI, year, `citing_crawled_at`, `citing_truncated` |
+| `bronze.lit_reference_works` | Publication year of cited works outside the corpus | Provider work id, year, status, observed time |
+| `bronze.lit_crossref_reference_lists` | Whether Crossref holds a reference deposit for a corpus DOI | DOI, observed time, status, deposited count |
+| `bronze.lit_crossref_references` | One deposited reference of a citing work | Citing DOI, position, reference DOI, inline year, observed time |
+| `bronze.lit_doi_years` | Year looked up for a referenced DOI the deposit left undated | Provider, DOI, year, status, observed time |
+| `bronze.lit_citation_year_counts` | Annual citation trajectory per work | Provider work id, year, count, observed time |
+| `bronze.lit_citation_edges` | Observed citation edges | Citing/cited work ids, observed time, `discovered_via` (`referenced_works` vs `cites:`) |
+| `bronze.lit_access_observations` | Open-access status observations | Provider work id, observed time, `is_oa`, OA status, licence, landing page |
 
 Existing tables gain version/run references only when their producer and readers can populate them coherently. No table should carry a decorative lineage column that remains null indefinitely.
 
@@ -368,9 +447,9 @@ Analytical functions are pure Python functions without Streamlit imports. Databa
 - Rejection reasons, duplicate decisions, chunk invalidation, and embedding coverage.
 - External enrichment success/not-found/error/rate-limit counts and observation age.
 - Data-quality check outcomes and active dataset version.
-- Dashboard query/cache latency for expensive loaders and search latency by retrieval mode.
+- **Target:** dashboard query/cache latency for expensive loaders and search latency by retrieval mode. **Current:** no loader is timed; per-mode search latency is measured only on demand, by the retrieval benchmark harness (`apps/dashboard/retrieval_eval.py`) behind the Quality page's benchmark.
 
-Logs use structured fields with parent run ID, stage run ID, and dataset version. A telemetry-write failure is surfaced; it must not be silently downgraded to debug-only information for a production run.
+**Target:** logs use structured fields with parent run ID, stage run ID, and dataset version. **Current:** the CLI logs plain text (`%(asctime)s %(levelname)s %(name)s: %(message)s`) to stderr and to `data/.lake_research_map/pipeline.log` (`LAKE_RESEARCH_MAP_LOG` overrides it); execution, stage-run and version ids live in the `lit_pipeline_*` rows, not in log fields. A telemetry-write failure is surfaced; it must not be silently downgraded to debug-only information for a production run.
 
 ### 7.2 Read-only audits
 
@@ -436,20 +515,22 @@ population every coverage audit divides by.
 
 ### 9.1 Current baseline
 
-The repository has 490 passing pytest tests plus four opt-in tests skipped in the default run (two MySQL, two Qdrant server). They run with isolated in-memory SQLite sessions and additionally cover deterministic fingerprints, content-addressed retention, rename detection, Bronze deletion propagation, isolated Gold candidates, embedding contract failures, atomic materialization, exact Gold reactivation, an end-to-end correlated pipeline fixture, stage-by-stage parent correlation, temporal enrichment observations, persistent human-review evidence, retrieval metrics, provenance coverage, persisted semantic diagnostics, the durable-label-to-calibration join with its approval digests, the injected-fixture citation-graph crawl, automatic abandoned-run recovery, and the plausible-year bound that keeps in-press records dated to next year inside every trend. The MySQL acceptance tests cover JSON/NULL/BLOB round trips, rollback, advisory locks, and the idempotent `lit_config` uniqueness migration. Ruff lint and format checks are required.
+The suite (its dated size is in §14) runs with isolated in-memory SQLite sessions and `qdrant-client`'s local mode; four opt-in tests are skipped by the default run (two `mysql`, two `qdrant`). Besides unit coverage it exercises deterministic fingerprints, content-addressed retention, rename detection, Bronze deletion propagation, isolated Gold candidates, embedding contract failures, atomic materialization, exact Gold reactivation, an end-to-end correlated pipeline fixture, stage-by-stage parent correlation, temporal enrichment observations, persistent human-review evidence, retrieval metrics, provenance coverage, persisted semantic diagnostics, the durable-label-to-calibration join with its approval digests, the injected-fixture citation-graph crawl, automatic abandoned-run recovery, and the plausible-year bound that keeps in-press records dated to next year inside every trend. The MySQL acceptance tests cover JSON/NULL/BLOB round trips, rollback, advisory locks, and the idempotent `lit_config` uniqueness migration. Ruff lint and format checks are required.
 
 SQLite remains the default fast suite. MySQL-specific acceptance is recorded separately against MySQL 8.4 and must be rerun for changes to JSON/NULL behavior, BLOBs, DDL, transactions, or advisory locks. The vector store follows the same split: `qdrant-client`'s in-process local mode stands in for the server in the default suite, and `RUN_QDRANT_INTEGRATION=1 uv run pytest -m qdrant` checks what local mode ignores (payload indexes, exact-search parameters) against the compose service.
 
 ### 9.2 Target test layers
 
-1. **Unit tests:** pure parsing, normalization, statistics, and edge cases.
-2. **Property tests:** idempotency, uniqueness, monotonic cumulative counts, vector dimensions, and deterministic seeded outputs.
-3. **Contract tests:** each dataset invariant and quality gate, including deletion propagation.
-4. **MySQL integration tests:** migrations, JSON SQL NULL behavior, constraints, transactions, locks, and binary vectors.
-5. **Golden-corpus tests:** a small fixture with duplicates, removals, missing DOI, changed text, PDF ambiguity, and partial enrichment.
-6. **Statistical validation tests:** simulated known effects/nulls, bootstrap coverage, leakage checks, and baseline comparisons.
-7. **Streamlit tests:** `st.testing.v1.AppTest` smoke tests for navigation, filters, degraded states, and conditional heavy tabs.
-8. **Browser tests:** only for behavior AppTest cannot simulate, such as rendered theme/CSS or chart selection events.
+Each layer with its status on 2026-11-06 (**exists**, **partial**, **missing**) and the files that provide it.
+
+1. **Unit tests:** pure parsing, normalization, statistics, and edge cases. **Exists** -- most files under `tests/`.
+2. **Property tests:** idempotency, uniqueness, monotonic cumulative counts, vector dimensions, and deterministic seeded outputs. **Partial** -- example-based idempotency/determinism tests only (`test_vector_store.py`, `test_gold_articles.py`, `test_crawl_sampling.py`); no generated inputs (no Hypothesis).
+3. **Contract tests:** each dataset invariant and quality gate, including deletion propagation. **Partial** -- embed/publication/semantic gates (`test_vector_collections.py`, `test_versioning_contracts.py`) and the raw contract (`test_raw_config.py`); the bronze/silver/gold contracts run only on the passing path of the end-to-end fixture, with no failure-path test.
+4. **MySQL integration tests:** migrations, JSON SQL NULL behavior, constraints, transactions, locks, and binary vectors. **Partial** -- two opt-in tests in `test_mysql_contracts.py` (`RUN_MYSQL_INTEGRATION=1`): JSON/BLOB/NULL/transaction/advisory lock, and the `lit_config` uniqueness migration.
+5. **Golden-corpus tests:** a small fixture with duplicates, removals, missing DOI, changed text, PDF ambiguity, and partial enrichment. **Partial** -- `test_versioning_contracts.py` covers add/edit/rename/remove/reactivate; no golden case for duplicates, missing DOI, PDF ambiguity or partial enrichment.
+6. **Statistical validation tests:** simulated known effects/nulls, bootstrap coverage, leakage checks, and baseline comparisons. **Partial** -- `test_advanced_statistics.py`, `test_forecasting.py`; no bootstrap-coverage simulation.
+7. **Streamlit tests:** `st.testing.v1.AppTest` smoke tests for navigation, filters, degraded states, and conditional heavy tabs. **Partial** -- `test_dashboard_pages.py`, `test_dashboard_app.py` (and `test_production_page.py`); no navigation, sidebar-filter or conditional-tab tests.
+8. **Browser tests:** only for behavior AppTest cannot simulate, such as rendered theme/CSS or chart selection events. **Missing.**
 
 ## 10. Scaling and extension points
 
@@ -608,7 +689,12 @@ Docker Compose keeps the dashboard and the opt-in Qdrant service.
 - No automatic stage retry or timeout since `ADR-09`: a failed stage is re-run by hand (every stage is idempotent and `embed` resumes).
 - OpenAlex responses are append-only observations with observation time, response state, HTTP status, response hash, retry count, longitudinal counts, outgoing edges, and access metadata. A real refresh still requires local API credentials.
 - Chunk and duplicate-candidate logical keys are not fully constrained in the database.
-- The core imports an application: `transform/evidence_samples.py` and `transform/versioned_gold.py` take `canonical_author` and `semantic_stability_diagnostics` from `apps/dashboard/analytics.py`. Moving those two functions into the core would make `apps/` a strict leaf.
+- The core imports an application: `transform/evidence_samples.py` takes `canonical_author`, `OPTIMIZATION_METHOD_PATTERNS` and `taxonomy_haystack`, and `transform/versioned_gold.py` takes `semantic_stability_diagnostics`, all from `apps/dashboard/analytics.py`. Moving those four names into the core would make `apps/` a strict leaf. (`pipeline.py` also imports `apps.qdrant` and `apps.api`, but only to wire their commands into the CLI.)
+- Dashboard caches are not invalidated after a publication (§4.2 step 8): pages can show the previous version until a loader's TTL expires or someone presses *Refresh data*.
+- Logs are plain text, not structured fields carrying run/stage/version ids (§7.1).
+- No dashboard loader latency telemetry; search latency by mode exists only in the on-demand retrieval benchmark (§7.1).
+- No property-based tests (no Hypothesis) and no browser tests (§9.2).
+- `NFR-05` has no measurement on the Qdrant architecture: the only latency figures (§14, 2026-09-21) are for the retired in-process search.
 - Statistical functions need the validation improvements defined in `PRD.md` before confirmatory interpretation.
 
 Open work that is blocked on human evidence is listed in PRD §12.
@@ -628,11 +714,11 @@ Open ones are PRD §12. The full status notes and dated evidence records they su
 | `WP-05` | Identity, PDF matching, and rejection validation | Open — see PRD §12. |
 | `WP-06` | Embedding and Semantic compatibility contract | 2026-09-21 — Text hash, model revision, dimension/dtype checks, binary-first pending logic, JSON fallback migration, semantic-run metadata, and atomic complete-coverage gate. |
 | `WP-07` | Enrichment observations and temporal semantics | 2026-09-23 — Provider observations with `observed_at`, status, identifiers, counts, response hash, retry metadata, and deterministic selection of the analysis snapshot. |
-| `WP-08` | Concurrency, recovery, and operational security | 2026-09-22 — Project advisory lock, stage retry/timeout matrix, reliable terminal run status, deployment-mode security guidance, and audited trigger identity. Least-privilege database roles were dropped from the deliverable, not deferred. |
+| `WP-08` | Concurrency, recovery, and operational security | 2026-09-22 — Project advisory lock, reliable terminal run status, deployment-mode security guidance, and audited trigger identity. The stage retry/timeout matrix it also delivered lived in the Airflow DAGs and was removed with them (`ADR-09`). Least-privilege database roles were dropped from the deliverable, not deferred. |
 | `WP-09` | Persistent dual-review screening workflow | Open — see PRD §12. |
 | `WP-10` | Screening threshold validation | Open — see PRD §12. |
 | `WP-11` | Author identity audit and overrides | Open — see PRD §12. |
-| `WP-12` | Engineering-taxonomy validation | 2026-09-22 — Stratified labeled articles, label guide, per-class precision/recall/F1, ambiguous/unclassified reporting, and refined non-overlapping rules where justified. |
+| `WP-12` | Engineering-taxonomy validation | 2026-09-22 — Machinery only: the stratified taxonomy sample (`evidence taxonomy`, with an unclassified stratum), the label guide (Appendix A.6, still a draft), measured coverage, and `taxonomy_precision_from_labels` for per-class precision/recall/F1 with ambiguous/unclassified reporting. No human taxonomy labels exist (an AI-assisted pass of 120 labels does, like the retrieval one), so no precision or recall has been measured (§6.5; PRD §12 `WP-21`). |
 | `WP-13` | Retrieval evaluation corpus | Open — see PRD §12. |
 | `WP-14` | Citation distribution inference | 2026-09-21 — Documented zero handling, `x_min` selection/sensitivity, MLE comparisons, likelihood ratios, bootstrap goodness-of-fit, and uncertainty for parameters. |
 | `WP-15` | Citation count-model diagnostics | 2026-09-22 — Missingness profile, VIF/condition number, residual/influence checks, Poisson/NB/zero-inflated comparison when identifiable, alternative age specifications, and coefficient forest with CIs. |
@@ -645,7 +731,7 @@ Open ones are PRD §12. The full status notes and dated evidence records they su
 | `WP-22` | Streamlit performance, behavior, and accessibility | 2026-09-22 — Dynamic heavy tabs, bounded caches, stable loading slots, forms for expensive searches, native responsive layout where practical, stable widget keys, English sentence-case/accessibility review, and `st.testing.v1.AppTest` smoke… |
 | `WP-23` | Reference-year and citation-history ingestion | 2026-09-23 — Governed cited-reference publication years and annual citation trajectories with coverage/provenance. |
 | `WP-24` | Citation graph and verified access data | Delivered — Versioned citation graph; verified access observations; documented sampling/coverage and model protocol. |
-| `WP-25` | Scale-triggered storage and compute evolution | 2026-11-06 — Benchmark report and ADR comparing in-process linear/Faiss search, MySQL storage, and candidate managed systems on latency, recall, cost, recovery, and operations. |
+| `WP-25` | Scale-triggered storage and compute evolution | 2026-11-06 — Closed by adopting Qdrant under `ADR-08`, for a consumption requirement (an external RAG client and the MCP server) with exact search kept. No benchmark report or ADR comparing Faiss, MySQL storage or managed systems was produced, and no latency has been measured on the Qdrant architecture: `NFR-05` is unmeasured there (§12). |
 | `WP-26` | Qdrant vector store | 2026-11-06 — `db/vector_store.py` (one immutable collection per version, deterministic point ids, exact search, `lit_chunks_active` alias); the embed stage writing only Qdrant and copying reusable vectors by text hash before computing; the… |
 | `WP-27` | Full-text cleaning before chunking | 2026-11-06 — `transform/pdf_text.py` (four pure cleaners in a fixed order), applied by both Gold builders, which report `pdf_*` counts in their stats. |
 | `WP-28` | Article-level retrieval API, CLI and MCP server | 2026-11-06 — `apps/api/` (`Retriever.search/screen/evidence/article/status`, filters shared by pandas and Qdrant, BM25 index built once, RRF, optional pinned cross-encoder, untruncated token counts); `lake-research-map search|screen|mcp`;… |
@@ -664,6 +750,7 @@ Re-measure before quoting; the corpus grows with every export (CLAUDE.md keeps t
 | 2026-11-06 | PDF cleaning, 97 linked PDFs | reference lists cut in 88; 6,323 hyphenations rejoined; 7,368 furniture lines dropped; full-text chunks 4,437 → 3,623 |
 | 2026-11-06 | Regeneration with cleaned text (`7cbb67e3…`) | 3,115 abstract vectors copied, 3,623 full-text chunks embedded (~32 min at 2 threads); 206 duplicate pairs, 4 themes, unchanged |
 | 2026-11-06 | Retrieval disclosures | 95 articles without a usable abstract (< 50 chars); 21 abstract chunks exceed the 512-token window |
+| 2026-11-06 | Test collection (`uv run pytest --collect-only -q`) | 521 tests collected, of which 4 opt-in (`mysql`/`qdrant` markers) |
 | 2026-11-06 | Model snapshot drift | Hub snapshot `aa8f8b06…` differs from the pin `52398278…` only in README; re-embedding 200 chunks reproduced the stored vectors exactly |
 
 ## Appendix A. Review protocols
