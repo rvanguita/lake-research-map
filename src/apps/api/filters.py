@@ -5,7 +5,21 @@ The dashboard's sidebar, the CLI flags and the MCP tool arguments all build an
 dense search sends it to Qdrant as a server-side filter over the payload
 written by `transform/vector_payloads.py`. Both must select the same articles,
 or a hybrid ranking would fuse two different populations --
-`tests/test_retrieval_filters.py` holds them to it.
+`tests/test_retrieval_filters.py` holds them to it, including for a row or a
+point whose value is missing. (The sidebar builds one with
+`exclude_non_articles=False`: the dashboard shows the whole corpus.)
+
+Missing values follow one rule per field, in both backends:
+
+* `min_margin` -- an unscored article is kept (a missing signal never shrinks
+  the corpus);
+* `exclude_non_articles` -- an unknown flag is kept (only a known non-article
+  is dropped);
+* `require_abstract` -- an unknown flag is dropped: "has an abstract" must be
+  known to be true, so the Qdrant side requires `abstract_missing == false`
+  rather than excluding `true`, which would let a point without the key pass;
+* year, source, venue, category -- a missing value never matches a bound or a
+  value list.
 """
 
 from __future__ import annotations
@@ -120,8 +134,10 @@ def to_qdrant_filter(
             models.FieldCondition(key="is_non_article", match=models.MatchValue(value=True))
         )
     if filters.require_abstract:
-        must_not.append(
-            models.FieldCondition(key="abstract_missing", match=models.MatchValue(value=True))
+        # `must == false`, not `must_not == true`: a point without the key must
+        # fail, as a null `abstract_missing` does in `article_filter_mask`.
+        must.append(
+            models.FieldCondition(key="abstract_missing", match=models.MatchValue(value=False))
         )
     if not must and not must_not:
         return None

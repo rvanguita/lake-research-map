@@ -4,7 +4,7 @@
 
 **Evidence cutoff:** 2026-09-21
 
-**Implementation baseline:** the active 2026-11-06 Gold version `7cbb67e3…` contains 3,115 articles and 6,738 chunks (3,115 abstracts, 3,623 cleaned full-text chunks from 97 PDFs), every one embedded in its Qdrant collection; the application has 10 registered dashboard pages and 490 passing automated tests (plus four opt-in MySQL/Qdrant-server tests skipped by the default run).
+**Implementation baseline:** the active 2026-11-06 Gold version `7cbb67e3…` contains 3,115 articles and 6,738 chunks (3,115 abstracts, 3,623 cleaned full-text chunks from 97 PDFs), every one embedded in its Qdrant collection; the application has 10 registered dashboard pages. The size of the automated test suite is a dated measurement kept in SDD §14, not repeated here.
 
 **Related documents:** [SDD.md](SDD.md) (design, analytical methods, delivery history, review protocols)
 
@@ -198,9 +198,9 @@ its requirement, or says plainly that none exists.
 | `FR-13` | Per-version collection, deterministic point ids, exact search, alias moved after publication, backfill/rebuild repairs | `db/vector_store.py`; `tests/test_vector_store.py`, `tests/test_vector_collections.py`, opt-in `tests/test_qdrant_server.py`; `vectors status` |
 | `FR-14` | One hit per article, filters before ranking, pandas/Qdrant filter parity, JSON-only stdout, no pipeline lock, five MCP tools | `apps/api/`; `tests/test_retrieval_api.py`, `tests/test_retrieval_filters.py`, `tests/test_retrieval_cli.py`, `tests/test_mcp_server.py` |
 | `FR-15` | Cleaner unit tests and the measured before/after on the 97 linked PDFs; `pdf_*` keys in the Gold stats | `transform/pdf_text.py`; `tests/test_pdf_text.py`, `tests/test_gold_articles.py`; SDD §14 |
-| `NFR-01` | Source/config/code/curation fingerprints; per-page dataset-version caption | `ingest/snapshots.py::build_fingerprint`; `tests/test_population_provenance.py` |
+| `NFR-01` | Source/config/code/curation fingerprints; per-page dataset-version caption | `ingest/snapshots.py::build_fingerprint`; `tests/test_versioning_contracts.py` (fingerprints), `tests/test_population_provenance.py` (caption) |
 | `NFR-02` | Unchanged re-run produces no new logical rows | `tests/test_gold_articles.py`, `tests/test_raw_bib.py` |
-| `NFR-03` | Contract violation blocks publication and keeps the prior version active | `quality.assert_contract`; `tests/test_mysql_contracts.py` |
+| `NFR-03` | Contract violation blocks publication and keeps the prior version active | `quality.assert_contract`; `tests/test_versioning_contracts.py` (`test_quality_gates_reject_incompatible_embedding`, `test_materialization_rechecks_publication_contract`) |
 | `NFR-04` | Rejections, overrides, quality results and run errors persisted | `lit_rejected`, `lit_quality_results`, `lit_pipeline_runs` |
 | `NFR-05` | **Not measured.** Latency and memory were benchmarked once by hand (2026-09-21); no performance test guards them | SDD §14: 11.06 MiB vector matrix, 92.72 ms warm-search P95 on 2026-09-21 |
 | `NFR-06` | Secret hygiene only. The per-table privilege boundary was traded away on 2026-09-22 and is **not** enforced | `.gitignore`; `WP-08` evidence |
@@ -215,18 +215,18 @@ failure mode this table exists to prevent.
 
 Each analytical question has exactly one canonical page. Overview may link to a deep dive but must not reproduce its chart.
 
-| Page | Exclusive decision/question | Canonical evidence | Planned hardening |
+| Page | Exclusive decision/question | Canonical evidence | Hardening (delivered items point to SDD §6.5; open items are open work) |
 |---|---|---|---|
-| **Overview** | What is the corpus state now? | Counts, recency, source composition, readiness | Deep correlation/concentration/temporal views removed; add snapshot/as-of status |
-| **Production and venues** | How did output and qualified venue composition change? | Annual and cumulative series, Qualis evolution | Explicit complete/partial-year status; no generic venue ranking duplication |
-| **Topics and scientific structure** | What concepts and venues structure the field? | Keyword prevalence, Bradford/Zipf, c-TF-IDF, semantic venue groups | FDR now covers the full keyword family; the growth ranking, slope chart, and searched-breakpoint test still report no adjustment |
-| **Impact and citations** | How is impact distributed and conditionally associated? | Citation distributions, age normalization, count models, specification diagnostics | Delivered: AIC family comparison, bootstrap tail p-value, VIF/condition number, influence, zero-inflation gap. Open: a fitted zero-inflated model and alternative age specifications |
-| **Researchers and collaboration** | How are corpus authors and ties organized over time? | Productivity, Lotka's law, corpus indices, network structure vs. a degree-preserving null | Identity ambiguity audit; assortativity; temporal formation/repetition of ties |
-| **Engineering evidence** | Which methods, objectives, uncertainties, networks, and tools occur? | Multi-label engineering taxonomy | Labeled audit set, precision/recall, unknown/ambiguous coverage |
-| **Trends and fronts** | What can be projected, with what historical error? | Persistence-baseline skill, rolling-origin forecast, held-out interval coverage, Bass/burst diagnostics | Skill and coverage by horizon (every fold is currently one-step), MASE, Bass parameter stability |
-| **Screening and discovery** | What should be reviewed, included, or reconciled? | Margin, themes, projections with bootstrap ARI and trustworthiness, isolation, duplicate queue, persistent review protocols/labels | Collect independent labels; persist stability; sweep cluster count |
-| **Quality and RAG** | Are metadata, text, embeddings, and retrieval fit for use? | Coverage matrix, PDF selection bias, chunk diagnostics, anomaly audit, inspectable dense/BM25/RRF search | Apply the implemented Recall@k/MRR/nDCG/latency harness to labeled technical queries |
-| **Pipeline and provenance** | Can results be traced and trusted operationally? | Funnel, runs, rejections, source configuration, quality gates | Snapshot, freshness, removal reconciliation |
+| **Overview** | What is the corpus state now? | Counts, recency, source composition, readiness | Delivered: deep correlation/concentration/temporal views removed; the dataset-version/as-of caption every page renders (`loaders.render_population_provenance`) |
+| **Production and venues** | How did output and qualified venue composition change? | Annual and cumulative series, Qualis evolution | Open: explicit complete/partial-year status. Rule: no generic venue ranking duplication |
+| **Topics and scientific structure** | What concepts and venues structure the field? | Keyword prevalence, Bradford/Zipf, c-TF-IDF, semantic venue groups | Delivered: FDR over the full keyword family, Hamed-Rao serial-dependence sensitivity, slope confidence intervals, permutation p-value for the searched breakpoint (SDD §6.5 "Trend testing and multiplicity") |
+| **Impact and citations** | How is impact distributed and conditionally associated? | Citation distributions, age normalization, count models, specification diagnostics | Delivered: AIC family comparison including fitted zero-inflated Poisson/NB, bootstrap tail p-value, VIF/condition number, influence, zero-inflation gap, alternative age specifications with sign-change warning (SDD §6.5 "Citation count model") |
+| **Researchers and collaboration** | How are corpus authors and ties organized over time? | Productivity, Lotka's law, corpus indices, network structure vs. a degree-preserving null | Delivered: assortativity against the null, new-versus-returning ties per period (SDD §6.5 "Author and network indicators"). Open: identity ambiguity audit (`WP-11`) |
+| **Engineering evidence** | Which methods, objectives, uncertainties, networks, and tools occur? | Multi-label engineering taxonomy | Delivered: measured coverage and the label-to-precision/recall machinery (SDD §6.5 "Engineering taxonomies"). Open: the human-labeled audit set (protocol `taxonomy-v1`, `WP-21`) |
+| **Trends and fronts** | What can be projected, with what historical error? | Persistence-baseline skill, rolling-origin forecast, held-out interval coverage, Bass/burst diagnostics | Delivered: per-horizon backtests, MASE, Bass standard errors and bootstrap peak interval (SDD §6.5 "Forecasts") |
+| **Screening and discovery** | What should be reviewed, included, or reconciled? | Margin, themes, projections with bootstrap ARI and trustworthiness, isolation, duplicate queue, persistent review protocols/labels | Delivered: stability persisted with the semantic run, cluster-count sweep (SDD §6.5 "Semantic analyses"). Open: independent labels (`WP-09`) |
+| **Quality and RAG** | Are metadata, text, embeddings, and retrieval fit for use? | Coverage matrix, PDF selection bias, chunk diagnostics, anomaly audit, inspectable dense/BM25/RRF search | Open: apply the implemented Recall@k/MRR/nDCG/latency harness to labeled technical queries (`WP-13`) |
+| **Pipeline and provenance** | Can results be traced and trusted operationally? | Funnel, runs, rejections, source configuration, quality gates | Delivered: per-file source reconciliation table, latest-run banner. Open: explicit snapshot/freshness status |
 
 Visualization selection follows the question: bars for discrete comparisons, lines for ordered time, ECDF/CCDF for distributions, scatterplots for associations with uncertainty, heatmaps for dense matrices, and tables when exact values or audit context dominate. Multiple chart types for the same knowledge are alternatives behind one selector, not separate claims.
 
@@ -314,7 +314,7 @@ The product is successful when all of the following are evidenced, not merely as
 
 ## 12. Open work
 
-Everything not listed here is delivered; its history is in SDD §13. The ids are kept because code, tests and
+Everything not listed here, or as an open hardening item in §7, is delivered; its history is in SDD §13. The ids are kept because code, tests and
 dashboard captions cite them. Each item is blocked on human evidence, not on code: the review queues export the
 resolved context each reviewer needs, and the protocols are SDD Appendix A.
 
@@ -365,4 +365,5 @@ Not scheduled until a decision need and an evidence contract exist:
 | `FR-12`, `NFR-07`, `NFR-08` | `ADR-02`, `ADR-06` | `WP-21` |
 | `FR-13` | `ADR-03`, `ADR-08` | — |
 | `FR-15` | `ADR-03` | — |
+| `RISK-09`, §5.5 (denominator rule) | `ADR-07` | — |
 | `RQ-04` through `RQ-07` | `ADR-02`, `ADR-04`, `ADR-05` | `WP-11`, `WP-21` |

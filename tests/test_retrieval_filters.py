@@ -120,6 +120,54 @@ def test_pandas_and_qdrant_select_the_same_articles(filters, vector_store):
     assert {point.payload["doi"] for point in stored} == expected
 
 
+# A row whose flags are unknown: the pandas side sees nulls, the Qdrant side a
+# point without those payload keys. Each rule must treat it the same way.
+NULL_DOI = "10.1/null"
+
+
+def _frame_with_null_row() -> pd.DataFrame:
+    null_row = {column: None for column in _frame().columns} | {"doi": NULL_DOI}
+    return pd.concat([_frame(), pd.DataFrame([null_row])], ignore_index=True)
+
+
+def _store_with_null_point(vector_store) -> None:
+    _store_with_payloads(vector_store)
+    vector_store.upsert(
+        "v1",
+        [
+            VectorPoint(
+                point_id(NULL_DOI, "abstract", 0),
+                np.array([1.0, 1.0], dtype=np.float32),
+                {"doi": NULL_DOI, "chunk_type": "abstract"},
+            )
+        ],
+    )
+
+
+@pytest.mark.parametrize("filters", FILTER_CASES, ids=lambda f: repr(f)[:60])
+def test_pandas_and_qdrant_agree_on_missing_values(filters, vector_store):
+    _store_with_null_point(vector_store)
+
+    expected = set(apply_article_filters(_frame_with_null_row(), filters)["doi"])
+    stored = vector_store.scroll(
+        "v1", query_filter=to_qdrant_filter(filters, chunk_type="abstract"), payload_fields=["doi"]
+    )
+
+    assert {point.payload["doi"] for point in stored} == expected
+
+
+def test_missing_flags_keep_or_drop_the_article_as_documented():
+    frame = _frame_with_null_row()
+
+    def kept(filters: ArticleFilters) -> bool:
+        return NULL_DOI in set(apply_article_filters(frame, filters)["doi"])
+
+    assert kept(ArticleFilters(exclude_non_articles=True))  # unknown is not a non-article
+    assert kept(ArticleFilters(min_margin=0.0))  # unscored is kept
+    assert not kept(ArticleFilters(require_abstract=True))  # abstract must be known
+    assert not kept(ArticleFilters(year_range=(1900, 2100)))  # no year, no match
+
+
 def test_the_margin_filter_keeps_unscored_articles():
     kept = set(apply_article_filters(_frame(), ArticleFilters(min_margin=0.0))["doi"])
 
