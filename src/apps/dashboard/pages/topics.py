@@ -1163,6 +1163,9 @@ def _structural_breaks_tab(articles_df: pd.DataFrame) -> None:
             )
         )
     fig.update_layout(
+        # The two regime traces cover disjoint years, so the default "group" mode
+        # would halve every bar and shift it off its year tick.
+        barmode="overlay",
         title=f"Structural break in the publication time series (break year: {break_yr})",
         xaxis_title="Year",
         yaxis_title="Articles published",

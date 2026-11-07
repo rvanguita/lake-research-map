@@ -45,7 +45,8 @@ class Article(Base):
 
     # IEEE-only (see bronze_models) -- carried through so the dashboard can
     # read them from the layer it actually renders.
-    countries: Mapped[list] = mapped_column(JSON, default=list)
+    # Nullable like its additive migration (MySQL cannot default a JSON column); the writers always store a list.
+    countries: Mapped[list | None] = mapped_column(JSON, default=list)
     online_date: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
     document_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
     license: Mapped[str | None] = mapped_column(String(64), nullable=True)

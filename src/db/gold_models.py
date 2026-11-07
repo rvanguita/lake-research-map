@@ -39,7 +39,10 @@ class Article(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
 
     doi: Mapped[str] = mapped_column(String(255), unique=True, index=True)
-    sources: Mapped[list] = mapped_column(JSON, default=list)  # ['ieee'] / ['elsevier'] / both
+    # Nullable like its additive migration (MySQL cannot default a JSON column); the writers always store a list.
+    sources: Mapped[list | None] = mapped_column(
+        JSON, default=list
+    )  # ['ieee'] / ['elsevier'] / both
     publication_category: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     publication_category_basis: Mapped[str | None] = mapped_column(String(64), nullable=True)
     title: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -53,7 +56,8 @@ class Article(Base):
     url: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # IEEE-only (see bronze_models).
-    countries: Mapped[list] = mapped_column(JSON, default=list)
+    # Nullable like its additive migration (MySQL cannot default a JSON column); the writers always store a list.
+    countries: Mapped[list | None] = mapped_column(JSON, default=list)
     online_date: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
     document_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
     license: Mapped[str | None] = mapped_column(String(64), nullable=True)

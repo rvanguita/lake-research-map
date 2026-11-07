@@ -48,7 +48,8 @@ class Article(Base):
 
     # IEEE-only: the Elsevier .bib carries none of these. Always report them
     # against the IEEE subset (~17% of the corpus), never the whole thing.
-    countries: Mapped[list] = mapped_column(JSON, default=list)  # from Author Affiliations
+    # Nullable like its additive migration (MySQL cannot default a JSON column); the writers always store a list.
+    countries: Mapped[list | None] = mapped_column(JSON, default=list)  # from Author Affiliations
     online_date: Mapped[dt.date | None] = mapped_column(Date, nullable=True)  # monthly resolution
     document_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
     license: Mapped[str | None] = mapped_column(String(64), nullable=True)

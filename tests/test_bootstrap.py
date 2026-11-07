@@ -128,14 +128,6 @@ def test_text_sha256_is_unindexed_like_the_deployed_schema():
 # JSON list columns declared ``Mapped[list]`` (so NOT NULL, ``default=list``)
 # before this check existed. Their writers always store a list, so they are
 # left as they are; the allowlist keeps a *new* mismatch from slipping in.
-_KNOWN_NOT_NULL_MODEL_COLUMNS = {
-    ("bronze", "lit_articles", "countries"),
-    ("silver", "lit_articles", "countries"),
-    ("gold", "lit_articles", "countries"),
-    ("gold", "lit_articles", "sources"),
-}
-
-
 def test_model_columns_match_their_additive_migration_nullability():
     """A column created by ``create_all`` and the same column added by the
     additive migration must agree: every migrated column is nullable, so the
@@ -147,8 +139,6 @@ def test_model_columns_match_their_additive_migration_nullability():
                 continue
             for col_name, (_ddl, layers) in cols.items():
                 if layer not in layers or col_name not in tables[table].c:
-                    continue
-                if (layer, table, col_name) in _KNOWN_NOT_NULL_MODEL_COLUMNS:
                     continue
                 assert tables[table].c[col_name].nullable, (
                     f"{layer}.{table}.{col_name}: model is NOT NULL but its migration is nullable"

@@ -75,6 +75,8 @@ def test_begin_stage_failure_closes_every_session(monkeypatch, handed_out, stage
         runner(execution_id="execution-1")
 
     assert {session.layer for session in handed_out} == layers
+    # One session per layer: a stray direct get_session() beside _layer_sessions would show up here.
+    assert len(handed_out) == len(layers)
     assert all(session.closed for session in handed_out), [
         session.layer for session in handed_out if not session.closed
     ]
@@ -82,13 +84,14 @@ def test_begin_stage_failure_closes_every_session(monkeypatch, handed_out, stage
 
 @pytest.mark.parametrize("stage", [name for name in _STAGES if name != "raw"])
 def test_working_version_failure_closes_every_session(monkeypatch, handed_out, stage):
-    runner, _layers = _STAGES[stage]
+    runner, layers = _STAGES[stage]
     monkeypatch.setattr(pipeline, "_working_version", _raise)
 
     with pytest.raises(_Boom):
         runner(execution_id="execution-1")
 
-    assert handed_out, "the stage opened no session before failing"
+    assert {session.layer for session in handed_out} == layers
+    assert len(handed_out) == len(layers)
     assert all(session.closed for session in handed_out)
 
 
