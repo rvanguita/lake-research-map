@@ -10,7 +10,7 @@ from lake_research_map.devtools.docs_branch_guard import blocks_commit
 
 @pytest.mark.parametrize("branch", ["main", "master"])
 def test_a_docs_only_commit_on_a_protected_branch_is_blocked(branch):
-    assert blocks_commit(branch, ["docs/PRD.md", "README.md", "CLAUDE.md", "AGENTS.md"])
+    assert blocks_commit(branch, ["docs/PRD.md", "README.md", "CLAUDE.md", "docs/SDD.md"])
 
 
 @pytest.mark.parametrize(

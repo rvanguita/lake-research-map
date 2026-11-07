@@ -9,7 +9,7 @@
 [![Code Style: Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-![lake-research-map: Medallion Data Lake & Scientometric Research Mapping Platform](docs/images/lake_research_map_hero.png)
+![lake-research-map: Medallion Data Lake & Scientometric Research Mapping Platform](src/images/lake_research_map_hero.png)
 
 `lake-research-map` is a production-grade **Medallion Data Lake**, automated ETL pipeline, and scientometric research platform engineered for a Systematic Literature Review (SLR) on:
 > **"Distribution System Planning" (Electric Power Distribution Networks)**
@@ -55,7 +55,7 @@ Doing this manually from raw publisher exports presents severe methodological ro
 
 The pipeline implements a 6-tier Medallion architecture run by a single CLI and managed through SQLAlchemy 2.0 declarative models:
 
-![Pipeline architecture: IEEE Xplore, OpenAlex, and Elsevier/ScienceDirect flowing through the raw, bronze, silver, gold, embed, and semantic layers, run by one CLI, feeding the 10-page Streamlit dashboard](docs/images/medallion_architecture.svg)
+![Pipeline architecture: IEEE Xplore, OpenAlex, and Elsevier/ScienceDirect flowing through the raw, bronze, silver, gold, embed, and semantic layers, run by one CLI, feeding the 10-page Streamlit dashboard](src/images/medallion_architecture.svg)
 
 ### Pipeline Stages
 
@@ -286,6 +286,11 @@ pre-commit install
 
 ```
 lake-research-map/
+├── src/images/                   # README illustrations (not part of the package)
+│   ├── lake_research_map_hero.png # High-resolution hero illustration (white background)
+│   ├── lake_research_map_hero.svg # Vector source for hero illustration
+│   ├── architecture.svg          # Legacy pipeline architecture diagram
+│   └── medallion_architecture.svg # Modern white-background medallion architecture diagram
 ├── src/lake_research_map/
 │   ├── config.py                 # Pydantic environment & database configuration
 │   ├── pipeline.py               # Medallion CLI controller (run_raw, run_bronze, etc.)
@@ -332,16 +337,10 @@ lake-research-map/
 │       ├── theme.py              # Fixed-dark theme tokens and transparent polar styling
 │       ├── components.py         # Reusable Streamlit UI widgets & metric cards
 │       └── pages/                # 10 workflow-oriented analytical controllers
-├── docs/                         # Architecture, product specs, and assets
+├── docs/                         # Product and design specs
 │   ├── PRD.md                    # Product Requirements Document
-│   ├── SDD.md                    # System Design Document
-│   └── images/
-│       ├── lake_research_map_hero.png # High-resolution hero illustration (white background)
-│       ├── lake_research_map_hero.svg # Vector source for hero illustration
-│       ├── architecture.svg      # Legacy pipeline architecture diagram
-│       └── medallion_architecture.svg # Modern white-background medallion architecture diagram
+│   └── SDD.md                    # System Design Document
 ├── tests/                        # 490 tests (in-memory SQLite + Qdrant local mode)
-├── AGENTS.md -> CLAUDE.md        # Symlink, for non-Claude agents
 ├── CLAUDE.md                     # Agent instructions + source-data quirks (single source)
 ├── docker-compose.yml            # Dashboard + Qdrant (profile `qdrant`) containers
 └── pyproject.toml                # Project metadata, dependencies, and Ruff config
@@ -354,7 +353,7 @@ lake-research-map/
 For in-depth documentation and contributor guidelines:
 - **System Design Document**: [`docs/SDD.md`](docs/SDD.md) — Architecture, data contracts, analytical methods, decisions (ADRs), delivery history, measured baselines and the human-review protocols.
 - **Product Requirements Document**: [`docs/PRD.md`](docs/PRD.md) — Research questions, requirements and how each is measured, risks, open work, and the definition of done.
-- **AI Assistant Guidelines & Corpus Gotchas**: [`CLAUDE.md`](CLAUDE.md) — Architecture contracts, dashboard conventions, raw publisher data quirks and DOI matching nuances. `AGENTS.md` and `.agents/` are symlinks to `CLAUDE.md` and `.claude/` for other agents.
+- **AI Assistant Guidelines & Corpus Gotchas**: [`CLAUDE.md`](CLAUDE.md) — Architecture contracts, dashboard conventions, raw publisher data quirks and DOI matching nuances.
 
 ---
 

@@ -1,7 +1,7 @@
 """Generate the official hero illustration for lake-research-map.
 
 Run with `uv run python -m lake_research_map.devtools.hero`. Rebuilds
-docs/images/lake_research_map_hero.png from the ground up as a clean,
+src/images/lake_research_map_hero.png from the ground up as a clean,
 professional, technically coherent vector-grade graphic on a solid white
 background (#ffffff).
 
@@ -720,11 +720,11 @@ def main() -> int:
     from lake_research_map.config import REPO_ROOT
 
     project_root = REPO_ROOT
-    docs_images = project_root / "docs" / "images"
-    docs_images.mkdir(parents=True, exist_ok=True)
+    images_dir = project_root / "src" / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
 
-    svg_path = docs_images / "lake_research_map_hero.svg"
-    png_path = docs_images / "lake_research_map_hero.png"
+    svg_path = images_dir / "lake_research_map_hero.svg"
+    png_path = images_dir / "lake_research_map_hero.png"
 
     print(f"Generating SVG: {svg_path}")
     svg_content = generate_svg()
