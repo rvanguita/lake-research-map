@@ -31,7 +31,6 @@ dependencies = [
 
 [project.scripts]
 lake-research-map = "lake_research_map:main"
-lake-literature = "lake_research_map:main"
 
 [build-system]
 requires = ["uv_build>=0.12.0,<0.13.0"]
